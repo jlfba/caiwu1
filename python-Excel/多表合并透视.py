@@ -579,21 +579,28 @@ def main():
                     print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
 
                 # ---- 1.6 列名统一：检测各表列名是否一致，可改名对齐 ----
+                for i, t in enumerate(tables):
+                    m = re.search(r'(\d+月)', t['base'])
+                    t['short'] = m.group(1) if m else '表%d' % (i + 1)
+
                 col_owners = {}
                 for t in tables:
                     for h in t['headers']:
-                        col_owners.setdefault(h, []).append(t['display'])
+                        col_owners.setdefault(h, []).append(t['short'])
                 common_cols = [c for c, o in col_owners.items() if len(o) == len(tables)]
                 partial_cols = {c: o for c, o in col_owners.items() if len(o) < len(tables)}
 
                 print('检测各表列名一致性：')
                 if common_cols:
-                    print('  【所有表都有的列】：%s' % '、'.join(common_cols))
+                    shown = '、'.join(common_cols[:6])
+                    if len(common_cols) > 6:
+                        shown += '…（共%d个）' % len(common_cols)
+                    print('  一致（所有表都有）：%s' % shown)
                 if partial_cols:
-                    print('  【部分表才有的列】（列名可能不一致，可改名对齐）：')
+                    print('  不一致（部分表才有）：')
                     for c, owners in partial_cols.items():
-                        missing = [t['display'] for t in tables if c not in t['headers']]
-                        print('    %s：仅 %s 有（缺：%s）' % (c, '、'.join(owners), '、'.join(missing)))
+                        missing = [t['short'] for t in tables if c not in t['headers']]
+                        print('    「%s」只有 %s 有，缺 %s' % (c, '、'.join(owners), '、'.join(missing)))
                 else:
                     print('  各表列名完全一致。')
 
@@ -601,7 +608,7 @@ def main():
                     while True:
                         print('各表列名：')
                         for i, t in enumerate(tables, start=1):
-                            print('  %d. %s（%d列）：%s' % (i, t['display'], len(t['headers']), '、'.join(t['headers'])))
+                            print('  %d.%s（%d列）：%s' % (i, t['short'], len(t['headers']), '、'.join(t['headers'])))
                         pick = _ask_back('请选择要改名的表（输入序号；输入 done 结束）：').strip()
                         if not pick or pick.lower() == 'done':
                             break
@@ -609,7 +616,7 @@ def main():
                             print('请输入有效表序号（1-%d）。' % len(tables))
                             continue
                         ti = int(pick) - 1
-                        print('%s 的列：' % tables[ti]['display'])
+                        print('%s 的列：' % tables[ti]['short'])
                         for j, h in enumerate(tables[ti]['headers'], start=1):
                             print('  %d. %s' % (j, h))
                         col_pick = _ask_back('请选择要改名的列（输入序号或列名；回车取消）：').strip()
@@ -632,12 +639,11 @@ def main():
                             print('已取消。')
                             continue
                         tables[ti]['headers'][ci] = new_name
-                        print('已改名：%s 的「%s」→「%s」' % (tables[ti]['display'], old_name, new_name))
-                        # 重新检测一致性
+                        print('已改名：%s 的「%s」→「%s」' % (tables[ti]['short'], old_name, new_name))
                         col_owners = {}
                         for t in tables:
                             for h in t['headers']:
-                                col_owners.setdefault(h, []).append(t['display'])
+                                col_owners.setdefault(h, []).append(t['short'])
                         partial_cols = {c: o for c, o in col_owners.items() if len(o) < len(tables)}
                         if not partial_cols:
                             print('重新检测：各表列名已全部一致！')
