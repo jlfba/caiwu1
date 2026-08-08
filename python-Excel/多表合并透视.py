@@ -577,6 +577,72 @@ def main():
                 print('共读取 %d 个表格（顺序即合并顺序）：' % len(tables))
                 for i, t in enumerate(tables, start=1):
                     print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
+
+                # ---- 1.6 列名统一：检测各表列名是否一致，可改名对齐 ----
+                col_owners = {}
+                for t in tables:
+                    for h in t['headers']:
+                        col_owners.setdefault(h, []).append(t['display'])
+                common_cols = [c for c, o in col_owners.items() if len(o) == len(tables)]
+                partial_cols = {c: o for c, o in col_owners.items() if len(o) < len(tables)}
+
+                print('检测各表列名一致性：')
+                if common_cols:
+                    print('  【所有表都有的列】：%s' % '、'.join(common_cols))
+                if partial_cols:
+                    print('  【部分表才有的列】（列名可能不一致，可改名对齐）：')
+                    for c, owners in partial_cols.items():
+                        missing = [t['display'] for t in tables if c not in t['headers']]
+                        print('    %s：仅 %s 有（缺：%s）' % (c, '、'.join(owners), '、'.join(missing)))
+                else:
+                    print('  各表列名完全一致。')
+
+                if _ask_back('是否要统一列名（选表改列名，让各表列名一致；回车跳过）：').strip().lower() in ('y', 'yes', '是'):
+                    while True:
+                        print('各表列名：')
+                        for i, t in enumerate(tables, start=1):
+                            print('  %d. %s（%d列）：%s' % (i, t['display'], len(t['headers']), '、'.join(t['headers'])))
+                        pick = _ask_back('请选择要改名的表（输入序号；输入 done 结束）：').strip()
+                        if not pick or pick.lower() == 'done':
+                            break
+                        if not pick.isdigit() or not (1 <= int(pick) <= len(tables)):
+                            print('请输入有效表序号（1-%d）。' % len(tables))
+                            continue
+                        ti = int(pick) - 1
+                        print('%s 的列：' % tables[ti]['display'])
+                        for j, h in enumerate(tables[ti]['headers'], start=1):
+                            print('  %d. %s' % (j, h))
+                        col_pick = _ask_back('请选择要改名的列（输入序号或列名；回车取消）：').strip()
+                        if not col_pick:
+                            print('已取消。')
+                            continue
+                        if col_pick.isdigit():
+                            ci = int(col_pick) - 1
+                            if not (0 <= ci < len(tables[ti]['headers'])):
+                                print('序号超出范围（1-%d）。' % len(tables[ti]['headers']))
+                                continue
+                            old_name = tables[ti]['headers'][ci]
+                        elif col_pick in tables[ti]['headers']:
+                            old_name = col_pick
+                        else:
+                            print('该表没有此列：%s' % col_pick)
+                            continue
+                        new_name = _ask_back('「%s」改成什么列名？（回车取消）：' % old_name).strip()
+                        if not new_name:
+                            print('已取消。')
+                            continue
+                        tables[ti]['headers'][ci] = new_name
+                        print('已改名：%s 的「%s」→「%s」' % (tables[ti]['display'], old_name, new_name))
+                        # 重新检测一致性
+                        col_owners = {}
+                        for t in tables:
+                            for h in t['headers']:
+                                col_owners.setdefault(h, []).append(t['display'])
+                        partial_cols = {c: o for c, o in col_owners.items() if len(o) < len(tables)}
+                        if not partial_cols:
+                            print('重新检测：各表列名已全部一致！')
+                        else:
+                            print('重新检测：仍不一致的列：%s' % '、'.join(partial_cols.keys()))
                 step = 2
 
             # ====== Step 2: 选择列 + 别名 + 合并 + 保存 ======
