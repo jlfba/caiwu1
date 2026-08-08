@@ -296,6 +296,32 @@ def find_col_in_table(headers, name, aliases):
     return None
 
 
+def choose_column(prompt, headers, default_candidates=None, default_label=None):
+    """列出列名供用户选择，返回选中的列名（原样）。
+    headers：列名列表（可能含 None/空）；default_candidates：默认推荐列名（取第一个命中的）。
+    支持输入 b / 上一步 返回上一步。"""
+    print('列名：')
+    for i, h in enumerate(headers, start=1):
+        hs = '' if h is None else str(h).strip()
+        print('  %d. %s' % (i, hs if hs else '（空）'))
+    default_idx = 1
+    if default_candidates:
+        flat = ['' if h is None else str(h).strip() for h in headers]
+        for cand in default_candidates:
+            idx = find_column(flat, [cand])
+            if idx is not None:
+                default_idx = idx + 1
+                break
+    label = default_label or ('回车默认 %d' % default_idx)
+    while True:
+        sel = _ask_back('%s（输入序号，%s）：' % (prompt, label)).strip()
+        if not sel:
+            return headers[default_idx - 1]
+        if sel.isdigit() and 1 <= int(sel) <= len(headers):
+            return headers[int(sel) - 1]
+        print('请输入有效序号（1-%d）。' % len(headers))
+
+
 # ---------------------------------------------------------------------------
 # 读取表格
 # ---------------------------------------------------------------------------
@@ -378,11 +404,13 @@ def write_table(path, sheet_title, headers, rows):
 # ---------------------------------------------------------------------------
 # 回填透视合计金额 + 差异列
 # ---------------------------------------------------------------------------
-def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3):
-    """在指定工作表中按运单号回填透视表合计金额，并新增差异列。
-    主表列名位于 header_row 行（默认第 3 行），数据从 header_row+1 行开始；
-    “汇总金额”列优先取 AH 列（第 34 列），否则按列名查找。
-    返回 (差异行数, 透视合计列名, 差异列名)。"""
+def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3,
+                         p_val_name=None, main_val_name=None):
+    """在指定工作表中按运单号回填透视表的指定金额列，并新增差异列。
+    主表列名位于 header_row 行，数据从 header_row+1 行开始；
+    p_val_name：透视表中要回填的金额列名；
+    main_val_name：主表中要对比的金额列名；
+    返回 (差异行数, 透视金额列名, 差异列名)。"""
     ws = wb[sheet_name]
     headers = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
     headers_str = ['' if v is None else str(v).strip() for v in headers]
@@ -390,23 +418,17 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
     yd_idx = find_column(headers_str, ['运单号'])
     if yd_idx is None:
         raise ValueError('所选工作表未找到“运单号”列，无法回填。')
-    hz_idx = None
-    if ws.max_column >= 34:
-        ah_val = ws.cell(row=header_row, column=34).value
-        if ah_val is not None and '汇总金额' in str(ah_val):
-            hz_idx = 33
+    hz_idx = find_column(headers_str, [main_val_name]) if main_val_name else None
     if hz_idx is None:
-        hz_idx = find_column(headers_str, ['汇总金额'])
-    if hz_idx is None:
-        raise ValueError('所选工作表未找到“汇总金额”列，无法计算差异。')
+        raise ValueError('所选工作表未找到主表对比列“%s”，无法计算差异。' % main_val_name)
 
     p_headers_str = ['' if v is None else str(v).strip() for v in pivot_headers]
     p_yd_idx = find_column(p_headers_str, ['运单号'])
     if p_yd_idx is None:
         raise ValueError('透视表中未找到“运单号”列，无法回填。')
-    p_hz_idx = find_column(p_headers_str, ['求和项:合计金额', '合计金额'])
+    p_hz_idx = find_column(p_headers_str, [p_val_name]) if p_val_name else None
     if p_hz_idx is None:
-        raise ValueError('透视表中未找到“合计金额”列，无法回填。')
+        raise ValueError('透视表中未找到金额列“%s”，无法回填。' % p_val_name)
 
     # 透视表按运单号建索引（重复取第一个）
     pivot_map = {}
@@ -422,16 +444,20 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
     if dup:
         print('提示：透视表中有 %d 个重复运单号（如不同币种），回填时使用第一个匹配值。' % dup)
 
-    # 已存在回填列则复用，否则在末尾新增
-    pf_exist = find_column(headers_str, ['透视表合计金额'])
-    diff_exist = find_column(headers_str, ['合计金额差异（透视-原表）'])
+    # 新列名：透视列名去掉「求和项:」前缀
+    base = str(p_val_name).replace('求和项:', '')
+    p_display = '透视表%s' % base
+    d_display = '%s差异（透视-原表）' % base
+
+    pf_exist = find_column(headers_str, [p_display])
+    diff_exist = find_column(headers_str, [d_display])
     if pf_exist is not None and diff_exist is not None:
         col_pf, col_diff = pf_exist + 1, diff_exist + 1
     else:
         col_pf = ws.max_column + 1
         col_diff = col_pf + 1
-        ws.cell(row=header_row, column=col_pf, value='透视表合计金额')
-        ws.cell(row=header_row, column=col_diff, value='合计金额差异（透视-原表）')
+        ws.cell(row=header_row, column=col_pf, value=p_display)
+        ws.cell(row=header_row, column=col_diff, value=d_display)
 
     filled = 0
     for r in range(header_row + 1, ws.max_row + 1):
@@ -445,7 +471,7 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
             continue
         ws.cell(row=r, column=col_diff, value=to_number(pf) - to_number(orig))
         filled += 1
-    return filled, '透视表合计金额', '合计金额差异（透视-原表）'
+    return filled, p_display, d_display
 
 
 # 主流程
@@ -951,13 +977,29 @@ def main():
                                 header_row = int(hdr_in)
                                 break
                             print('请输入有效的行号（正整数）。')
+                        # 选择透视表要回填的金额列
+                        p_val_name = choose_column(
+                            '请选择透视表中要回填到主表的金额列',
+                            pivot_headers,
+                            default_candidates=['求和项:汇总', '求和项:合计金额', '汇总', '合计金额'],
+                            default_label='回车默认推荐列')
+                        # 选择主表中要对比的金额列
+                        main_headers = [wb[target].cell(row=header_row, column=c).value
+                                        for c in range(1, wb[target].max_column + 1)]
+                        main_val_name = choose_column(
+                            '请选择主表中要对比的金额列',
+                            main_headers,
+                            default_candidates=['汇总金额', '合计金额', '费用合计'],
+                            default_label='回车默认推荐列')
                         try:
-                            filled, f_col, d_col = backfill_pivot_total(wb, target, pivot_headers, pivot_rows, header_row)
+                            filled, f_col, d_col = backfill_pivot_total(
+                                wb, target, pivot_headers, pivot_rows, header_row,
+                                p_val_name=p_val_name, main_val_name=main_val_name)
                         except Exception as e:
                             print('回填失败：%s' % e)
                             return
                         wb.save(main_path)
-                        print('已新增列：%s、%s，共计算 %d 行合计金额差异。' % (f_col, d_col, filled))
+                        print('已新增列：%s、%s，共计算 %d 行金额差异。' % (f_col, d_col, filled))
                         print('已保存主表：%s' % main_path)
                         break
                     else:
@@ -974,6 +1016,7 @@ def main():
             print('已返回上一步（步骤 %d）。' % (step + 1))
 
     print('已完成，谢谢使用。')
+    print('玛卡巴卡""')
 
 
 if __name__ == '__main__':
