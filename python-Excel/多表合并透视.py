@@ -640,37 +640,82 @@ def main():
                         print('各表列名：')
                         for i, t in enumerate(tables, start=1):
                             print('  %d.%s（%d列）：%s' % (i, t['short'], len(t['headers']), '、'.join(t['headers'])))
-                        pick = _ask_back('请选择要改名的表（输入序号；输入 done 结束）：').strip()
+                        pick = _ask_back('请选择要改名的表（支持多个：2 3 4 5 或 2-5；输入 done 结束）：').strip()
                         if not pick or pick.lower() == 'done':
                             break
-                        if not pick.isdigit() or not (1 <= int(pick) <= len(tables)):
-                            print('请输入有效表序号（1-%d）。' % len(tables))
+                        try:
+                            t_idx = parse_multi_choice(pick, len(tables))
+                        except ValueError as e:
+                            print('选择无效：%s（支持 2 3 4 5 或 2-5）' % e)
                             continue
-                        ti = int(pick) - 1
-                        print('%s 的列：' % tables[ti]['short'])
-                        for j, h in enumerate(tables[ti]['headers'], start=1):
-                            print('  %d. %s' % (j, h))
-                        col_pick = _ask_back('请选择要改名的列（输入序号或列名；回车取消）：').strip()
-                        if not col_pick:
-                            print('已取消。')
+                        if not t_idx:
+                            print('至少选一个表。')
                             continue
-                        if col_pick.isdigit():
-                            ci = int(col_pick) - 1
-                            if not (0 <= ci < len(tables[ti]['headers'])):
-                                print('序号超出范围（1-%d）。' % len(tables[ti]['headers']))
+
+                        # 选一个表：先列该表列名再选列；选多个表：新名=旧名批量改
+                        renames = []
+                        if len(t_idx) == 1:
+                            ti = t_idx[0]
+                            print('%s 的列：' % tables[ti]['short'])
+                            for j, h in enumerate(tables[ti]['headers'], start=1):
+                                print('  %d. %s' % (j, h))
+                            col_pick = _ask_back('请选择要改名的列（输入序号或列名；回车取消）：').strip()
+                            if not col_pick:
+                                print('已取消。')
                                 continue
-                            old_name = tables[ti]['headers'][ci]
-                        elif col_pick in tables[ti]['headers']:
-                            old_name = col_pick
+                            if col_pick.isdigit():
+                                ci = int(col_pick) - 1
+                                if not (0 <= ci < len(tables[ti]['headers'])):
+                                    print('序号超出范围（1-%d）。' % len(tables[ti]['headers']))
+                                    continue
+                                old_name = tables[ti]['headers'][ci]
+                            elif col_pick in tables[ti]['headers']:
+                                old_name = col_pick
+                            else:
+                                print('该表没有此列：%s' % col_pick)
+                                continue
+                            new_name = _ask_back('「%s」改成什么列名？（回车取消）：' % old_name).strip()
+                            if not new_name:
+                                print('已取消。')
+                                continue
+                            renames.append((new_name, old_name))
                         else:
-                            print('该表没有此列：%s' % col_pick)
-                            continue
-                        new_name = _ask_back('「%s」改成什么列名？（回车取消）：' % old_name).strip()
-                        if not new_name:
-                            print('已取消。')
-                            continue
-                        tables[ti]['headers'][ci] = new_name
-                        print('已改名：%s 的「%s」→「%s」' % (tables[ti]['short'], old_name, new_name))
+                            pair_in = _ask_back('批量改名（新名=旧名，多个用空格/逗号分隔，如：运单号=订单号 国家=Country；回车取消）：').strip()
+                            if not pair_in:
+                                print('已取消。')
+                                continue
+                            bad = False
+                            for tok in re.split(r'[,\s，、]+', pair_in):
+                                tok = tok.strip()
+                                if not tok:
+                                    continue
+                                if '=' in tok:
+                                    left, right = tok.split('=', 1)
+                                    left, right = left.strip(), right.strip()
+                                    if left and right:
+                                        renames.append((left, right))
+                                    else:
+                                        print('格式不对：%s（应为 新名=旧名）' % tok)
+                                        bad = True
+                                else:
+                                    print('格式不对：%s（应为 新名=旧名）' % tok)
+                                    bad = True
+                            if bad or not renames:
+                                continue
+
+                        done_names = []
+                        for ti in t_idx:
+                            hdrs = tables[ti]['headers']
+                            for new_name, old_name in renames:
+                                if old_name in hdrs:
+                                    hdrs[hdrs.index(old_name)] = new_name
+                                    done_names.append(tables[ti]['short'])
+                        if done_names:
+                            print('已改名：%s' % '、'.join(done_names))
+                            for new_name, old_name in renames:
+                                print('  「%s」→「%s」' % (old_name, new_name))
+                        else:
+                            print('所选表中没有这些列，未改名。')
                         col_owners = {}
                         for t in tables:
                             for h in t['headers']:
