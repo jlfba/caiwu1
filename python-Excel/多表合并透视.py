@@ -358,12 +358,9 @@ def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
 # ---------------------------------------------------------------------------
 # 透视汇总
 # ---------------------------------------------------------------------------
-# 合并时用于自动生成“汇总”列的单项费用（子串匹配）
-FEE_BASES = ('运费', '附加费1', '附加费2', '附加费3', '报关费')
-
-
-def make_pivot(headers, rows, row_labels, value_cols):
-    """按行标签分组，对数值列求和，返回 (透视表头, 透视表行)。"""
+def make_pivot(headers, rows, row_labels, value_cols, add_total=False):
+    """按行标签分组，对数值列求和，返回 (透视表头, 透视表行)。
+    add_total 为 True 时，在末尾追加「合计」列 = 各求和列相加。"""
     idx = {name: i for i, name in enumerate(headers)}
     missing = [c for c in row_labels + value_cols if c not in idx]
     if missing:
@@ -382,7 +379,14 @@ def make_pivot(headers, rows, row_labels, value_cols):
             for j, i in enumerate(v_idx):
                 sums[j] += to_number(r[i] if i < len(r) else None)
     pivot_headers = list(row_labels) + ['求和项:%s' % c for c in value_cols]
-    pivot_rows = [list(key) + sums for key, sums in groups.items()]
+    if add_total:
+        pivot_headers.append('合计')
+    pivot_rows = []
+    for key, sums in groups.items():
+        row = list(key) + sums
+        if add_total:
+            row.append(sum(sums))
+        pivot_rows.append(row)
     return pivot_headers, pivot_rows
 
 
@@ -822,13 +826,7 @@ def main():
                         print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
 
                 # ---- 3. 追加合并 ----
-                fee_cols = [c for c in sel_cols if any(base in c for base in FEE_BASES)]
-                merged_headers = list(sel_cols)
-                sum_pos = None
-                if fee_cols:
-                    sum_pos = max(sel_cols.index(c) for c in fee_cols) + 1
-                    merged_headers.insert(sum_pos, '汇总')
-                merged_headers.append('数据来源表')
+                merged_headers = list(sel_cols) + ['数据来源表']
                 merged_rows = []
                 for t in tables:
                     hidx_map = {}
@@ -845,19 +843,9 @@ def main():
                         for c in sel_cols:
                             i = hidx_map.get(c)
                             row.append(r[i] if i is not None and i < len(r) else None)
-                        if sum_pos is not None:
-                            total = 0.0
-                            has_val = False
-                            for c in fee_cols:
-                                i = hidx_map.get(c)
-                                v = r[i] if i is not None and i < len(r) else None
-                                if v is not None and str(v).strip() != '':
-                                    total += to_number(v)
-                                    has_val = True
-                            row.insert(sum_pos, total if has_val else None)
                         row.append(t['display'])
                         merged_rows.append(row)
-                print('合并完成：共 %d 行，%d 列（含”汇总””数据来源表”）。' % (len(merged_rows), len(merged_headers)))
+                print('合并完成：共 %d 行，%d 列（含“数据来源表”）。' % (len(merged_rows), len(merged_headers)))
 
                 # 可选：保存合并汇总表
                 if _ask_back('是否保存合并后的汇总表？(y/n，回车默认 n)：').strip().lower() in ('y', 'yes'):
@@ -873,13 +861,14 @@ def main():
             if step <= 3:
                 # ---- 4. 透视模式 ----
                 print('-' * 64)
+                pivot_cols = [c for c in merged_headers if c != '数据来源表']
                 while True:
                     print('合并后汇总表列（分组列自动为运单号、币种等非求和列）：')
-                    for i, c in enumerate(merged_headers, start=1):
+                    for i, c in enumerate(pivot_cols, start=1):
                         print('  %d. %s' % (i, c))
-                    ans = _ask_back('请选择要求和的数值列（金额列，多个用逗号/空格分隔，如 3,4,5,6,7,8）：')
+                    ans = _ask_back('请选择要求和的数值列（金额列，多个用逗号/空格分隔，如 3,4,5,6,7）：')
                     try:
-                        v_idx = parse_multi_choice(ans, len(merged_headers))
+                        v_idx = parse_multi_choice(ans, len(pivot_cols))
                     except ValueError as e:
                         print('选择无效：%s，请重新输入。' % e)
                         continue
@@ -887,17 +876,21 @@ def main():
                         print('至少选一列求和。')
                         continue
                     break
-                value_cols = [merged_headers[i] for i in v_idx]
-                # 自动分组：运单号、币种（存在则用）；否则用非求和列中除“数据来源表”外的列
-                row_labels = [c for c in ['运单号', '币种'] if c in merged_headers and c not in value_cols]
+                value_cols = [pivot_cols[i] for i in v_idx]
+                # 自动分组：运单号、币种（存在则用）；否则用非求和列
+                row_labels = [c for c in ['运单号', '币种'] if c in pivot_cols and c not in value_cols]
                 if not row_labels:
-                    row_labels = [c for i, c in enumerate(merged_headers) if i not in v_idx and c != '数据来源表']
+                    row_labels = [c for i, c in enumerate(pivot_cols) if i not in v_idx]
                 if not row_labels:
-                    row_labels = [c for c in merged_headers if c not in value_cols][:1] or [merged_headers[0]]
+                    row_labels = [c for c in pivot_cols if c not in value_cols][:1] or [pivot_cols[0]]
+                # 自动追加「合计」列 = 所选求和列之和（若未选含汇总/合计的列）
+                add_total = not any(('合计' in c or '汇总' in c) for c in value_cols)
                 print('分组列（自动）：%s' % '、'.join(row_labels))
+                if add_total:
+                    print('提示：透视表会自动生成「合计」列 = 所选求和列相加。')
 
                 try:
-                    pivot_headers, pivot_rows = make_pivot(merged_headers, merged_rows, row_labels, value_cols)
+                    pivot_headers, pivot_rows = make_pivot(pivot_cols, merged_rows, row_labels, value_cols, add_total=add_total)
                 except KeyError as e:
                     print('透视失败：%s' % e)
                     return
