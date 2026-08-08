@@ -491,7 +491,7 @@ def main():
     print('提示：任意选择步骤中输入 b / 上一步 返回上一个步骤')
     print('-' * 64)
 
-    step = 0  # 0=粘贴, 1=选工作表, 2=选列+合并, 3=透视, 4=透视保存/插入
+    step = 0  # 0=粘贴, 1=选工作表, 2=列名统一, 3=选列, 4=列名替代, 5=合并+保存, 6=透视, 7=去向
     valid = None; sheet_name = None; tables = None
     sel_cols = None; col_aliases = None
     merged_headers = None; merged_rows = None
@@ -602,7 +602,10 @@ def main():
                 print('共读取 %d 个表格（顺序即合并顺序）：' % len(tables))
                 for i, t in enumerate(tables, start=1):
                     print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
+                step = 2
 
+            # ====== Step 2: 列名统一 ======
+            if step <= 2:
                 # ---- 1.6 列名统一：检测各表列名是否一致，可改名对齐 ----
                 for i, t in enumerate(tables):
                     m = re.search(r'(\d+月)', t['base'])
@@ -727,10 +730,10 @@ def main():
                         if _ask_back('是否继续改名？\n'
                                      '  1 继续改名 | 2 下一步（进入选列）。回车默认 1：').strip() == '2':
                             break
-                step = 2
+                step = 3
 
-            # ====== Step 2: 选择列 + 别名 + 合并 + 保存 ======
-            if step <= 2:
+            # ====== Step 3: 选择要合并的列 ======
+            if step <= 3:
                 # ---- 2. 列选择 ----
                 all_cols = []
                 seen_cols = set()
@@ -770,7 +773,10 @@ def main():
                             continue
                     break
                 print('已选择 %d 列：%s' % (len(sel_cols), '、'.join(sel_cols)))
+                step = 4
 
+            # ====== Step 4: 列名替代映射（部分子表列名不同） ======
+            if step <= 4:
                 # 列名替代映射
                 col_aliases = {}
                 rename_ans = _ask_back('部分子表里的列名可能和汇总表列名不一致？\n'
@@ -824,7 +830,10 @@ def main():
                         print('已设置：%s -> %s' % (col, '、'.join(alias_list)))
                     if col_aliases:
                         print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
+                step = 5
 
+            # ====== Step 5: 追加合并 + 保存 ======
+            if step <= 5:
                 # ---- 3. 追加合并 ----
                 merged_headers = list(sel_cols) + ['数据来源表']
                 merged_rows = []
@@ -855,10 +864,10 @@ def main():
                         print('已保存合并汇总表：%s' % out)
                     except Exception as e:
                         print('保存合并汇总表失败：%s' % e)
-                step = 3
+                step = 6
 
-            # ====== Step 3: 透视模式 ======
-            if step <= 3:
+            # ====== Step 6: 透视 ======
+            if step <= 6:
                 # ---- 4. 透视模式 ----
                 print('-' * 64)
                 pivot_cols = [c for c in merged_headers if c != '数据来源表']
@@ -900,10 +909,10 @@ def main():
                     print('  %d. %s' % (i, ' | '.join('' if v is None else str(v) for v in r)))
                 if len(pivot_rows) > 5:
                     print('  ...（共 %d 行）' % len(pivot_rows))
-                step = 4
+                step = 7
 
-            # ====== Step 4: 透视表去向 ======
-            if step <= 4:
+            # ====== Step 7: 透视表去向 ======
+            if step <= 7:
                 # ---- 5. 透视表去向 ----
                 print('-' * 64)
                 while True:
@@ -997,7 +1006,7 @@ def main():
                         break
                     else:
                         print('请输入 1 或 2。')
-                step = 5
+                step = 8
 
             # 全部完成
             break
