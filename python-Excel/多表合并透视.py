@@ -36,6 +36,29 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# 控制台颜色
+# ---------------------------------------------------------------------------
+# ANSI 转义序列：交互提示用亮绿色，便于与输出信息区分
+COLOR_PROMPT = '\033[92m'   # 亮绿色（提示文字）
+COLOR_RESET = '\033[0m'     # 复位
+# 仅当标准输出是终端时启用颜色，避免重定向/管道出现乱码
+_USE_COLOR = sys.stdout.isatty()
+
+
+def init_console_color():
+    """Windows 控制台启用 ANSI 转义序列（VT 处理），其他平台无需处理。"""
+    if _USE_COLOR and os.name == 'nt':
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            h = kernel32.GetStdHandle(-11)
+            mode = kernel32.GetConsoleMode(h)
+            kernel32.SetConsoleMode(h, mode | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # 输入工具（参考 pdf-v-photo/pdf转图片.py）
 # ---------------------------------------------------------------------------
 # 匹配拖入路径：优先引号包裹（路径可含空格），否则连续非空白
@@ -49,6 +72,8 @@ def _ask(prompt):
     """读一行；若预读缓冲有内容则优先取缓冲，否则阻塞等待输入。"""
     if _PUTBACK:
         return _PUTBACK.pop(0)
+    if _USE_COLOR:
+        prompt = COLOR_PROMPT + prompt + COLOR_RESET
     return input(prompt)
 
 
@@ -457,6 +482,7 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
 # 主流程
 # ---------------------------------------------------------------------------
 def main():
+    init_console_color()
     if not OPENPYXL_OK:
         print('提示：未安装 openpyxl，无法读写 Excel。请运行：pip install openpyxl')
         return
