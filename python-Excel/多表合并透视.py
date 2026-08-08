@@ -981,15 +981,25 @@ def main():
                                 print('请输入有效序号（1-%d）。' % len(wb.sheetnames))
                         print('已选择工作表：%s' % target)
 
-                        while True:
-                            hdr_in = _ask_back('请输入主表列名所在行（该主表列名从第 3 行开始，回车默认 3）：').strip()
-                            if not hdr_in:
-                                header_row = 3
+                        # 自动识别主表列名所在行（找含「运单号」的行；前 1-3 行多为合并标题），找不到再询问
+                        target_ws = wb[target]
+                        header_row = None
+                        for rr in range(1, min(target_ws.max_row, 20) + 1):
+                            row_str = ['' if target_ws.cell(rr, c).value is None
+                                       else str(target_ws.cell(rr, c).value).strip()
+                                       for c in range(1, min(target_ws.max_column, 80) + 1)]
+                            if any('运单号' in s for s in row_str):
+                                header_row = rr
                                 break
-                            if hdr_in.isdigit() and int(hdr_in) >= 1:
-                                header_row = int(hdr_in)
-                                break
-                            print('请输入有效的行号（正整数）。')
+                        if header_row is None:
+                            while True:
+                                hdr_in = _ask_back('请输入主表列名所在行（未自动识别到含「运单号」的行）：').strip()
+                                if hdr_in.isdigit() and int(hdr_in) >= 1:
+                                    header_row = int(hdr_in)
+                                    break
+                                print('请输入有效的行号（正整数）。')
+                        else:
+                            print('自动识别：主表列名在第 %d 行，数据从第 %d 行开始查找。' % (header_row, header_row + 1))
                         # 选择透视表要回填的金额列
                         p_val_name = choose_column(
                             '请选择透视表中要回填到主表的金额列',
