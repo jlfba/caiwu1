@@ -52,8 +52,9 @@ def init_console_color():
             import ctypes
             kernel32 = ctypes.windll.kernel32
             h = kernel32.GetStdHandle(-11)
-            mode = kernel32.GetConsoleMode(h)
-            kernel32.SetConsoleMode(h, mode | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            mode = ctypes.c_ulong()
+            if kernel32.GetConsoleMode(h, ctypes.byref(mode)):
+                kernel32.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
         except Exception:
             pass
 
