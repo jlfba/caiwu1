@@ -630,7 +630,12 @@ def main():
                 else:
                     print('  各表列名完全一致。')
 
-                if _ask_back('是否要统一列名（选表改列名，让各表列名一致；回车跳过）：').strip().lower() in ('y', 'yes', '是'):
+                unify = False
+                if partial_cols:
+                    choice = _ask_back('检测到列名不一致。是否进入列名统一？\n'
+                                       '  1 进入列名统一 | 2 跳过（后面选列时可用改名）。回车默认 1：').strip()
+                    unify = (choice != '2')
+                if unify:
                     while True:
                         print('各表列名：')
                         for i, t in enumerate(tables, start=1):
