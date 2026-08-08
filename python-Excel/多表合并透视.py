@@ -332,39 +332,8 @@ def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
 # ---------------------------------------------------------------------------
 # 透视汇总
 # ---------------------------------------------------------------------------
-FIXED_ROW_LABELS = ['运单号', '币种']
-FIXED_VALUE_BASES = ['运费', '附加费2（如超围长重附加费）',
-                     '附加费1（如偏远费）', '附加费3（如超长重附加费）',
-                     '报关费', '合计金额']
 # 合并时用于自动生成“汇总”列的单项费用（子串匹配）
 FEE_BASES = ('运费', '附加费1', '附加费2', '附加费3', '报关费')
-# 固定数值列在子表/汇总表中的常见别名（优先精确，再按别名/包含匹配）
-VALUE_ALIASES = {
-    '合计金额': ['费用合计', '合计', '费用总计', '汇总'],
-}
-
-
-def resolve_columns(headers, names):
-    """把固定列名解析到汇总表实际列名：
-    优先精确匹配；否则匹配 '求和项:'+名称；再按别名/包含匹配；找不到返回 None。"""
-    result = []
-    for name in names:
-        if name in headers:
-            result.append(name)
-            continue
-        if ('求和项:%s' % name) in headers:
-            result.append('求和项:%s' % name)
-            continue
-        found = None
-        for cand in [name] + VALUE_ALIASES.get(name, []):
-            for h in headers:
-                if cand in str(h):
-                    found = h
-                    break
-            if found:
-                break
-        result.append(found)
-    return result
 
 
 def make_pivot(headers, rows, row_labels, value_cols):
@@ -878,51 +847,28 @@ def main():
             if step <= 3:
                 # ---- 4. 透视模式 ----
                 print('-' * 64)
-                print('合并后汇总表列（含”数据来源表”）：')
-                for i, c in enumerate(merged_headers, start=1):
-                    print('  %d. %s' % (i, c))
                 while True:
-                    mode = _ask_back('请选择透视模式：1 固定模式（运单号、币种分组，对运费/附加费1/2/3、报关费、合计金额求和）| 2 自定义模式。输入 1 或 2：').strip()
-                    if mode == '1':
-                        rl = resolve_columns(merged_headers, FIXED_ROW_LABELS)
-                        if any(x is None for x in rl):
-                            miss = [FIXED_ROW_LABELS[i] for i, x in enumerate(rl) if x is None]
-                            print('汇总表中缺少固定模式的分组列：%s（上面列表里没有这些列），请改用自定义模式。' % '、'.join(miss))
-                            continue
-                        vals = resolve_columns(merged_headers, FIXED_VALUE_BASES)
-                        missing_vals = [FIXED_VALUE_BASES[i] for i, x in enumerate(vals) if x is None]
-                        if missing_vals:
-                            print('提示：汇总表中缺少数值列 %s，透视时跳过这些列。' % '、'.join(missing_vals))
-                        value_cols = [x for x in vals if x is not None]
-                        if not value_cols:
-                            print('汇总表中没有可求和的数值列，无法透视。')
-                            continue
-                        row_labels, value_cols = rl, value_cols
-                        break
-                    elif mode == '2':
-                        print('汇总表全部列：')
-                        for i, c in enumerate(merged_headers, start=1):
-                            print('  %d. %s' % (i, c))
-                        while True:
-                            try:
-                                rl_idx = parse_multi_choice(
-                                    _ask_back('请选择行标签列（分组列，多个用逗号/空格分隔，如 1,2）：'),
-                                    len(merged_headers))
-                                v_idx = parse_multi_choice(
-                                    _ask_back('请选择求和数值列（多个用逗号/空格分隔，如 3,4,5）：'),
-                                    len(merged_headers))
-                            except ValueError as e:
-                                print('选择无效：%s，请重新输入。' % e)
-                                continue
-                            if not rl_idx or not v_idx:
-                                print('行标签列和数值列都至少选一个。')
-                                continue
-                            break
-                        row_labels = [merged_headers[i] for i in rl_idx]
-                        value_cols = [merged_headers[i] for i in v_idx]
-                        break
-                    else:
-                        print('请输入 1 或 2。')
+                    print('合并后汇总表列（分组列自动为运单号、币种等非求和列）：')
+                    for i, c in enumerate(merged_headers, start=1):
+                        print('  %d. %s' % (i, c))
+                    ans = _ask_back('请选择要求和的数值列（金额列，多个用逗号/空格分隔，如 3,4,5,6,7,8）：')
+                    try:
+                        v_idx = parse_multi_choice(ans, len(merged_headers))
+                    except ValueError as e:
+                        print('选择无效：%s，请重新输入。' % e)
+                        continue
+                    if not v_idx:
+                        print('至少选一列求和。')
+                        continue
+                    break
+                value_cols = [merged_headers[i] for i in v_idx]
+                # 自动分组：运单号、币种（存在则用）；否则用非求和列中除“数据来源表”外的列
+                row_labels = [c for c in ['运单号', '币种'] if c in merged_headers and c not in value_cols]
+                if not row_labels:
+                    row_labels = [c for i, c in enumerate(merged_headers) if i not in v_idx and c != '数据来源表']
+                if not row_labels:
+                    row_labels = [c for c in merged_headers if c not in value_cols][:1] or [merged_headers[0]]
+                print('分组列（自动）：%s' % '、'.join(row_labels))
 
                 try:
                     pivot_headers, pivot_rows = make_pivot(merged_headers, merged_rows, row_labels, value_cols)
@@ -1028,7 +974,6 @@ def main():
             print('已返回上一步（步骤 %d）。' % (step + 1))
 
     print('已完成，谢谢使用。')
-    print('玛卡巴卡””')
 
 
 if __name__ == '__main__':
@@ -1036,5 +981,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n用户取消操作。')
-        print('玛卡巴卡""')
     sys.exit(0)
