@@ -52,6 +52,18 @@ def _ask(prompt):
     return input(prompt)
 
 
+class GoBack(Exception):
+    """用户输入了「返回上一步」"""
+
+
+def _ask_back(prompt):
+    """同 _ask，但支持输入 b / back / 上一步 / 返回 触发 GoBack 异常。"""
+    ans = _ask(prompt).strip()
+    if ans.lower() in ('b', 'back', '上一步', '返回'):
+        raise GoBack()
+    return ans
+
+
 def is_path_like(s):
     """粗略判断一行是否为文件路径（存在该文件，或含路径分隔符/盘符）。"""
     if not s:
@@ -451,395 +463,421 @@ def main():
 
     print('多表合并透视工具')
     print('功能：粘贴多表 -> 选择列 -> 合并 -> 透视汇总 -> 保存或插入主表')
+    print('提示：任意选择步骤中输入 b / 上一步 返回上一个步骤')
     print('-' * 64)
 
-    # ---- 1. 粘贴/读取表格 ----
+    step = 0  # 0=粘贴, 1=选工作表, 2=选列+合并, 3=透视, 4=透视保存/插入
+    valid = None; sheet_name = None; tables = None
+    sel_cols = None; col_aliases = None
+    merged_headers = None; merged_rows = None
+    pivot_headers = None; pivot_rows = None
+
     while True:
-        paths = read_paths('请粘贴要合并的表格文件（可多选复制后 Ctrl+V 粘贴，或输入 c 从剪贴板读取），粘贴后回车：')
-        if not paths:
-            print('未检测到文件路径，请重新粘贴。')
-            continue
-        valid, seen = [], set()
-        for p in paths:
-            ap = os.path.normcase(os.path.abspath(p))
-            if ap in seen:
-                continue
-            seen.add(ap)
-            if not os.path.isfile(p):
-                print('跳过（找不到文件）：%s' % p)
-                continue
-            if not (p.lower().endswith('.xlsx') or p.lower().endswith('.xlsm')):
-                print('跳过（仅支持 .xlsx/.xlsm）：%s' % p)
-                continue
-            valid.append(p)
-        if not valid:
-            print('没有可用的表格文件，请重新粘贴。')
-            continue
-        break
-
-    # 立即反馈：确认已识别的表格（避免“读了没反应”的困惑）
-    if len(valid) == 1:
-        print('已识别 1 个表格：%s' % os.path.basename(valid[0]))
-    else:
-        print('已识别 %d 个表格（顺序即合并顺序）：' % len(valid))
-        for i, p in enumerate(valid, start=1):
-            print('  %d. %s' % (i, os.path.basename(p)))
-
-    # ---- 1.5 选择要合并的工作表：识别全部文件的工作表名称，合并去重后选择 ----
-    all_sheets, seen_sheets = [], set()
-    for p in valid:
         try:
-            wb = load_workbook(p, read_only=True)
-            sheets = wb.sheetnames
-            wb.close()
-        except Exception as e:
-            print('跳过（无法读取工作表列表）：%s（%s）' % (os.path.basename(p), e))
-            continue
-        for s in sheets:
-            s = s.strip()
-            if s and s not in seen_sheets:
-                seen_sheets.add(s)
-                all_sheets.append(s)
-    if not all_sheets:
-        print('无法读取任何工作表名称，请检查表格文件。')
-        return
-    print('全部工作表名称（合并去重）：')
-    for i, s in enumerate(all_sheets, start=1):
-        print('  %d. %s' % (i, s))
-    while True:
-        sel = _ask('请选择要合并的工作表（输入序号或工作表名称，回车默认 1）：').strip()
-        if not sel:
-            sheet_name = all_sheets[0]
-            break
-        if sel.isdigit():
-            idx = int(sel)
-            if 1 <= idx <= len(all_sheets):
-                sheet_name = all_sheets[idx - 1]
-                break
-            print('序号超出范围（1-%d）。' % len(all_sheets))
-            continue
-        if sel in seen_sheets:
-            sheet_name = sel
-            break
-        print('不存在工作表名称：%s' % sel)
-    print('已选择工作表：%s（全部表格都使用该工作表的数据合并）' % sheet_name)
+            # ====== Step 0: 粘贴/读取表格 ======
+            if step <= 0:
+                while True:
+                    paths = read_paths('请粘贴要合并的表格文件（可多选复制后 Ctrl+V 粘贴，或输入 c 从剪贴板读取），粘贴后回车：')
+                    if not paths:
+                        print('未检测到文件路径，请重新粘贴。')
+                        continue
+                    valid, seen = [], set()
+                    for p in paths:
+                        ap = os.path.normcase(os.path.abspath(p))
+                        if ap in seen:
+                            continue
+                        seen.add(ap)
+                        if not os.path.isfile(p):
+                            print('跳过（找不到文件）：%s' % p)
+                            continue
+                        if not (p.lower().endswith('.xlsx') or p.lower().endswith('.xlsm')):
+                            print('跳过（仅支持 .xlsx/.xlsm）：%s' % p)
+                            continue
+                        valid.append(p)
+                    if not valid:
+                        print('没有可用的表格文件，请重新粘贴。')
+                        continue
+                    break
 
-    # 列名默认在第 1 行读取
-    header_row = 1
-
-    tables = []
-    for p in valid:
-        try:
-            sheet_name, headers, rows = read_table(p, sheet_name=sheet_name, header_row=header_row)
-        except Exception as e:
-            print('读取失败，跳过：%s（%s）' % (os.path.basename(p), e))
-            continue
-        tables.append({'path': p, 'base': os.path.basename(p),
-                       'sheet': sheet_name, 'headers': headers, 'rows': rows})
-    if not tables:
-        print('没有成功读取任何表格。')
-        return
-
-    # 显示名：同名不同目录时附加目录
-    name_counts = {}
-    for t in tables:
-        name_counts[t['base']] = name_counts.get(t['base'], 0) + 1
-    for t in tables:
-        if name_counts[t['base']] > 1:
-            t['display'] = '%s（%s）' % (t['base'], os.path.dirname(os.path.abspath(t['path'])))
-        else:
-            t['display'] = t['base']
-
-    print('共读取 %d 个表格（顺序即合并顺序）：' % len(tables))
-    for i, t in enumerate(tables, start=1):
-        print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
-
-    # ---- 2. 列选择 ----
-    all_cols = []
-    seen_cols = set()
-    for t in tables:
-        for h in t['headers']:
-            if h not in seen_cols:
-                seen_cols.add(h)
-                all_cols.append(h)
-    if not all_cols:
-        print('表格中没有可用的列名，无法合并。')
-        return
-    print('全部列名（合并去重）：')
-    for i, c in enumerate(all_cols, start=1):
-        print('  %d. %s' % (i, c))
-    while True:
-        print('全部列名（合并去重）：')
-        for i, c in enumerate(all_cols, start=1):
-            print('  %d. %s' % (i, c))
-        ans = _ask('请选择要合并的列（多个用逗号/空格分隔，如 1,3,5-7；输入 all 全选）：')
-        try:
-            sel_idx = parse_multi_choice(ans, len(all_cols))
-        except ValueError as e:
-            print('选择无效：%s，请重新输入。' % e)
-            continue
-        if not sel_idx:
-            print('至少选择一列。')
-            continue
-        sel_cols = [all_cols[i] for i in sel_idx]
-
-        # 检查哪些表缺少所选列（精确匹配）
-        missing_tables = {}
-        for t in tables:
-            hidx = {h: i for i, h in enumerate(t['headers'])}
-            miss = [c for c in sel_cols if c not in hidx]
-            if miss:
-                missing_tables[t['display']] = miss
-        if missing_tables:
-            for disp, miss in missing_tables.items():
-                print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (disp, '、'.join(miss)))
-            if _ask('检测到有表格缺少所选列，是否重新选择列？(y/n，回车默认 y)：').strip().lower() in ('', 'y', 'yes'):
-                continue  # 重新给一次选择
-        break
-    print('已选择 %d 列：%s' % (len(sel_cols), '、'.join(sel_cols)))
-
-    # 列名替代映射：所选列在部分子表里列名不同，可指定替代列名匹配
-    col_aliases = {}
-    rename_ans = _ask('是否要修改某个列的名称（为所选列指定替代列名，匹配子表中列名不同的数据）？\n'
-                      '  y/n，回车默认 n；也可直接输入要改名的列名或序号，直接进入改名：').strip()
-    first_pick = None
-    if rename_ans.lower() in ('', 'n', 'no', '否'):
-        pass  # 不改名
-    elif rename_ans.isdigit():
-        idx = int(rename_ans)
-        if 1 <= idx <= len(sel_cols):
-            first_pick = sel_cols[idx - 1]
-        else:
-            print('序号超出范围（1-%d），进入改名流程。' % len(sel_cols))
-    elif rename_ans.lower() in ('y', 'yes', '是'):
-        pass  # 纯 yes，正常进入
-    elif rename_ans in sel_cols:
-        first_pick = rename_ans
-    else:
-        print('未识别输入（%s），进入改名流程。' % rename_ans)
-
-    if first_pick is not None or rename_ans.lower() not in ('', 'n', 'no', '否'):
-        while True:
-            if first_pick is not None:
-                sel_name = first_pick
-                first_pick = None
-            else:
-                print('当前所选列：')
-                for i, c in enumerate(sel_cols, start=1):
-                    print('  %d. %s' % (i, c))
-                sel_name = _ask('请选择要修改名称的列（输入序号或列名；输入 done 结束）：').strip()
-            if not sel_name or sel_name.lower() == 'done':
-                break
-            if sel_name.isdigit():
-                idx = int(sel_name)
-                if 1 <= idx <= len(sel_cols):
-                    col = sel_cols[idx - 1]
+                if len(valid) == 1:
+                    print('已识别 1 个表格：%s' % os.path.basename(valid[0]))
                 else:
-                    print('序号超出范围（1-%d）。' % len(sel_cols))
-                    continue
-            elif sel_name in sel_cols:
-                col = sel_name
-            else:
-                print('所选列中不存在：%s' % sel_name)
-                continue
-            aliases = _ask('请输入 %s 的替代列名（子表实际使用的列名，多个用逗号/空格分隔）：' % col).strip()
-            alias_list = [a.strip() for a in re.split(r'[,\s，、]+', aliases) if a.strip()]
-            if not alias_list:
-                print('未输入有效列名，跳过。')
-                continue
-            col_aliases[col] = alias_list
-            print('已设置：%s -> %s' % (col, '、'.join(alias_list)))
-        if col_aliases:
-            print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
+                    print('已识别 %d 个表格（顺序即合并顺序）：' % len(valid))
+                    for i, p in enumerate(valid, start=1):
+                        print('  %d. %s' % (i, os.path.basename(p)))
+                step = 1
 
-    # ---- 3. 追加合并 ----
-    # 自动生成“汇总”列：运费+附加费1/2/3+报关费，放在最后一个费用列后面
-    fee_cols = [c for c in sel_cols if any(base in c for base in FEE_BASES)]
-    merged_headers = list(sel_cols)
-    sum_pos = None
-    if fee_cols:
-        sum_pos = max(sel_cols.index(c) for c in fee_cols) + 1
-        merged_headers.insert(sum_pos, '汇总')
-    merged_headers.append('数据来源表')
-    merged_rows = []
-    for t in tables:
-        hidx_map = {}
-        missing = []
-        for c in sel_cols:
-            i = find_col_in_table(t['headers'], c, col_aliases.get(c, []))
-            hidx_map[c] = i
-            if i is None:
-                missing.append(c)
-        if missing:
-            print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (t['display'], '、'.join(missing)))
-        for r in t['rows']:
-            row = []
-            for c in sel_cols:
-                i = hidx_map.get(c)
-                row.append(r[i] if i is not None and i < len(r) else None)
-            if sum_pos is not None:
-                total = 0.0
-                has_val = False
-                for c in fee_cols:
-                    i = hidx_map.get(c)
-                    v = r[i] if i is not None and i < len(r) else None
-                    if v is not None and str(v).strip() != '':
-                        total += to_number(v)
-                        has_val = True
-                row.insert(sum_pos, total if has_val else None)
-            row.append(t['display'])
-            merged_rows.append(row)
-    print('合并完成：共 %d 行，%d 列（含“汇总”“数据来源表”）。' % (len(merged_rows), len(merged_headers)))
+            # ====== Step 1: 选择工作表 + 读取数据 ======
+            if step <= 1:
+                # ---- 1.5 选择要合并的工作表 ----
+                all_sheets, seen_sheets = [], set()
+                for p in valid:
+                    try:
+                        wb = load_workbook(p, read_only=True)
+                        sheets = wb.sheetnames
+                        wb.close()
+                    except Exception as e:
+                        print('跳过（无法读取工作表列表）：%s（%s）' % (os.path.basename(p), e))
+                        continue
+                    for s in sheets:
+                        s = s.strip()
+                        if s and s not in seen_sheets:
+                            seen_sheets.add(s)
+                            all_sheets.append(s)
+                if not all_sheets:
+                    print('无法读取任何工作表名称，请检查表格文件。')
+                    return
+                print('全部工作表名称（合并去重）：')
+                for i, s in enumerate(all_sheets, start=1):
+                    print('  %d. %s' % (i, s))
+                while True:
+                    sel = _ask_back('请选择要合并的工作表（输入序号或工作表名称，回车默认 1）：').strip()
+                    if not sel:
+                        sheet_name = all_sheets[0]
+                        break
+                    if sel.isdigit():
+                        idx = int(sel)
+                        if 1 <= idx <= len(all_sheets):
+                            sheet_name = all_sheets[idx - 1]
+                            break
+                        print('序号超出范围（1-%d）。' % len(all_sheets))
+                        continue
+                    if sel in seen_sheets:
+                        sheet_name = sel
+                        break
+                    print('不存在工作表名称：%s' % sel)
+                print('已选择工作表：%s（全部表格都使用该工作表的数据合并）' % sheet_name)
 
-    # 可选：保存合并汇总表
-    if _ask('是否保存合并后的汇总表？(y/n，回车默认 n)：').strip().lower() in ('y', 'yes'):
-        out = read_save_path('请输入保存路径（可拖入文件夹；回车默认：合并汇总.xlsx）：', '合并汇总.xlsx')
-        try:
-            write_table(out, '合并汇总', merged_headers, merged_rows)
-            print('已保存合并汇总表：%s' % out)
-        except Exception as e:
-            print('保存合并汇总表失败：%s' % e)
+                # 列名默认在第 1 行读取
+                header_row = 1
 
-    # ---- 4. 透视模式 ----
-    print('-' * 64)
-    print('合并后汇总表列（含“数据来源表”）：')
-    for i, c in enumerate(merged_headers, start=1):
-        print('  %d. %s' % (i, c))
-    while True:
-        mode = _ask('请选择透视模式：1 固定模式（运单号、币种分组，对运费/附加费1/2/3、报关费、合计金额求和）| 2 自定义模式。输入 1 或 2：').strip()
-        if mode == '1':
-            rl = resolve_columns(merged_headers, FIXED_ROW_LABELS)
-            if any(x is None for x in rl):
-                miss = [FIXED_ROW_LABELS[i] for i, x in enumerate(rl) if x is None]
-                print('汇总表中缺少固定模式的分组列：%s（上面列表里没有这些列），请改用自定义模式。' % '、'.join(miss))
-                continue
-            vals = resolve_columns(merged_headers, FIXED_VALUE_BASES)
-            missing_vals = [FIXED_VALUE_BASES[i] for i, x in enumerate(vals) if x is None]
-            if missing_vals:
-                print('提示：汇总表中缺少数值列 %s，透视时跳过这些列。' % '、'.join(missing_vals))
-            value_cols = [x for x in vals if x is not None]
-            if not value_cols:
-                print('汇总表中没有可求和的数值列，无法透视。')
-                continue
-            row_labels, value_cols = rl, value_cols
-            break
-        elif mode == '2':
-            print('汇总表全部列：')
-            for i, c in enumerate(merged_headers, start=1):
-                print('  %d. %s' % (i, c))
-            while True:
+                tables = []
+                for p in valid:
+                    try:
+                        sheet_name, headers, rows = read_table(p, sheet_name=sheet_name, header_row=header_row)
+                    except Exception as e:
+                        print('读取失败，跳过：%s（%s）' % (os.path.basename(p), e))
+                        continue
+                    tables.append({'path': p, 'base': os.path.basename(p),
+                                   'sheet': sheet_name, 'headers': headers, 'rows': rows})
+                if not tables:
+                    print('没有成功读取任何表格。')
+                    return
+
+                # 显示名：同名不同目录时附加目录
+                name_counts = {}
+                for t in tables:
+                    name_counts[t['base']] = name_counts.get(t['base'], 0) + 1
+                for t in tables:
+                    if name_counts[t['base']] > 1:
+                        t['display'] = '%s（%s）' % (t['base'], os.path.dirname(os.path.abspath(t['path'])))
+                    else:
+                        t['display'] = t['base']
+
+                print('共读取 %d 个表格（顺序即合并顺序）：' % len(tables))
+                for i, t in enumerate(tables, start=1):
+                    print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
+                step = 2
+
+            # ====== Step 2: 选择列 + 别名 + 合并 + 保存 ======
+            if step <= 2:
+                # ---- 2. 列选择 ----
+                all_cols = []
+                seen_cols = set()
+                for t in tables:
+                    for h in t['headers']:
+                        if h not in seen_cols:
+                            seen_cols.add(h)
+                            all_cols.append(h)
+                if not all_cols:
+                    print('表格中没有可用的列名，无法合并。')
+                    return
+                while True:
+                    print('全部列名（合并去重）：')
+                    for i, c in enumerate(all_cols, start=1):
+                        print('  %d. %s' % (i, c))
+                    ans = _ask_back('请选择要合并的列（多个用逗号/空格分隔，如 1,3,5-7；输入 all 全选）：')
+                    try:
+                        sel_idx = parse_multi_choice(ans, len(all_cols))
+                    except ValueError as e:
+                        print('选择无效：%s，请重新输入。' % e)
+                        continue
+                    if not sel_idx:
+                        print('至少选择一列。')
+                        continue
+                    sel_cols = [all_cols[i] for i in sel_idx]
+
+                    missing_tables = {}
+                    for t in tables:
+                        hidx = {h: i for i, h in enumerate(t['headers'])}
+                        miss = [c for c in sel_cols if c not in hidx]
+                        if miss:
+                            missing_tables[t['display']] = miss
+                    if missing_tables:
+                        for disp, miss in missing_tables.items():
+                            print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (disp, '、'.join(miss)))
+                        if _ask_back('检测到有表格缺少所选列，是否重新选择列？(y/n，回车默认 y)：').strip().lower() in ('', 'y', 'yes'):
+                            continue
+                    break
+                print('已选择 %d 列：%s' % (len(sel_cols), '、'.join(sel_cols)))
+
+                # 列名替代映射
+                col_aliases = {}
+                rename_ans = _ask_back('部分子表里的列名可能和汇总表列名不一致？\n'
+                                      '  输入列名或序号，指定哪个列在子表里有不同的名字（回车默认跳过）：').strip()
+                first_pick = None
+                if rename_ans.lower() in ('', 'n', 'no', '否'):
+                    pass
+                elif rename_ans.isdigit():
+                    idx = int(rename_ans)
+                    if 1 <= idx <= len(sel_cols):
+                        first_pick = sel_cols[idx - 1]
+                    else:
+                        print('序号超出范围（1-%d），进入改名流程。' % len(sel_cols))
+                elif rename_ans.lower() in ('y', 'yes', '是'):
+                    pass
+                elif rename_ans in sel_cols:
+                    first_pick = rename_ans
+                else:
+                    print('未识别输入（%s），进入改名流程。' % rename_ans)
+
+                if first_pick is not None or rename_ans.lower() not in ('', 'n', 'no', '否'):
+                    while True:
+                        if first_pick is not None:
+                            sel_name = first_pick
+                            first_pick = None
+                        else:
+                            print('当前所选列：')
+                            for i, c in enumerate(sel_cols, start=1):
+                                print('  %d. %s' % (i, c))
+                            sel_name = _ask_back('请选择在子表里叫法不同的列（输入序号或列名；输入 done 结束）：').strip()
+                        if not sel_name or sel_name.lower() == 'done':
+                            break
+                        if sel_name.isdigit():
+                            idx = int(sel_name)
+                            if 1 <= idx <= len(sel_cols):
+                                col = sel_cols[idx - 1]
+                            else:
+                                print('序号超出范围（1-%d）。' % len(sel_cols))
+                                continue
+                        elif sel_name in sel_cols:
+                            col = sel_name
+                        else:
+                            print('所选列中不存在：%s' % sel_name)
+                            continue
+                        aliases = _ask_back('请输入「%s」在子表里的其他叫法（多个用逗号/空格分隔）：' % col).strip()
+                        alias_list = [a.strip() for a in re.split(r'[,\s，、]+', aliases) if a.strip()]
+                        if not alias_list:
+                            print('未输入有效列名，跳过。')
+                            continue
+                        col_aliases[col] = alias_list
+                        print('已设置：%s -> %s' % (col, '、'.join(alias_list)))
+                    if col_aliases:
+                        print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
+
+                # ---- 3. 追加合并 ----
+                fee_cols = [c for c in sel_cols if any(base in c for base in FEE_BASES)]
+                merged_headers = list(sel_cols)
+                sum_pos = None
+                if fee_cols:
+                    sum_pos = max(sel_cols.index(c) for c in fee_cols) + 1
+                    merged_headers.insert(sum_pos, '汇总')
+                merged_headers.append('数据来源表')
+                merged_rows = []
+                for t in tables:
+                    hidx_map = {}
+                    missing = []
+                    for c in sel_cols:
+                        i = find_col_in_table(t['headers'], c, col_aliases.get(c, []))
+                        hidx_map[c] = i
+                        if i is None:
+                            missing.append(c)
+                    if missing:
+                        print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (t['display'], '、'.join(missing)))
+                    for r in t['rows']:
+                        row = []
+                        for c in sel_cols:
+                            i = hidx_map.get(c)
+                            row.append(r[i] if i is not None and i < len(r) else None)
+                        if sum_pos is not None:
+                            total = 0.0
+                            has_val = False
+                            for c in fee_cols:
+                                i = hidx_map.get(c)
+                                v = r[i] if i is not None and i < len(r) else None
+                                if v is not None and str(v).strip() != '':
+                                    total += to_number(v)
+                                    has_val = True
+                            row.insert(sum_pos, total if has_val else None)
+                        row.append(t['display'])
+                        merged_rows.append(row)
+                print('合并完成：共 %d 行，%d 列（含”汇总””数据来源表”）。' % (len(merged_rows), len(merged_headers)))
+
+                # 可选：保存合并汇总表
+                if _ask_back('是否保存合并后的汇总表？(y/n，回车默认 n)：').strip().lower() in ('y', 'yes'):
+                    out = read_save_path('请输入保存路径（可拖入文件夹；回车默认：合并汇总.xlsx）：', '合并汇总.xlsx')
+                    try:
+                        write_table(out, '合并汇总', merged_headers, merged_rows)
+                        print('已保存合并汇总表：%s' % out)
+                    except Exception as e:
+                        print('保存合并汇总表失败：%s' % e)
+                step = 3
+
+            # ====== Step 3: 透视模式 ======
+            if step <= 3:
+                # ---- 4. 透视模式 ----
+                print('-' * 64)
+                print('合并后汇总表列（含”数据来源表”）：')
+                for i, c in enumerate(merged_headers, start=1):
+                    print('  %d. %s' % (i, c))
+                while True:
+                    mode = _ask_back('请选择透视模式：1 固定模式（运单号、币种分组，对运费/附加费1/2/3、报关费、合计金额求和）| 2 自定义模式。输入 1 或 2：').strip()
+                    if mode == '1':
+                        rl = resolve_columns(merged_headers, FIXED_ROW_LABELS)
+                        if any(x is None for x in rl):
+                            miss = [FIXED_ROW_LABELS[i] for i, x in enumerate(rl) if x is None]
+                            print('汇总表中缺少固定模式的分组列：%s（上面列表里没有这些列），请改用自定义模式。' % '、'.join(miss))
+                            continue
+                        vals = resolve_columns(merged_headers, FIXED_VALUE_BASES)
+                        missing_vals = [FIXED_VALUE_BASES[i] for i, x in enumerate(vals) if x is None]
+                        if missing_vals:
+                            print('提示：汇总表中缺少数值列 %s，透视时跳过这些列。' % '、'.join(missing_vals))
+                        value_cols = [x for x in vals if x is not None]
+                        if not value_cols:
+                            print('汇总表中没有可求和的数值列，无法透视。')
+                            continue
+                        row_labels, value_cols = rl, value_cols
+                        break
+                    elif mode == '2':
+                        print('汇总表全部列：')
+                        for i, c in enumerate(merged_headers, start=1):
+                            print('  %d. %s' % (i, c))
+                        while True:
+                            try:
+                                rl_idx = parse_multi_choice(
+                                    _ask_back('请选择行标签列（分组列，多个用逗号/空格分隔，如 1,2）：'),
+                                    len(merged_headers))
+                                v_idx = parse_multi_choice(
+                                    _ask_back('请选择求和数值列（多个用逗号/空格分隔，如 3,4,5）：'),
+                                    len(merged_headers))
+                            except ValueError as e:
+                                print('选择无效：%s，请重新输入。' % e)
+                                continue
+                            if not rl_idx or not v_idx:
+                                print('行标签列和数值列都至少选一个。')
+                                continue
+                            break
+                        row_labels = [merged_headers[i] for i in rl_idx]
+                        value_cols = [merged_headers[i] for i in v_idx]
+                        break
+                    else:
+                        print('请输入 1 或 2。')
+
                 try:
-                    rl_idx = parse_multi_choice(
-                        _ask('请选择行标签列（分组列，多个用逗号/空格分隔，如 1,2）：'),
-                        len(merged_headers))
-                    v_idx = parse_multi_choice(
-                        _ask('请选择求和数值列（多个用逗号/空格分隔，如 3,4,5）：'),
-                        len(merged_headers))
-                except ValueError as e:
-                    print('选择无效：%s，请重新输入。' % e)
-                    continue
-                if not rl_idx or not v_idx:
-                    print('行标签列和数值列都至少选一个。')
-                    continue
-                break
-            row_labels = [merged_headers[i] for i in rl_idx]
-            value_cols = [merged_headers[i] for i in v_idx]
+                    pivot_headers, pivot_rows = make_pivot(merged_headers, merged_rows, row_labels, value_cols)
+                except KeyError as e:
+                    print('透视失败：%s' % e)
+                    return
+                print('透视完成：共 %d 行 × %d 列。' % (len(pivot_rows), len(pivot_headers)))
+                print('透视表列：%s' % '、'.join(pivot_headers))
+                for i, r in enumerate(pivot_rows[:5], start=1):
+                    print('  %d. %s' % (i, ' | '.join('' if v is None else str(v) for v in r)))
+                if len(pivot_rows) > 5:
+                    print('  ...（共 %d 行）' % len(pivot_rows))
+                step = 4
+
+            # ====== Step 4: 透视表去向 ======
+            if step <= 4:
+                # ---- 5. 透视表去向 ----
+                print('-' * 64)
+                while True:
+                    dest = _ask_back('请选择透视表去向：1 直接保存为文件 | 2 插入到已有的主表（Excel）中。输入 1 或 2：').strip()
+                    if dest == '1':
+                        out = read_save_path('请输入保存路径（可拖入文件夹；回车默认当前目录 透视汇总.xlsx）：', '透视汇总.xlsx')
+                        if os.path.exists(out):
+                            base, ext = os.path.splitext(out)
+                            out = '%s_%s%s' % (base, datetime.now().strftime('%Y%m%d_%H%M%S'), ext)
+                        try:
+                            write_table(out, '透视汇总', pivot_headers, pivot_rows)
+                            print('已保存透视表：%s' % out)
+                        except Exception as e:
+                            print('保存透视表失败：%s' % e)
+                        break
+                    elif dest == '2':
+                        while True:
+                            mains = read_paths('请粘贴要插入的主表（*.xlsx），粘贴后回车：')
+                            if not mains:
+                                print('未检测到文件路径，请重新粘贴。')
+                                continue
+                            main_path = mains[0]
+                            if not os.path.isfile(main_path):
+                                print('找不到文件：%s' % main_path)
+                                continue
+                            if not (main_path.lower().endswith('.xlsx') or main_path.lower().endswith('.xlsm')):
+                                print('仅支持 .xlsx/.xlsm 主表，请重新粘贴。')
+                                continue
+                            break
+                        try:
+                            wb = load_workbook(main_path)
+                        except Exception as e:
+                            print('打开主表失败：%s' % e)
+                            return
+
+                        sheet_name = sanitize_sheet_name(
+                            _ask_back('请输入透视表工作表名称（回车默认：透视汇总）：').strip() or '透视汇总')
+                        if sheet_name in wb.sheetnames:
+                            del wb[sheet_name]
+                        pws = wb.create_sheet(title=sheet_name)
+                        pws.append(pivot_headers)
+                        for row in pivot_rows:
+                            pws.append(row)
+                        print('已插入透视表工作表：%s' % sheet_name)
+
+                        print('主表 %s 的全部工作表：' % os.path.basename(main_path))
+                        for i, name in enumerate(wb.sheetnames, start=1):
+                            print('  %d. %s' % (i, name))
+                        while True:
+                            sel = _ask_back('请选择要回填合计金额的工作表（输入序号，回车默认 1）：').strip() or '1'
+                            try:
+                                target = wb.sheetnames[int(sel) - 1]
+                                break
+                            except (ValueError, IndexError):
+                                print('请输入有效序号（1-%d）。' % len(wb.sheetnames))
+                        print('已选择工作表：%s' % target)
+
+                        while True:
+                            hdr_in = _ask_back('请输入主表列名所在行（该主表列名从第 3 行开始，回车默认 3）：').strip()
+                            if not hdr_in:
+                                header_row = 3
+                                break
+                            if hdr_in.isdigit() and int(hdr_in) >= 1:
+                                header_row = int(hdr_in)
+                                break
+                            print('请输入有效的行号（正整数）。')
+                        try:
+                            filled, f_col, d_col = backfill_pivot_total(wb, target, pivot_headers, pivot_rows, header_row)
+                        except Exception as e:
+                            print('回填失败：%s' % e)
+                            return
+                        wb.save(main_path)
+                        print('已新增列：%s、%s，共计算 %d 行合计金额差异。' % (f_col, d_col, filled))
+                        print('已保存主表：%s' % main_path)
+                        break
+                    else:
+                        print('请输入 1 或 2。')
+                step = 5
+
+            # 全部完成
             break
-        else:
-            print('请输入 1 或 2。')
 
-    try:
-        pivot_headers, pivot_rows = make_pivot(merged_headers, merged_rows, row_labels, value_cols)
-    except KeyError as e:
-        print('透视失败：%s' % e)
-        return
-    print('透视完成：共 %d 行 × %d 列。' % (len(pivot_rows), len(pivot_headers)))
-    print('透视表列：%s' % '、'.join(pivot_headers))
-    for i, r in enumerate(pivot_rows[:5], start=1):
-        print('  %d. %s' % (i, ' | '.join('' if v is None else str(v) for v in r)))
-    if len(pivot_rows) > 5:
-        print('  ...（共 %d 行）' % len(pivot_rows))
-
-    # ---- 5. 透视表去向 ----
-    print('-' * 64)
-    while True:
-        dest = _ask('请选择透视表去向：1 直接保存为文件 | 2 插入到已有的主表（Excel）中。输入 1 或 2：').strip()
-        if dest == '1':
-            out = read_save_path('请输入保存路径（可拖入文件夹；回车默认当前目录 透视汇总.xlsx）：', '透视汇总.xlsx')
-            if os.path.exists(out):
-                base, ext = os.path.splitext(out)
-                out = '%s_%s%s' % (base, datetime.now().strftime('%Y%m%d_%H%M%S'), ext)
-            try:
-                write_table(out, '透视汇总', pivot_headers, pivot_rows)
-                print('已保存透视表：%s' % out)
-            except Exception as e:
-                print('保存透视表失败：%s' % e)
-            break
-        elif dest == '2':
-            while True:
-                mains = read_paths('请粘贴要插入的主表（*.xlsx），粘贴后回车：')
-                if not mains:
-                    print('未检测到文件路径，请重新粘贴。')
-                    continue
-                main_path = mains[0]
-                if not os.path.isfile(main_path):
-                    print('找不到文件：%s' % main_path)
-                    continue
-                if not (main_path.lower().endswith('.xlsx') or main_path.lower().endswith('.xlsm')):
-                    print('仅支持 .xlsx/.xlsm 主表，请重新粘贴。')
-                    continue
-                break
-            try:
-                wb = load_workbook(main_path)
-            except Exception as e:
-                print('打开主表失败：%s' % e)
-                return
-
-            sheet_name = sanitize_sheet_name(
-                _ask('请输入透视表工作表名称（回车默认：透视汇总）：').strip() or '透视汇总')
-            if sheet_name in wb.sheetnames:
-                del wb[sheet_name]
-            pws = wb.create_sheet(title=sheet_name)
-            pws.append(pivot_headers)
-            for row in pivot_rows:
-                pws.append(row)
-            print('已插入透视表工作表：%s' % sheet_name)
-
-            print('主表 %s 的全部工作表：' % os.path.basename(main_path))
-            for i, name in enumerate(wb.sheetnames, start=1):
-                print('  %d. %s' % (i, name))
-            while True:
-                sel = _ask('请选择要回填合计金额的工作表（输入序号，回车默认 1）：').strip() or '1'
-                try:
-                    target = wb.sheetnames[int(sel) - 1]
-                    break
-                except (ValueError, IndexError):
-                    print('请输入有效序号（1-%d）。' % len(wb.sheetnames))
-            print('已选择工作表：%s' % target)
-
-            while True:
-                hdr_in = _ask('请输入主表列名所在行（该主表列名从第 3 行开始，回车默认 3）：').strip()
-                if not hdr_in:
-                    header_row = 3
-                    break
-                if hdr_in.isdigit() and int(hdr_in) >= 1:
-                    header_row = int(hdr_in)
-                    break
-                print('请输入有效的行号（正整数）。')
-            try:
-                filled, f_col, d_col = backfill_pivot_total(wb, target, pivot_headers, pivot_rows, header_row)
-            except Exception as e:
-                print('回填失败：%s' % e)
-                return
-            wb.save(main_path)
-            print('已新增列：%s、%s，共计算 %d 行合计金额差异。' % (f_col, d_col, filled))
-            print('已保存主表：%s' % main_path)
-            break
-        else:
-            print('请输入 1 或 2。')
+        except GoBack:
+            step -= 1
+            if step < 0:
+                step = 0
+            print('已返回上一步（步骤 %d）。' % (step + 1))
 
     print('已完成，谢谢使用。')
-    print('玛卡巴卡""')
+    print('玛卡巴卡””')
 
 
 if __name__ == '__main__':
