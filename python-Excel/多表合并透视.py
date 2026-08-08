@@ -6,15 +6,17 @@
 1. 支持一次粘贴/拖入多个 Excel 表格（*.xlsx / *.xlsm），回车确认；
    - 资源管理器多选后 Ctrl+C，再到终端 Ctrl+V 多行粘贴（每行一个路径）；
    - 也可输入 c 从剪贴板直接读取全部路径（参考 pdf-v-photo/pdf转图片.py）。
-2. 列出全部表名（合并去重）与全部列名（合并去重），选择要合并的列。
+2. 列出全部表名（合并去重）与全部列名（合并去重），选择要合并的列；
+   子表列名所在行与工作表序号可配置（默认第 1 行、第 1 个工作表）。
 3. 按粘贴顺序追加合并所选列，每行末尾新增“数据来源表”列。
 4. 透视汇总：
    - 固定模式：按 运单号、币种 分组，对 运费、附加费1/2/3、报关费、合计金额 求和；
    - 自定义模式：自由选择行标签列与求和数值列。
 5. 透视表去向：
    - 直接保存为新的 xlsx 文件；
-   - 或插入粘贴的主表中作为新工作表，并按“运单号”回填透视表“运费”列，
-     再新增一列“透视表运费 - 主表原运费”的差异列。
+   - 或插入粘贴的主表中作为新工作表，并按“运单号”回填透视表“合计金额”列，
+     再新增一列“透视表合计金额 - 主表汇总金额”的差异列；
+     主表列名从第 3 行开始（可输入调整），“汇总金额”一般位于 AH 列。
 
 使用：
     python 多表合并透视.py
@@ -131,6 +133,21 @@ def read_clipboard_paths():
         return []
 
 
+def read_save_path(prompt, default_name):
+    """读取保存路径：支持直接输入、拖入文件夹/文件（自动去掉 Windows 拖入时带的引号）。
+    空输入用默认名；拖入文件夹则在其下生成默认文件名；无扩展名补 .xlsx。"""
+    s = _ask(prompt).strip()
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        s = s[1:-1].strip()
+    if not s:
+        return default_name
+    if os.path.isdir(s):
+        return os.path.join(s, default_name)
+    if not s.lower().endswith(('.xlsx', '.xlsm')):
+        s += '.xlsx'
+    return s
+
+
 # ---------------------------------------------------------------------------
 # 通用工具
 # ---------------------------------------------------------------------------
@@ -227,27 +244,51 @@ def find_column(headers, candidates):
     return None
 
 
+def find_col_in_table(headers, name, aliases):
+    """在子表表头中找列：精确匹配所选名 → 精确匹配替代名 → 模糊包含匹配。
+    返回 0 起列索引或 None。"""
+    h = {str(x).strip(): i for i, x in enumerate(headers)}
+    for cand in [name] + list(aliases):
+        if cand in h:
+            return h[cand]
+    for cand in [name] + list(aliases):
+        for i, x in enumerate(headers):
+            xs = str(x).strip()
+            if cand in xs:
+                return i
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 读取表格
 # ---------------------------------------------------------------------------
-def read_table(path):
-    """读取 Excel 的第一个工作表，返回 (工作表名, 表头列表, 数据行列表)。"""
+def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
+    """读取 Excel 的指定工作表，返回 (工作表名, 表头列表, 数据行列表)。
+    sheet_name 优先：按工作表名称取（所有子表统一用选中的工作表合并）；
+    未指定时按 sheet_idx（0 起，默认第 1 个）取第几个工作表。
+    header_row 为列名所在行（1 起，默认第 1 行），数据从 header_row+1 行开始。"""
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
-        ws = wb.worksheets[0]
+        if sheet_name is not None:
+            if sheet_name not in wb.sheetnames:
+                raise ValueError('该文件没有工作表"%s"' % sheet_name)
+            ws = wb[sheet_name]
+        else:
+            ws = wb.worksheets[sheet_idx]
         rows = list(ws.iter_rows(values_only=True))
     finally:
         wb.close()
-    if not rows:
+    if len(rows) < header_row:
         return ws.title, [], []
+    header_cells = rows[header_row - 1]
     headers = []
-    for i, v in enumerate(rows[0]):
+    for i, v in enumerate(header_cells):
         name = v if isinstance(v, str) else ('' if v is None else str(v))
         name = name.strip()
         if name == '':
             name = '未命名列%d' % (i + 1)
         headers.append(name)
-    data = [r for r in rows[1:] if any(v is not None and str(v).strip() != '' for v in r)]
+    data = [r for r in rows[header_row:] if any(v is not None and str(v).strip() != '' for v in r)]
     return ws.title, headers, data
 
 
@@ -258,19 +299,34 @@ FIXED_ROW_LABELS = ['运单号', '币种']
 FIXED_VALUE_BASES = ['运费', '附加费2（如超围长重附加费）',
                      '附加费1（如偏远费）', '附加费3（如超长重附加费）',
                      '报关费', '合计金额']
+# 合并时用于自动生成“汇总”列的单项费用（子串匹配）
+FEE_BASES = ('运费', '附加费1', '附加费2', '附加费3', '报关费')
+# 固定数值列在子表/汇总表中的常见别名（优先精确，再按别名/包含匹配）
+VALUE_ALIASES = {
+    '合计金额': ['费用合计', '合计', '费用总计', '汇总'],
+}
 
 
 def resolve_columns(headers, names):
     """把固定列名解析到汇总表实际列名：
-    优先精确匹配；否则匹配 '求和项:'+名称；找不到返回 None。"""
+    优先精确匹配；否则匹配 '求和项:'+名称；再按别名/包含匹配；找不到返回 None。"""
     result = []
     for name in names:
         if name in headers:
             result.append(name)
-        elif ('求和项:%s' % name) in headers:
+            continue
+        if ('求和项:%s' % name) in headers:
             result.append('求和项:%s' % name)
-        else:
-            result.append(None)
+            continue
+        found = None
+        for cand in [name] + VALUE_ALIASES.get(name, []):
+            for h in headers:
+                if cand in str(h):
+                    found = h
+                    break
+            if found:
+                break
+        result.append(found)
     return result
 
 
@@ -313,29 +369,38 @@ def write_table(path, sheet_title, headers, rows):
 
 
 # ---------------------------------------------------------------------------
-# 回填透视运费 + 差异列
 # ---------------------------------------------------------------------------
-def backfill_pivot_freight(wb, sheet_name, pivot_headers, pivot_rows):
-    """在指定工作表中按运单号回填透视表运费，并新增差异列。
-    返回 (差异行数, 透视运费列名, 差异列名)。"""
+# 回填透视合计金额 + 差异列
+# ---------------------------------------------------------------------------
+def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3):
+    """在指定工作表中按运单号回填透视表合计金额，并新增差异列。
+    主表列名位于 header_row 行（默认第 3 行），数据从 header_row+1 行开始；
+    “汇总金额”列优先取 AH 列（第 34 列），否则按列名查找。
+    返回 (差异行数, 透视合计列名, 差异列名)。"""
     ws = wb[sheet_name]
-    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    headers = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
     headers_str = ['' if v is None else str(v).strip() for v in headers]
 
     yd_idx = find_column(headers_str, ['运单号'])
     if yd_idx is None:
         raise ValueError('所选工作表未找到“运单号”列，无法回填。')
-    fy_idx = find_column(headers_str, ['运费'])
-    if fy_idx is None:
-        raise ValueError('所选工作表未找到“运费”列，无法计算差异。')
+    hz_idx = None
+    if ws.max_column >= 34:
+        ah_val = ws.cell(row=header_row, column=34).value
+        if ah_val is not None and '汇总金额' in str(ah_val):
+            hz_idx = 33
+    if hz_idx is None:
+        hz_idx = find_column(headers_str, ['汇总金额'])
+    if hz_idx is None:
+        raise ValueError('所选工作表未找到“汇总金额”列，无法计算差异。')
 
     p_headers_str = ['' if v is None else str(v).strip() for v in pivot_headers]
     p_yd_idx = find_column(p_headers_str, ['运单号'])
     if p_yd_idx is None:
         raise ValueError('透视表中未找到“运单号”列，无法回填。')
-    p_fy_idx = find_column(p_headers_str, ['求和项:运费', '运费'])
-    if p_fy_idx is None:
-        raise ValueError('透视表中未找到“运费”列，无法回填。')
+    p_hz_idx = find_column(p_headers_str, ['求和项:合计金额', '合计金额'])
+    if p_hz_idx is None:
+        raise ValueError('透视表中未找到“合计金额”列，无法回填。')
 
     # 透视表按运单号建索引（重复取第一个）
     pivot_map = {}
@@ -347,37 +412,36 @@ def backfill_pivot_freight(wb, sheet_name, pivot_headers, pivot_rows):
         if k in pivot_map:
             dup += 1
             continue
-        pivot_map[k] = row[p_fy_idx] if p_fy_idx < len(row) else None
+        pivot_map[k] = row[p_hz_idx] if p_hz_idx < len(row) else None
     if dup:
         print('提示：透视表中有 %d 个重复运单号（如不同币种），回填时使用第一个匹配值。' % dup)
 
     # 已存在回填列则复用，否则在末尾新增
-    pf_exist = find_column(headers_str, ['透视表运费'])
-    diff_exist = find_column(headers_str, ['运费差异（透视-原表）'])
+    pf_exist = find_column(headers_str, ['透视表合计金额'])
+    diff_exist = find_column(headers_str, ['合计金额差异（透视-原表）'])
     if pf_exist is not None and diff_exist is not None:
         col_pf, col_diff = pf_exist + 1, diff_exist + 1
     else:
         col_pf = ws.max_column + 1
         col_diff = col_pf + 1
-        ws.cell(row=1, column=col_pf, value='透视表运费')
-        ws.cell(row=1, column=col_diff, value='运费差异（透视-原表）')
+        ws.cell(row=header_row, column=col_pf, value='透视表合计金额')
+        ws.cell(row=header_row, column=col_diff, value='合计金额差异（透视-原表）')
 
     filled = 0
-    for r in range(2, ws.max_row + 1):
+    for r in range(header_row + 1, ws.max_row + 1):
         key = norm_key(ws.cell(row=r, column=yd_idx + 1).value)
         pf = pivot_map.get(key)
         ws.cell(row=r, column=col_pf, value=pf)
         if pf is None or norm_key(pf) == '':
             continue  # 透视表无此运单号，差异留空
-        orig = ws.cell(row=r, column=fy_idx + 1).value
+        orig = ws.cell(row=r, column=hz_idx + 1).value
         if orig is None or norm_key(orig) == '':
             continue
         ws.cell(row=r, column=col_diff, value=to_number(pf) - to_number(orig))
         filled += 1
-    return filled, '透视表运费', '运费差异（透视-原表）'
+    return filled, '透视表合计金额', '合计金额差异（透视-原表）'
 
 
-# ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
 def main():
@@ -413,12 +477,62 @@ def main():
             continue
         break
 
+    # 立即反馈：确认已识别的表格（避免“读了没反应”的困惑）
+    if len(valid) == 1:
+        print('已识别 1 个表格：%s' % os.path.basename(valid[0]))
+    else:
+        print('已识别 %d 个表格（顺序即合并顺序）：' % len(valid))
+        for i, p in enumerate(valid, start=1):
+            print('  %d. %s' % (i, os.path.basename(p)))
+
+    # ---- 1.5 选择要合并的工作表：识别全部文件的工作表名称，合并去重后选择 ----
+    all_sheets, seen_sheets = [], set()
+    for p in valid:
+        try:
+            wb = load_workbook(p, read_only=True)
+            sheets = wb.sheetnames
+            wb.close()
+        except Exception as e:
+            print('跳过（无法读取工作表列表）：%s（%s）' % (os.path.basename(p), e))
+            continue
+        for s in sheets:
+            s = s.strip()
+            if s and s not in seen_sheets:
+                seen_sheets.add(s)
+                all_sheets.append(s)
+    if not all_sheets:
+        print('无法读取任何工作表名称，请检查表格文件。')
+        return
+    print('全部工作表名称（合并去重）：')
+    for i, s in enumerate(all_sheets, start=1):
+        print('  %d. %s' % (i, s))
+    while True:
+        sel = _ask('请选择要合并的工作表（输入序号或工作表名称，回车默认 1）：').strip()
+        if not sel:
+            sheet_name = all_sheets[0]
+            break
+        if sel.isdigit():
+            idx = int(sel)
+            if 1 <= idx <= len(all_sheets):
+                sheet_name = all_sheets[idx - 1]
+                break
+            print('序号超出范围（1-%d）。' % len(all_sheets))
+            continue
+        if sel in seen_sheets:
+            sheet_name = sel
+            break
+        print('不存在工作表名称：%s' % sel)
+    print('已选择工作表：%s（全部表格都使用该工作表的数据合并）' % sheet_name)
+
+    # 列名默认在第 1 行读取
+    header_row = 1
+
     tables = []
     for p in valid:
         try:
-            sheet_name, headers, rows = read_table(p)
+            sheet_name, headers, rows = read_table(p, sheet_name=sheet_name, header_row=header_row)
         except Exception as e:
-            print('读取失败，跳过：%s（%s）' % (p, e))
+            print('读取失败，跳过：%s（%s）' % (os.path.basename(p), e))
             continue
         tables.append({'path': p, 'base': os.path.basename(p),
                        'sheet': sheet_name, 'headers': headers, 'rows': rows})
@@ -455,6 +569,9 @@ def main():
     for i, c in enumerate(all_cols, start=1):
         print('  %d. %s' % (i, c))
     while True:
+        print('全部列名（合并去重）：')
+        for i, c in enumerate(all_cols, start=1):
+            print('  %d. %s' % (i, c))
         ans = _ask('请选择要合并的列（多个用逗号/空格分隔，如 1,3,5-7；输入 all 全选）：')
         try:
             sel_idx = parse_multi_choice(ans, len(all_cols))
@@ -464,36 +581,119 @@ def main():
         if not sel_idx:
             print('至少选择一列。')
             continue
+        sel_cols = [all_cols[i] for i in sel_idx]
+
+        # 检查哪些表缺少所选列（精确匹配）
+        missing_tables = {}
+        for t in tables:
+            hidx = {h: i for i, h in enumerate(t['headers'])}
+            miss = [c for c in sel_cols if c not in hidx]
+            if miss:
+                missing_tables[t['display']] = miss
+        if missing_tables:
+            for disp, miss in missing_tables.items():
+                print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (disp, '、'.join(miss)))
+            if _ask('检测到有表格缺少所选列，是否重新选择列？(y/n，回车默认 y)：').strip().lower() in ('', 'y', 'yes'):
+                continue  # 重新给一次选择
         break
-    sel_cols = [all_cols[i] for i in sel_idx]
     print('已选择 %d 列：%s' % (len(sel_cols), '、'.join(sel_cols)))
 
+    # 列名替代映射：所选列在部分子表里列名不同，可指定替代列名匹配
+    col_aliases = {}
+    rename_ans = _ask('是否要修改某个列的名称（为所选列指定替代列名，匹配子表中列名不同的数据）？\n'
+                      '  y/n，回车默认 n；也可直接输入要改名的列名或序号，直接进入改名：').strip()
+    first_pick = None
+    if rename_ans.lower() in ('', 'n', 'no', '否'):
+        pass  # 不改名
+    elif rename_ans.isdigit():
+        idx = int(rename_ans)
+        if 1 <= idx <= len(sel_cols):
+            first_pick = sel_cols[idx - 1]
+        else:
+            print('序号超出范围（1-%d），进入改名流程。' % len(sel_cols))
+    elif rename_ans.lower() in ('y', 'yes', '是'):
+        pass  # 纯 yes，正常进入
+    elif rename_ans in sel_cols:
+        first_pick = rename_ans
+    else:
+        print('未识别输入（%s），进入改名流程。' % rename_ans)
+
+    if first_pick is not None or rename_ans.lower() not in ('', 'n', 'no', '否'):
+        while True:
+            if first_pick is not None:
+                sel_name = first_pick
+                first_pick = None
+            else:
+                print('当前所选列：')
+                for i, c in enumerate(sel_cols, start=1):
+                    print('  %d. %s' % (i, c))
+                sel_name = _ask('请选择要修改名称的列（输入序号或列名；输入 done 结束）：').strip()
+            if not sel_name or sel_name.lower() == 'done':
+                break
+            if sel_name.isdigit():
+                idx = int(sel_name)
+                if 1 <= idx <= len(sel_cols):
+                    col = sel_cols[idx - 1]
+                else:
+                    print('序号超出范围（1-%d）。' % len(sel_cols))
+                    continue
+            elif sel_name in sel_cols:
+                col = sel_name
+            else:
+                print('所选列中不存在：%s' % sel_name)
+                continue
+            aliases = _ask('请输入 %s 的替代列名（子表实际使用的列名，多个用逗号/空格分隔）：' % col).strip()
+            alias_list = [a.strip() for a in re.split(r'[,\s，、]+', aliases) if a.strip()]
+            if not alias_list:
+                print('未输入有效列名，跳过。')
+                continue
+            col_aliases[col] = alias_list
+            print('已设置：%s -> %s' % (col, '、'.join(alias_list)))
+        if col_aliases:
+            print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
+
     # ---- 3. 追加合并 ----
-    merged_headers = sel_cols + ['数据来源表']
+    # 自动生成“汇总”列：运费+附加费1/2/3+报关费，放在最后一个费用列后面
+    fee_cols = [c for c in sel_cols if any(base in c for base in FEE_BASES)]
+    merged_headers = list(sel_cols)
+    sum_pos = None
+    if fee_cols:
+        sum_pos = max(sel_cols.index(c) for c in fee_cols) + 1
+        merged_headers.insert(sum_pos, '汇总')
+    merged_headers.append('数据来源表')
     merged_rows = []
     for t in tables:
-        hidx = {h: i for i, h in enumerate(t['headers'])}
-        missing = [c for c in sel_cols if c not in hidx]
+        hidx_map = {}
+        missing = []
+        for c in sel_cols:
+            i = find_col_in_table(t['headers'], c, col_aliases.get(c, []))
+            hidx_map[c] = i
+            if i is None:
+                missing.append(c)
         if missing:
             print('提示：表 %s 缺少列 %s，这些列在该表留空。' % (t['display'], '、'.join(missing)))
         for r in t['rows']:
             row = []
             for c in sel_cols:
-                i = hidx.get(c)
+                i = hidx_map.get(c)
                 row.append(r[i] if i is not None and i < len(r) else None)
+            if sum_pos is not None:
+                total = 0.0
+                has_val = False
+                for c in fee_cols:
+                    i = hidx_map.get(c)
+                    v = r[i] if i is not None and i < len(r) else None
+                    if v is not None and str(v).strip() != '':
+                        total += to_number(v)
+                        has_val = True
+                row.insert(sum_pos, total if has_val else None)
             row.append(t['display'])
             merged_rows.append(row)
-    print('合并完成：共 %d 行，%d 列（含“数据来源表”）。' % (len(merged_rows), len(merged_headers)))
+    print('合并完成：共 %d 行，%d 列（含“汇总”“数据来源表”）。' % (len(merged_rows), len(merged_headers)))
 
     # 可选：保存合并汇总表
     if _ask('是否保存合并后的汇总表？(y/n，回车默认 n)：').strip().lower() in ('y', 'yes'):
-        out = _ask('请输入保存路径（回车默认：合并汇总.xlsx）：').strip()
-        if not out:
-            out = '合并汇总.xlsx'
-        if os.path.isdir(out):
-            out = os.path.join(out, '合并汇总.xlsx')
-        if not out.lower().endswith('.xlsx'):
-            out += '.xlsx'
+        out = read_save_path('请输入保存路径（可拖入文件夹；回车默认：合并汇总.xlsx）：', '合并汇总.xlsx')
         try:
             write_table(out, '合并汇总', merged_headers, merged_rows)
             print('已保存合并汇总表：%s' % out)
@@ -502,12 +702,16 @@ def main():
 
     # ---- 4. 透视模式 ----
     print('-' * 64)
+    print('合并后汇总表列（含“数据来源表”）：')
+    for i, c in enumerate(merged_headers, start=1):
+        print('  %d. %s' % (i, c))
     while True:
         mode = _ask('请选择透视模式：1 固定模式（运单号、币种分组，对运费/附加费1/2/3、报关费、合计金额求和）| 2 自定义模式。输入 1 或 2：').strip()
         if mode == '1':
             rl = resolve_columns(merged_headers, FIXED_ROW_LABELS)
             if any(x is None for x in rl):
-                print('汇总表中缺少固定模式的分组列（运单号/币种），请改用自定义模式。')
+                miss = [FIXED_ROW_LABELS[i] for i, x in enumerate(rl) if x is None]
+                print('汇总表中缺少固定模式的分组列：%s（上面列表里没有这些列），请改用自定义模式。' % '、'.join(miss))
                 continue
             vals = resolve_columns(merged_headers, FIXED_VALUE_BASES)
             missing_vals = [FIXED_VALUE_BASES[i] for i, x in enumerate(vals) if x is None]
@@ -561,13 +765,7 @@ def main():
     while True:
         dest = _ask('请选择透视表去向：1 直接保存为文件 | 2 插入到已有的主表（Excel）中。输入 1 或 2：').strip()
         if dest == '1':
-            out = _ask('请输入保存路径（可拖入文件夹；回车默认当前目录 透视汇总.xlsx）：').strip()
-            if not out:
-                out = '透视汇总.xlsx'
-            if os.path.isdir(out):
-                out = os.path.join(out, '透视汇总.xlsx')
-            if not out.lower().endswith('.xlsx'):
-                out += '.xlsx'
+            out = read_save_path('请输入保存路径（可拖入文件夹；回车默认当前目录 透视汇总.xlsx）：', '透视汇总.xlsx')
             if os.path.exists(out):
                 base, ext = os.path.splitext(out)
                 out = '%s_%s%s' % (base, datetime.now().strftime('%Y%m%d_%H%M%S'), ext)
@@ -611,7 +809,7 @@ def main():
             for i, name in enumerate(wb.sheetnames, start=1):
                 print('  %d. %s' % (i, name))
             while True:
-                sel = _ask('请选择要回填运费的工作表（输入序号，回车默认 1）：').strip() or '1'
+                sel = _ask('请选择要回填合计金额的工作表（输入序号，回车默认 1）：').strip() or '1'
                 try:
                     target = wb.sheetnames[int(sel) - 1]
                     break
@@ -619,13 +817,22 @@ def main():
                     print('请输入有效序号（1-%d）。' % len(wb.sheetnames))
             print('已选择工作表：%s' % target)
 
+            while True:
+                hdr_in = _ask('请输入主表列名所在行（该主表列名从第 3 行开始，回车默认 3）：').strip()
+                if not hdr_in:
+                    header_row = 3
+                    break
+                if hdr_in.isdigit() and int(hdr_in) >= 1:
+                    header_row = int(hdr_in)
+                    break
+                print('请输入有效的行号（正整数）。')
             try:
-                filled, f_col, d_col = backfill_pivot_freight(wb, target, pivot_headers, pivot_rows)
+                filled, f_col, d_col = backfill_pivot_total(wb, target, pivot_headers, pivot_rows, header_row)
             except Exception as e:
                 print('回填失败：%s' % e)
                 return
             wb.save(main_path)
-            print('已新增列：%s、%s，共计算 %d 行运费差异。' % (f_col, d_col, filled))
+            print('已新增列：%s、%s，共计算 %d 行合计金额差异。' % (f_col, d_col, filled))
             print('已保存主表：%s' % main_path)
             break
         else:
