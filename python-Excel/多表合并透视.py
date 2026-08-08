@@ -419,13 +419,6 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
     headers = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
     headers_str = ['' if v is None else str(v).strip() for v in headers]
 
-    yd_idx = find_column(headers_str, ['运单号'])
-    if yd_idx is None:
-        raise ValueError('所选工作表未找到“运单号”列，无法回填。')
-    hz_idx = find_column(headers_str, [main_val_name]) if main_val_name else None
-    if hz_idx is None:
-        raise ValueError('所选工作表未找到主表对比列“%s”，无法计算差异。' % main_val_name)
-
     p_headers_str = ['' if v is None else str(v).strip() for v in pivot_headers]
     p_yd_idx = find_column(p_headers_str, ['运单号'])
     if p_yd_idx is None:
@@ -453,15 +446,33 @@ def backfill_pivot_total(wb, sheet_name, pivot_headers, pivot_rows, header_row=3
     p_display = '透视表%s' % base
     d_display = '%s差异（透视-原表）' % base
 
+    # 新列插入位置：主表「备注」列右边；找不到备注则追加末尾
+    bz_idx = find_column(headers_str, ['备注'])
+    if bz_idx is not None:
+        pos = bz_idx + 2  # 1-based 备注列号 + 1
+    else:
+        pos = ws.max_column + 1
+
     pf_exist = find_column(headers_str, [p_display])
     diff_exist = find_column(headers_str, [d_display])
     if pf_exist is not None and diff_exist is not None:
-        col_pf, col_diff = pf_exist + 1, diff_exist + 1
-    else:
-        col_pf = ws.max_column + 1
-        col_diff = col_pf + 1
-        ws.cell(row=header_row, column=col_pf, value=p_display)
-        ws.cell(row=header_row, column=col_diff, value=d_display)
+        # 已有这两列：先删除（列号大的先删，避免移位错乱），再重新插到备注右边
+        ws.delete_cols(max(pf_exist, diff_exist) + 1, 1)
+        ws.delete_cols(min(pf_exist, diff_exist) + 1, 1)
+    ws.insert_cols(pos, amount=2)
+    col_pf, col_diff = pos, pos + 1
+    ws.cell(row=header_row, column=col_pf, value=p_display)
+    ws.cell(row=header_row, column=col_diff, value=d_display)
+
+    # 插入列后重新读表头，定位 运单号 与 对比列
+    headers2 = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
+    headers_str2 = ['' if v is None else str(v).strip() for v in headers2]
+    yd_idx = find_column(headers_str2, ['运单号'])
+    if yd_idx is None:
+        raise ValueError('所选工作表未找到“运单号”列，无法回填。')
+    hz_idx = find_column(headers_str2, [main_val_name]) if main_val_name else None
+    if hz_idx is None:
+        raise ValueError('所选工作表未找到主表对比列“%s”，无法计算差异。' % main_val_name)
 
     filled = 0
     for r in range(header_row + 1, ws.max_row + 1):
