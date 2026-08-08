@@ -725,6 +725,9 @@ def main():
                             print('重新检测：各表列名已全部一致！')
                         else:
                             print('重新检测：仍不一致的列：%s' % '、'.join(partial_cols.keys()))
+                        if _ask_back('是否继续改名？\n'
+                                     '  1 继续改名 | 2 下一步（进入选列）。回车默认 1：').strip() == '2':
+                            break
                 step = 2
 
             # ====== Step 2: 选择列 + 别名 + 合并 + 保存 ======
