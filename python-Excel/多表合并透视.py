@@ -8,11 +8,13 @@
    - 也可输入 c 从剪贴板直接读取全部路径（参考 pdf-v-photo/pdf转图片.py）。
 2. 列出全部表名（合并去重）与全部列名（合并去重），选择要合并的列；
    子表列名所在行与工作表序号可配置（默认第 1 行、第 1 个工作表）。
-3. 按粘贴顺序追加合并所选列，每行末尾新增“数据来源表”列。
-4. 透视汇总：
+3. 合并表格（可选）：删除各表结尾连续空行及备注区后，只保留第一个表的列名合并全部数据；
+   导出「订单号清单.xlsx」到源目录，并在订单号右侧插入「运单号」列，粘贴系统查询结果回填。
+4. 按粘贴顺序追加合并所选列，每行末尾新增“数据来源表”列。
+5. 透视汇总：
    - 固定模式：按 运单号、币种 分组，对 运费、附加费1/2/3、报关费、合计金额 求和；
    - 自定义模式：自由选择行标签列与求和数值列。
-5. 透视表去向：
+6. 透视表去向：
    - 直接保存为新的 xlsx 文件；
    - 或插入粘贴的主表中作为新工作表，并按“运单号”回填透视表“合计金额”列，
      再新增一列“透视表合计金额 - 主表汇总金额”的差异列；
@@ -268,6 +270,35 @@ def norm_key(v):
     return str(v).strip()
 
 
+# ---------------------------------------------------------------------------
+# 尾部无用数据截断（v1.5.0）
+# ---------------------------------------------------------------------------
+BLANK_RUN = 2  # 连续空行达到该数量即视为数据区结束（其后为备注/空白区）
+
+
+def _is_blank_row(r):
+    """整行是否为空（None 或纯空白字符串）。"""
+    return all(v is None or (isinstance(v, str) and v.strip() == '') for v in r)
+
+
+def trim_trailing_junk(rows, blank_run=BLANK_RUN):
+    """删除从首个连续 blank_run 个空行（含）到末尾的全部行。
+    各表结尾常有一大段空行 + 「注：...」备注单元格，从这里起全部是无用数据。"""
+    n = len(rows)
+    i = 0
+    while i < n:
+        if _is_blank_row(rows[i]):
+            j = i
+            while j < n and _is_blank_row(rows[j]):
+                j += 1
+            if j - i >= blank_run:
+                return rows[:i]
+            i = j
+        else:
+            i += 1
+    return rows
+
+
 def find_column(headers, candidates):
     """在表头列表中找列，返回 0 起列索引或 None；优先精确匹配，再匹配包含。"""
     cands = [c for c in candidates if c]
@@ -326,11 +357,12 @@ def choose_column(prompt, headers, default_candidates=None, default_label=None):
 # ---------------------------------------------------------------------------
 # 读取表格
 # ---------------------------------------------------------------------------
-def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
+def read_table(path, sheet_name=None, sheet_idx=0, header_row=1, trim_junk=False):
     """读取 Excel 的指定工作表，返回 (工作表名, 表头列表, 数据行列表)。
     sheet_name 优先：按工作表名称取（所有子表统一用选中的工作表合并）；
     未指定时按 sheet_idx（0 起，默认第 1 个）取第几个工作表。
-    header_row 为列名所在行（1 起，默认第 1 行），数据从 header_row+1 行开始。"""
+    header_row 为列名所在行（1 起，默认第 1 行），数据从 header_row+1 行开始。
+    trim_junk 为 True 时，先删除从首个连续空行起的尾部备注/空白区。"""
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
         if sheet_name is not None:
@@ -342,6 +374,8 @@ def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
         rows = list(ws.iter_rows(values_only=True))
     finally:
         wb.close()
+    if trim_junk:
+        rows = trim_trailing_junk(rows)
     if len(rows) < header_row:
         return ws.title, [], []
     header_cells = rows[header_row - 1]
@@ -354,6 +388,105 @@ def read_table(path, sheet_name=None, sheet_idx=0, header_row=1):
         headers.append(name)
     data = [r for r in rows[header_row:] if any(v is not None and str(v).strip() != '' for v in r)]
     return ws.title, headers, data
+
+
+def read_all_tables(valid, sheet_name, header_row=1):
+    """读取全部表格为 tables 列表（含 display 显示名），供主流程与重做合并时恢复原始多表。"""
+    tables = []
+    for p in valid:
+        try:
+            sn, headers, rows = read_table(p, sheet_name=sheet_name, header_row=header_row)
+        except Exception as e:
+            print('读取失败，跳过：%s（%s）' % (os.path.basename(p), e))
+            continue
+        tables.append({'path': p, 'base': os.path.basename(p),
+                       'sheet': sn, 'headers': headers, 'rows': rows})
+    if not tables:
+        return tables
+    name_counts = {}
+    for t in tables:
+        name_counts[t['base']] = name_counts.get(t['base'], 0) + 1
+    for t in tables:
+        if name_counts[t['base']] > 1:
+            t['display'] = '%s（%s）' % (t['base'], os.path.dirname(os.path.abspath(t['path'])))
+        else:
+            t['display'] = t['base']
+    return tables
+
+
+def merge_clean_tables(tables, sheet_name):
+    """把多表按「第一个表的列名」纵向合并；每表先删结尾连续空行/备注区。
+    各表行按列名映射到第一个表的列（个别表多出的列如 5 月自带「运单号」会自动丢弃）。
+    返回 (merged_headers, merged_rows)。"""
+    merged_headers = []
+    merged_rows = []
+    for t in tables:
+        try:
+            sn, hdrs, rows = read_table(t['path'], sheet_name=sheet_name, header_row=1, trim_junk=True)
+        except Exception as e:
+            print('合并读取失败，跳过：%s（%s）' % (t['base'], e))
+            continue
+        if not merged_headers:
+            merged_headers = list(hdrs)
+        if not merged_headers:
+            print('跳过：%s 无可用的列名。' % t['base'])
+            continue
+        hmap = {str(h).strip(): i for i, h in enumerate(hdrs)}
+        for r in rows:
+            row = []
+            for h in merged_headers:
+                idx = hmap.get(str(h).strip())
+                row.append(r[idx] if idx is not None and idx < len(r) else None)
+            row.append(t['display'])
+            merged_rows.append(row)
+    if not merged_headers:
+        return [], []
+    merged_headers = list(merged_headers) + ['数据来源表']
+    return merged_headers, merged_rows
+
+
+def read_query_table(paths):
+    """读取系统查询导出的结果表：自动定位含「客户单号、运单号」的表头行，
+    只保留这两列（同样先删结尾连续空行）。返回 (['客户单号','运单号'], rows)；未找到返回 (None, [])。"""
+    q_headers = None
+    q_rows = []
+    for p in paths:
+        try:
+            wb = load_workbook(p, read_only=True, data_only=True)
+            try:
+                found = False
+                for ws in wb.worksheets:
+                    raw = list(ws.iter_rows(values_only=True))
+                    raw = trim_trailing_junk(raw)
+                    hdr_idx = None
+                    for i in range(min(10, len(raw))):
+                        cells = ['' if v is None else str(v).strip() for v in raw[i]]
+                        if any('客户单号' in c for c in cells) and any('运单号' in c for c in cells):
+                            hdr_idx = i
+                            break
+                    if hdr_idx is None:
+                        continue
+                    cells = ['' if v is None else str(v).strip() for v in raw[hdr_idx]]
+                    ci = next((j for j, c in enumerate(cells) if '客户单号' in c), 0)
+                    wi = next((j for j, c in enumerate(cells) if '运单号' in c), 1)
+                    if q_headers is None:
+                        q_headers = ['客户单号', '运单号']
+                    for r in raw[hdr_idx + 1:]:
+                        if _is_blank_row(r):
+                            continue
+                        q_rows.append([r[ci] if ci < len(r) else None,
+                                       r[wi] if wi < len(r) else None])
+                    found = True
+                    break
+            finally:
+                wb.close()
+            if not found:
+                print('提示：%s 中没有找到同时含「客户单号、运单号」的工作表，已跳过。' % os.path.basename(p))
+        except Exception as e:
+            print('读取查询表失败：%s（%s）' % (os.path.basename(p), e))
+    if q_headers is None:
+        return None, []
+    return q_headers, q_rows
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +636,7 @@ def main():
     print('提示：任意选择步骤中输入 b / 上一步 返回上一个步骤')
     print('-' * 64)
 
-    step = 0  # 0=粘贴, 1=选工作表, 2=列名统一, 3=选列, 4=列名替代, 5=合并+保存, 6=透视, 7=去向
+    step = 0  # 0=粘贴, 1=选工作表, 2=合并+订单号清单+运单号回填, 3=列名统一, 4=选列, 5=列名替代, 6=合并+保存, 7=透视, 8=去向
     valid = None; sheet_name = None; tables = None
     sel_cols = None; col_aliases = None
     merged_headers = None; merged_rows = None
@@ -588,36 +721,98 @@ def main():
                 # 列名默认在第 1 行读取
                 header_row = 1
 
-                tables = []
-                for p in valid:
-                    try:
-                        sheet_name, headers, rows = read_table(p, sheet_name=sheet_name, header_row=header_row)
-                    except Exception as e:
-                        print('读取失败，跳过：%s（%s）' % (os.path.basename(p), e))
-                        continue
-                    tables.append({'path': p, 'base': os.path.basename(p),
-                                   'sheet': sheet_name, 'headers': headers, 'rows': rows})
+                tables = read_all_tables(valid, sheet_name, header_row)
                 if not tables:
                     print('没有成功读取任何表格。')
                     return
-
-                # 显示名：同名不同目录时附加目录
-                name_counts = {}
-                for t in tables:
-                    name_counts[t['base']] = name_counts.get(t['base'], 0) + 1
-                for t in tables:
-                    if name_counts[t['base']] > 1:
-                        t['display'] = '%s（%s）' % (t['base'], os.path.dirname(os.path.abspath(t['path'])))
-                    else:
-                        t['display'] = t['base']
 
                 print('共读取 %d 个表格（顺序即合并顺序）：' % len(tables))
                 for i, t in enumerate(tables, start=1):
                     print('  %d. %s（工作表：%s，%d 行数据）' % (i, t['display'], t['sheet'], len(t['rows'])))
                 step = 2
 
-            # ====== Step 2: 列名统一 ======
+            # ====== Step 2: 合并表格 + 导出订单号清单 + 回填运单号 ======
             if step <= 2:
+                # 若此前已合并过（tables 被替换成单表），先读回原始多表以便重做
+                if tables and len(tables) == 1 and tables[0].get('_merged'):
+                    tables = read_all_tables(valid, sheet_name)
+                if _ask_back('是否进入「合并表格 + 导出订单号清单 + 回填运单号」？\n'
+                             '  1 进入 | 2 跳过（直接进入选列）。回车默认 1：').strip() != '2':
+                    # ---- 合并：删各表结尾连续空行/备注区，只保留第一个表的列名 ----
+                    merged_headers, merged_rows = merge_clean_tables(tables, sheet_name)
+                    if not merged_headers:
+                        print('无法合并（没有读取到任何列名）。')
+                    else:
+                        print('合并完成：共 %d 行，%d 列（已删除各表结尾的连续空行及备注区）。'
+                              % (len(merged_rows), len(merged_headers)))
+
+                        # ---- 子步骤1：保留 A 列订单号，输出到第一个源文件所在目录 ----
+                        yd_idx = find_column(merged_headers, ['订单号'])
+                        if yd_idx is None:
+                            yd_idx = 0
+                        orders = []
+                        for r in merged_rows:
+                            v = r[yd_idx] if yd_idx < len(r) else None
+                            if v is None or (isinstance(v, str) and v.strip() == ''):
+                                continue
+                            orders.append([v])
+                        out_dir = os.path.dirname(os.path.abspath(tables[0]['path'])) if tables else '.'
+                        out1 = os.path.join(out_dir, '订单号清单.xlsx')
+                        try:
+                            write_table(out1, '订单号清单', [merged_headers[yd_idx]], orders)
+                            print('已导出订单号清单（用于系统查询运单号）：%s（%d 行）' % (out1, len(orders)))
+                        except Exception as e:
+                            print('导出订单号清单失败：%s' % e)
+
+                        # ---- 子步骤2：运单号列（已存在则复用并清空，否则在订单号右侧插入），粘贴查询结果回填 ----
+                        if '运单号' in merged_headers:
+                            pos = merged_headers.index('运单号')
+                            for r in merged_rows:
+                                r[pos] = None  # 清掉旧值（如 5 月表自带的运单号）
+                        else:
+                            pos = yd_idx + 1
+                            merged_headers.insert(pos, '运单号')
+                            merged_rows = [r[:pos] + [None] + r[pos:] for r in merged_rows]
+                        while True:
+                            q_paths = read_paths('请粘贴系统查询导出的新表（含「客户单号、运单号」列，'
+                                                 '可输入 c 从剪贴板读取），粘贴后回车：')
+                            if not q_paths:
+                                print('未检测到文件路径，请重新粘贴。')
+                                continue
+                            q_headers, q_rows = read_query_table(q_paths)
+                            if q_headers is None:
+                                print('未找到含「客户单号、运单号」列的表，请检查后重新粘贴。')
+                                continue
+                            break
+                        qmap = {}
+                        for r in q_rows:
+                            k = norm_key(r[0] if len(r) > 0 else None)
+                            if not k:
+                                continue
+                            if k not in qmap:
+                                qmap[k] = r[1] if len(r) > 1 else None
+                        filled = 0
+                        for r in merged_rows:
+                            k = norm_key(r[yd_idx] if yd_idx < len(r) else None)
+                            if not k:
+                                continue
+                            if k in qmap:
+                                r[pos] = qmap[k]
+                                filled += 1
+                        print('运单号回填完成：共 %d 行，匹配到 %d 行。' % (len(merged_rows), filled))
+                        if filled < len(merged_rows):
+                            print('提示：%d 行未匹配到运单号（查询表中无对应客户单号），留空。'
+                                  % (len(merged_rows) - filled))
+
+                        # 用合并后的单表替换 tables，后续步骤直接操作它
+                        tables = [{'path': tables[0]['path'], 'base': tables[0]['base'],
+                                   'display': '合并表（%d个表）' % len(tables), 'sheet': sheet_name,
+                                   'headers': merged_headers, 'rows': merged_rows, '_merged': True}]
+                        _ask_back('合并处理完成，回车进入下一步（选列）：')
+                step = 3
+
+            # ====== Step 3: 列名统一 ======
+            if step <= 3:
                 # ---- 1.6 列名统一：检测各表列名是否一致，可改名对齐 ----
                 for i, t in enumerate(tables):
                     m = re.search(r'(\d+月)', t['base'])
@@ -742,10 +937,10 @@ def main():
                         if _ask_back('是否继续改名？\n'
                                      '  1 继续改名 | 2 下一步（进入选列）。回车默认 1：').strip() == '2':
                             break
-                step = 3
+                step = 4
 
-            # ====== Step 3: 选择要合并的列 ======
-            if step <= 3:
+            # ====== Step 4: 选择要合并的列 ======
+            if step <= 4:
                 # ---- 2. 列选择 ----
                 all_cols = []
                 seen_cols = set()
@@ -785,10 +980,10 @@ def main():
                             continue
                     break
                 print('已选择 %d 列：%s' % (len(sel_cols), '、'.join(sel_cols)))
-                step = 4
+                step = 5
 
-            # ====== Step 4: 列名替代映射（部分子表列名不同） ======
-            if step <= 4:
+            # ====== Step 5: 列名替代映射（部分子表列名不同） ======
+            if step <= 5:
                 # 列名替代映射
                 col_aliases = {}
                 rename_ans = _ask_back('部分子表里的列名可能和汇总表列名不一致？\n'
@@ -842,12 +1037,16 @@ def main():
                         print('已设置：%s -> %s' % (col, '、'.join(alias_list)))
                     if col_aliases:
                         print('列名替代映射：' + '；'.join('%s -> %s' % (k, '、'.join(v)) for k, v in col_aliases.items()))
-                step = 5
+                step = 6
 
-            # ====== Step 5: 追加合并 + 保存 ======
-            if step <= 5:
+            # ====== Step 6: 追加合并 + 保存 ======
+            if step <= 6:
                 # ---- 3. 追加合并 ----
-                merged_headers = list(sel_cols) + ['数据来源表']
+                # 合并表若已自带「数据来源表」列（v1.5.0 合并步骤生成），不再重复追加
+                auto_src = not any('数据来源表' in t['headers'] for t in tables)
+                if '数据来源表' in sel_cols:
+                    auto_src = False
+                merged_headers = list(sel_cols) + (['数据来源表'] if auto_src else [])
                 merged_rows = []
                 for t in tables:
                     hidx_map = {}
@@ -864,9 +1063,10 @@ def main():
                         for c in sel_cols:
                             i = hidx_map.get(c)
                             row.append(r[i] if i is not None and i < len(r) else None)
-                        row.append(t['display'])
+                        if auto_src:
+                            row.append(t['display'])
                         merged_rows.append(row)
-                print('合并完成：共 %d 行，%d 列（含“数据来源表”）。' % (len(merged_rows), len(merged_headers)))
+                print('合并完成：共 %d 行，%d 列。' % (len(merged_rows), len(merged_headers)))
 
                 # 可选：保存合并汇总表
                 if _ask_back('是否保存合并后的汇总表？(y/n，回车默认 n)：').strip().lower() in ('y', 'yes'):
@@ -876,10 +1076,10 @@ def main():
                         print('已保存合并汇总表：%s' % out)
                     except Exception as e:
                         print('保存合并汇总表失败：%s' % e)
-                step = 6
+                step = 7
 
-            # ====== Step 6: 透视 ======
-            if step <= 6:
+            # ====== Step 7: 透视 ======
+            if step <= 7:
                 # ---- 4. 透视模式 ----
                 print('-' * 64)
                 pivot_cols = [c for c in merged_headers if c != '数据来源表']
@@ -921,10 +1121,10 @@ def main():
                     print('  %d. %s' % (i, ' | '.join('' if v is None else str(v) for v in r)))
                 if len(pivot_rows) > 5:
                     print('  ...（共 %d 行）' % len(pivot_rows))
-                step = 7
+                step = 8
 
-            # ====== Step 7: 透视表去向 ======
-            if step <= 7:
+            # ====== Step 8: 透视表去向 ======
+            if step <= 8:
                 # ---- 5. 透视表去向 ----
                 print('-' * 64)
                 while True:
@@ -1028,7 +1228,7 @@ def main():
                         break
                     else:
                         print('请输入 1 或 2。')
-                step = 8
+                step = 9
 
             # 全部完成
             break
