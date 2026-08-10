@@ -3,7 +3,7 @@
 PDF 工具：现有发票图片识别 / 发票明细转表格
 
 功能（顶层选择）：
-1. 现有功能：PDF 转图片 + 发票识别
+1. 功能：PDF 转图片 + 发票识别
    - 支持一次拖入多个 PDF（用 " " 分隔），逐页渲染为 PNG。
    - 用 PaddleOCR 识别每页发票的四个字段：
      发票号码（右上角）、购买方名称、销售方名称、金额（小写）。
@@ -545,8 +545,12 @@ def extract_detail_rows(items):
 
 def extract_detail_from_pdfs(pdf_paths):
     """批量识别 PDF，返回明细行和处理统计。续页自动继承上一页的发票号/追踪编号。"""
-    all_rows, pages = [], 0
+    all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
         doc = fitz.open(pdf_path)
         last_invoice = last_tracking = '未知'
         try:
@@ -566,7 +570,7 @@ def extract_detail_from_pdfs(pdf_paths):
                     all_rows.append(row)
         finally:
             doc.close()
-    return all_rows, pages
+    return all_rows, pages, skipped
 
 
 def _next_output_path(directory, filename):
@@ -724,6 +728,109 @@ def images_into_excel(xlsx_path, images, sheet_name=None,
 # ---------------------------------------------------------------------------
 # 交互流程
 # ---------------------------------------------------------------------------
+def existing_mode(pdf_paths):
+    """现有功能：PDF 转图片 + 发票识别重命名 + 保存/插入 Excel。"""
+    # 汇总输出目录：用第一个 PDF 所在目录
+    base_dir = os.path.dirname(os.path.abspath(pdf_paths[0]))
+    out_dir = os.path.join(base_dir, '_发票图片')
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ---- 现有模式：PDF 转图片 ----
+    images = []
+    seq = 0
+    for p in pdf_paths:
+        try:
+            imgs, seq = pdf_to_images(p, out_dir, start_index=seq)
+            images.extend(imgs)
+        except Exception as e:
+            print('转换失败：%s，跳过。' % e)
+
+    if not images:
+        print('没有成功转换的图片。')
+        return
+
+    # ---- 步骤 1.5：OCR 识别并重命名 ----
+    print('开始识别发票字段并重命名…')
+    renamed = []
+    for img in images:
+        fields = extract_invoice_fields(img)
+        new = rename_with_fields(img, fields)
+        renamed.append(new)
+        print('  重命名 -> %s' % os.path.basename(new))
+    images = renamed
+
+    # ---- 步骤 2：选择模式 ----
+    mode = _ask('请选择：1 直接保存到文件夹（默认） | 2 暂存并插入表格。输入 1 或 2：').strip()
+    if mode != '2':
+        print('已保存到文件夹：%s' % out_dir)
+        return
+    if not OPENPYXL_OK:
+        print('提示：未安装 openpyxl，无法写入 Excel。请运行：pip install openpyxl')
+        return
+
+    # ---- 模式 2：拖入 Excel 表格 ----
+    while True:
+        xlsx_paths = read_paths(
+            '请拖入 Excel 表格文件（*.xlsx），然后回车；\n'
+            '  输入 c 改为从剪贴板读取：')
+        if not xlsx_paths:
+            print('未检测到文件路径，请重新输入。')
+            continue
+        xlsx_path = xlsx_paths[0]
+        if not (xlsx_path.lower().endswith('.xlsx') or xlsx_path.lower().endswith('.xlsm')):
+            print('仅支持 .xlsx 表格，请重新输入。')
+            continue
+        if not os.path.isfile(xlsx_path):
+            print('找不到文件：%s，请重新输入。' % xlsx_path)
+            continue
+
+        # 选择工作表
+        wb = load_workbook(xlsx_path)
+        sheet_names = wb.sheetnames
+        print('表格内的工作表：')
+        for i, name in enumerate(sheet_names, start=1):
+            print('  %d. %s' % (i, name))
+        while True:
+            sel = _ask('请选择工作表（输入序号，回车默认 1）：').strip()
+            if not sel:
+                sel = '1'
+            try:
+                sheet_idx = int(sel)
+                sheet_name = sheet_names[sheet_idx - 1]
+                break
+            except (ValueError, IndexError):
+                print('请输入有效的序号（1-%d）。' % len(sheet_names))
+        print('已选择工作表：%s' % sheet_name)
+
+        # 输入起始单元格
+        while True:
+            start_cell = _ask('请输入起始单元格位置（如 C5，回车默认 A1）：').strip().upper()
+            if not start_cell:
+                start_cell = 'A1'
+            if parse_cell(start_cell):
+                break
+            print('无效的单元格位置，请输入类似 C5 的坐标。')
+
+        # 选择插入方向
+        while True:
+            d = _ask('请选择插入方向：1 纵向（沿列向下，默认） | 2 横向（沿行向右）：').strip()
+            if d in ('', '1'):
+                direction = 'v'
+                break
+            if d == '2':
+                direction = 'h'
+                break
+            print('请输入 1 或 2。')
+
+        try:
+            images_into_excel(xlsx_path, images, sheet_name=sheet_name,
+                              start_cell=start_cell, direction=direction)
+            break
+        except Exception as e:
+            print('插入失败：%s，请重新输入。' % e)
+
+
+# ---------------------------------------------------------------------------
 def main():
     init_console_color()
     print('=' * 60)
@@ -733,7 +840,14 @@ def main():
     print()
 
     while True:
-        # ---- 步骤 1：确定 PDF 列表 ----
+        # ---- 先选功能模式 ----
+        while True:
+            top_mode = _ask('请选择功能：1 收款组 PDF 转图片+发票识别 | 2 付款组 发票明细识别并转 Excel：').strip()
+            if top_mode in ('1', '2'):
+                break
+            print('请输入 1 或 2。')
+
+        # ---- 再拖入 PDF ----
         # 经典终端多选拖入只插第一个路径，可输入 'c' 从剪贴板读取全部路径
         # （在资源管理器多选文件后 Ctrl+C，剪贴板保存全部路径，每行一个）。
         while True:
@@ -746,122 +860,15 @@ def main():
                 break
             print('未检测到有效的 PDF 路径，请重新操作（可多选文件后 Ctrl+C 复制，再输入 c）。')
 
-        # 汇总输出目录：用第一个 PDF 所在目录
-        base_dir = os.path.dirname(os.path.abspath(pdf_paths[0]))
-        out_dir = os.path.join(base_dir, '_发票图片')
-        os.makedirs(out_dir, exist_ok=True)
-
-        # ---- 顶层功能模式 ----
-        while True:
-            top_mode = _ask('请选择功能：1 现有 PDF 转图片+发票识别 | 2 发票明细识别并转 Excel：').strip()
-            if top_mode in ('1', '2'):
-                break
-            print('请输入 1 或 2。')
         if top_mode == '2':
             try:
                 detail_mode(pdf_paths)
             except Exception as e:
                 print('发票明细识别失败：%s' % e)
-            again = _ask('是否继续处理其他 PDF？(y/n，回车默认 n)：').strip().lower()
-            if again not in ('y', 'yes'):
-                break
-            continue
-
-        # ---- 现有模式：PDF 转图片 ----
-        images = []
-        seq = 0
-        for p in pdf_paths:
-            try:
-                imgs, seq = pdf_to_images(p, out_dir, start_index=seq)
-                images.extend(imgs)
-            except Exception as e:
-                print('转换失败：%s，跳过。' % e)
-
-        if not images:
-            print('没有成功转换的图片。')
-            return
-
-        # ---- 步骤 1.5：OCR 识别并重命名 ----
-        print('开始识别发票字段并重命名…')
-        renamed = []
-        for img in images:
-            fields = extract_invoice_fields(img)
-            new = rename_with_fields(img, fields)
-            renamed.append(new)
-            print('  重命名 -> %s' % os.path.basename(new))
-        images = renamed
-
-        # ---- 步骤 2：选择模式 ----
-        mode = _ask('请选择：1 直接保存到文件夹（默认） | 2 暂存并插入表格。输入 1 或 2：').strip()
-        if mode != '2':
-            print('已保存到文件夹：%s' % out_dir)
-
         else:
-            # ---- 模式 2：拖入 Excel 表格 ----
-            if not OPENPYXL_OK:
-                print('提示：未安装 openpyxl，无法写入 Excel。请运行：pip install openpyxl')
-            else:
-                while True:
-                    xlsx_paths = read_paths(
-                        '请拖入 Excel 表格文件（*.xlsx），然后回车；\n'
-                        '  输入 c 改为从剪贴板读取：')
-                    if not xlsx_paths:
-                        print('未检测到文件路径，请重新输入。')
-                        continue
-                    xlsx_path = xlsx_paths[0]
-                    if not (xlsx_path.lower().endswith('.xlsx') or xlsx_path.lower().endswith('.xlsm')):
-                        print('仅支持 .xlsx 表格，请重新输入。')
-                        continue
-                    if not os.path.isfile(xlsx_path):
-                        print('找不到文件：%s，请重新输入。' % xlsx_path)
-                        continue
+            existing_mode(pdf_paths)
 
-                    # 选择工作表
-                    wb = load_workbook(xlsx_path)
-                    sheet_names = wb.sheetnames
-                    print('表格内的工作表：')
-                    for i, name in enumerate(sheet_names, start=1):
-                        print('  %d. %s' % (i, name))
-                    while True:
-                        sel = _ask('请选择工作表（输入序号，回车默认 1）：').strip()
-                        if not sel:
-                            sel = '1'
-                        try:
-                            sheet_idx = int(sel)
-                            sheet_name = sheet_names[sheet_idx - 1]
-                            break
-                        except (ValueError, IndexError):
-                            print('请输入有效的序号（1-%d）。' % len(sheet_names))
-                    print('已选择工作表：%s' % sheet_name)
-
-                    # 输入起始单元格
-                    while True:
-                        start_cell = _ask('请输入起始单元格位置（如 C5，回车默认 A1）：').strip().upper()
-                        if not start_cell:
-                            start_cell = 'A1'
-                        if parse_cell(start_cell):
-                            break
-                        print('无效的单元格位置，请输入类似 C5 的坐标。')
-
-                    # 选择插入方向
-                    while True:
-                        d = _ask('请选择插入方向：1 纵向（沿列向下，默认） | 2 横向（沿行向右）：').strip()
-                        if d in ('', '1'):
-                            direction = 'v'
-                            break
-                        if d == '2':
-                            direction = 'h'
-                            break
-                        print('请输入 1 或 2。')
-
-                    try:
-                        images_into_excel(xlsx_path, images, sheet_name=sheet_name,
-                                          start_cell=start_cell, direction=direction)
-                        break
-                    except Exception as e:
-                        print('插入失败：%s，请重新输入。' % e)
-
-        # ---- 步骤 3：是否继续 ----
+        # ---- 是否继续 ----
         again = _ask('是否继续处理其他 PDF？(y/n，回车默认 n)：').strip().lower()
         if again not in ('y', 'yes'):
             break
