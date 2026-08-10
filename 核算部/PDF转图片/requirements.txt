@@ -1,0 +1,16 @@
+# PDF 工具：现有发票图片识别 / 发票明细转表格
+# 依赖清单（2026-08-10）
+
+# PDF 渲染（发票明细识别的文字层提取也用它）
+pymupdf==1.26.5
+
+# Excel 读写
+openpyxl==3.1.5
+
+# 图片处理（openpyxl 图片依赖）
+Pillow==11.3.0
+
+# OCR 识别发票（扫描件需要；有文字层的 PDF 不需要）
+# 注意：必须用 enable_mkldnn=False，否则 PaddlePaddle 3.3.0 的 oneDNN 在 CPU 上会报错
+paddleocr==3.4.0
+paddlepaddle==3.3.0
