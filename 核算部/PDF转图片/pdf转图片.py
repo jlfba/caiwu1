@@ -25,6 +25,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
 import os
 import sys
 import re
+import datetime
 
 import fitz  # PyMuPDF
 
@@ -128,12 +129,66 @@ def read_paths(prompt):
     return paths
 
 
+def _read_clipboard_hdrop():
+    """读取 Windows 剪贴板的文件列表（CF_HDROP，资源管理器复制文件时写入）。
+    返回完整路径列表；剪贴板没有文件列表时返回 []。
+    多选复制时文本格式只含文件名，完整路径在 CF_HDROP 里，所以优先读它。
+    """
+    if os.name != 'nt':
+        return []
+    try:
+        import ctypes
+        CF_HDROP = 15
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        # 关键：64 位 Windows 上 HGLOBAL/HANDLE 是指针宽度，
+        # 必须显式声明 restype/argtypes，否则 ctypes 按 32 位截断句柄，
+        # 后续 GlobalSize/GlobalLock 全失败，文件列表读不到。
+        user32.OpenClipboard.argtypes = [ctypes.c_void_p]
+        user32.GetClipboardData.restype = ctypes.c_void_p
+        kernel32.GlobalSize.restype = ctypes.c_size_t
+        kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        if not user32.OpenClipboard(None):
+            return []
+        try:
+            handle = user32.GetClipboardData(CF_HDROP)
+            if not handle:
+                return []
+            size = kernel32.GlobalSize(handle)
+            if not size:
+                return []
+            p = kernel32.GlobalLock(handle)
+            if not p:
+                return []
+            try:
+                data = ctypes.string_at(p, size)
+            finally:
+                kernel32.GlobalUnlock(handle)
+            # DROPFILES 结构：pFiles(4) pt(8) fNC(4) fWide(4)
+            offset = int.from_bytes(data[0:4], 'little')
+            fWide = bool(int.from_bytes(data[16:20], 'little'))
+            raw = data[offset:]
+            text = raw.decode('utf-16-le', errors='ignore') if fWide \
+                else raw.decode('cp936', errors='ignore')
+            return [s.strip() for s in text.split('\x00') if s.strip()]
+        finally:
+            user32.CloseClipboard()
+    except Exception:
+        return []
+
+
 def read_clipboard_paths():
     """从剪贴板读取文件路径列表。
-    用于绕过经典终端多文件拖入只插第一个的限制：
-    在资源管理器多选文件后 Ctrl+C，剪贴板会保存全部路径（每行一个引号路径）。
-    返回路径列表；剪贴板不可用或无有效路径时返回 []。
+    优先读资源管理器复制文件产生的文件列表（CF_HDROP，带完整路径）；
+    否则从文本里解析，但只保留"像真实路径"的条目（文件存在，或带盘符/路径分隔符），
+    避免把终端里的普通文字（如下一条要复制的 PDF 名）误当路径。
     """
+    paths = _read_clipboard_hdrop()
+    if paths:
+        return paths
     try:
         import tkinter as tk
         root = tk.Tk()
@@ -154,7 +209,10 @@ def read_clipboard_paths():
             for m in PATH_RE.finditer(line):
                 p = m.group(1) if m.group(1) is not None else m.group(2)
                 p = p.strip()
-                if p:
+                if not p:
+                    continue
+                # 只保留像真实路径的：文件存在，或带盘符/路径分隔符
+                if os.path.isfile(p) or ':' in p or '/' in p or '\\' in p:
                     paths.append(p)
         return paths
     except Exception:
@@ -371,6 +429,11 @@ DETAIL_HEADERS = ('DATE', 'DESCRIPTION', 'TAX', 'QTY', 'RATE', 'AMOUNT')
 DETAIL_OUTPUT_HEADERS = ('发票号', 'TRACKING NO.', 'DATE', 'DESCRIPTION',
                         'TAX', 'QTY', 'RATE', 'AMOUNT')
 
+# 精准发票（Accuracy Customs Brokers，美国清关行）输出列：
+# Invoice Number / Master B/L No / Containers 三个字段值按 Description 行重复
+JINGZHUN_OUTPUT_HEADERS = ('发票号', 'Master B/L No', 'Containers',
+                           'Description', 'Amount')
+
 
 def _compact_text(text):
     """统一 OCR/原生文字中的空格和标点，便于匹配英文标签。"""
@@ -494,26 +557,62 @@ def _extract_tracking_no(lines):
     return nxt['text'].strip() or '未知'
 
 
+def _find_header_band(items):
+    """找明细表头：同一横带里包含最多不同列标签的一组表头词。
+    返回 {label: item}；找不到（不足 4 列）返回 None。
+    用完全匹配（去空格标点后），避免把页面上部的发票日期 DATE 字段等误当表头。
+    """
+    keys = {label: _compact_text(label) for label in DETAIL_HEADERS}
+    candidates = []
+    for it in items:
+        t = _compact_text(it['text'])
+        for label, key in keys.items():
+            if t == key:
+                candidates.append((label, it))
+                break
+    if not candidates:
+        return None
+    heights = [x['h'] for x in items if x.get('h', 0) > 0]
+    tol = max(3.0, (sum(heights) / len(heights) if heights else 10) * 0.7)
+    bands = []
+    for label, it in candidates:
+        placed = None
+        for b in bands:
+            if abs(it['cy'] - b['cy']) <= tol:
+                placed = b
+                break
+        if placed is None:
+            placed = {'cy': it['cy'], 'items': []}
+            bands.append(placed)
+        placed['items'].append((label, it))
+        placed['cy'] = sum(x[1]['cy'] for x in placed['items']) / len(placed['items'])
+    best = max(bands, key=lambda b: len({lab for lab, _ in b['items']}))
+    found = {}
+    for label, it in best['items']:
+        if label not in found or it['cx'] < found[label]['cx']:
+            found[label] = it
+    if len(found) < 4:
+        return None
+    return found
+
+
 def extract_detail_rows(items):
     """从一页坐标文字中提取发票号、追踪号和明细行。"""
     lines = _group_detail_lines(items)
     invoice = _extract_invoice_no(lines)
     tracking = _extract_tracking_no(lines)
-    compact = {label: _compact_text(label) for label in DETAIL_HEADERS}
-    found = {}
-    for item in items:
-        text = _compact_text(item['text'])
-        for label, key in compact.items():
-            if key in text and label not in found:
-                found[label] = item
-    if len(found) < 4:
+    found = _find_header_band(items)
+    if found is None:
         return invoice, tracking, []
-    # 表头可能有轻微高低差，取各列中心并以中点划分列边界。
-    centers = [found[x]['cx'] for x in DETAIL_HEADERS]
-    boundaries = [float('-inf')] + [(centers[i] + centers[i + 1]) / 2
-                                     for i in range(len(centers) - 1)] + [float('inf')]
+    # 表头按左边缘排序列边界，词条按中心 cx 归列。
+    # DATE 列右边界取 DESCRIPTION 表头左边缘，日期文字横向越界也不会被误并入 DESCRIPTION。
+    ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'] - kv[1]['w'] / 2)  # [(label, item)]
+    lefts = [it['cx'] - it['w'] / 2 for _, it in ordered]
+    label_col = {label: idx for idx, label in enumerate(DETAIL_HEADERS)}
+    bounds = [float('-inf')] + lefts[1:] + [float('inf')]
+    col_index = [label_col[lab] for lab, _ in ordered]
     # 数据区：位于表头底部下方（表头底部=cy+字高/2，避免第一行紧贴表头被误排除）。
-    header_bottom = max(x['cy'] + x['h'] / 2 for x in found.values())
+    header_bottom = max(it['cy'] + it['h'] / 2 for _, it in ordered)
     data_lines = [ln for ln in lines if ln['cy'] > header_bottom + 2]
     rows = []
     stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK')
@@ -522,10 +621,10 @@ def extract_detail_rows(items):
             break
         cells = [''] * len(DETAIL_HEADERS)
         for item in line['items']:
-            col = next((i for i in range(len(DETAIL_HEADERS))
-                        if boundaries[i] <= item['cx'] < boundaries[i + 1]), None)
+            col = next((ci for ci in range(len(bounds) - 1)
+                        if bounds[ci] <= item['cx'] < bounds[ci + 1]), None)
             if col is not None:
-                cells[col] = (cells[col] + ' ' + item['text']).strip()
+                cells[col_index[col]] = (cells[col_index[col]] + ' ' + item['text']).strip()
         # DATE 列含日期代表新明细；否则是 DESCRIPTION/TAX/DATE 的换行，合并到上一行。
         is_new = bool(DETAIL_DATE_RE.search(cells[0])) or (not rows and any(cells))
         if is_new:
@@ -584,12 +683,38 @@ def _next_output_path(directory, filename):
     return '%s(%d)%s' % (base, index, ext)
 
 
-def write_detail_excel(rows, output_path):
-    """将发票明细写入 Excel，并开启筛选、冻结和换行。"""
+def to_number(s):
+    """把可解析的数字文本转成数字（int/float），去货币符号和千分位；转不了原样返回。"""
+    if not isinstance(s, str):
+        return s
+    t = s.strip().replace(',', '').replace('$', '').replace('¥', '').replace('￥', '').replace('%', '')
+    if not t:
+        return s
+    try:
+        if re.fullmatch(r'[+-]?\d+', t):
+            return int(t)
+        if re.fullmatch(r'[+-]?\d+\.\d+', t):
+            return float(t)
+    except (ValueError, OverflowError):
+        pass
+    return s
+
+
+def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, widths=None):
+    """将发票明细写入 Excel，并开启筛选、冻结和换行。
+    headers：输出表头；numeric_cols：转成纯数字的列序号（可转的才转）；
+    widths：各列宽。缺省按 canexs 明细表（发票号/QTY/RATE/AMOUNT 转数字）。
+    """
     if not OPENPYXL_OK:
         raise RuntimeError('未安装 openpyxl，无法写入 Excel。请运行：pip install openpyxl')
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
+    if headers is None:
+        headers = DETAIL_OUTPUT_HEADERS
+    if numeric_cols is None:
+        numeric_cols = {0, 5, 6, 7}
+    if widths is None:
+        widths = [18, 24, 28, 45, 25, 12, 14, 16]
     wb = load_workbook(output_path) if os.path.exists(output_path) else None
     if wb is None:
         from openpyxl import Workbook
@@ -597,13 +722,13 @@ def write_detail_excel(rows, output_path):
     ws = wb.active
     ws.title = '发票明细'
     ws.delete_rows(1, ws.max_row)
-    ws.append(list(DETAIL_OUTPUT_HEADERS))
+    ws.append(list(headers))
     for cell in ws[1]:
-        cell.font = Font(bold=True)
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill(start_color='113584', end_color='113584', fill_type='solid')
         cell.alignment = Alignment(horizontal='center', vertical='center')
     for row in rows:
-        ws.append(row)
-    widths = [18, 24, 28, 45, 25, 12, 14, 16]
+        ws.append([to_number(v) if i in numeric_cols else v for i, v in enumerate(row)])
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
     for row in ws.iter_rows(min_row=2):
@@ -615,14 +740,160 @@ def write_detail_excel(rows, output_path):
     return output_path
 
 
-def detail_mode(pdf_paths):
-    """新增模式：识别 PDF 发票明细并导出 Excel。"""
-    print('开始识别发票明细（文字层优先，扫描件自动使用 OCR）…')
-    rows, pages = extract_detail_from_pdfs(pdf_paths)
-    output = _next_output_path(os.path.dirname(os.path.abspath(pdf_paths[0])), '发票明细表.xlsx')
+def canexs_mode(pdf_paths):
+    """canexs 发票：提取 INVOICE / TRACKING NO. / 明细行，输出到 canexs发票-日期 文件夹。"""
+    print('识别 canexs 发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_detail_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'canexs发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output)
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
+
+
+# 精准发票字段值：标签在上一行、值在下一行同列。取标签中心 ± _JZ_COL_BAND 内的词作为该列值。
+_JZ_COL_BAND = 65.0
+
+
+def _jz_label(lines, line_key, word_key):
+    """在标签行里找锚点词：行的紧凑串含 line_key，词紧凑串等于 word_key。
+    同一行可能有多个匹配词（如 Invoice Number / Invoice Date 都有 INVOICE），取最左那个。
+    返回 (anchor_item, label_line) 或 (None, None)。"""
+    for ln in lines:
+        if line_key in _compact_text(ln['text']):
+            cands = [w for w in ln['items'] if _compact_text(w['text']) == word_key]
+            if cands:
+                return min(cands, key=lambda w: w['cx']), ln
+    return None, None
+
+
+def _jz_value(lines, header_cy, anchor, label_line):
+    """取标签下方最近一行的同列内容（值与标签左对齐，中心距离 ≤ 波段）。"""
+    if anchor is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2 and ln['cy'] < header_cy - 2]
+    if not below:
+        return '未知'
+    nxt = min(below, key=lambda ln: ln['cy'])
+    vals = [w for w in nxt['items'] if abs(w['cx'] - anchor['cx']) <= _JZ_COL_BAND]
+    if not vals:
+        return '未知'
+    vals.sort(key=lambda w: w['cx'])
+    return ' '.join(w['text'] for w in vals).strip()
+
+
+def _jz_table(lines, header_line):
+    """Description|Amount 两列表：表头下方每行一条，行项在左、金额右对齐，遇 TOTAL/NOTES 停止。"""
+    desc_hdr = next((w for w in header_line['items']
+                     if _compact_text(w['text']) == 'DESCRIPTION'), None)
+    amt_hdr = next((w for w in header_line['items']
+                    if _compact_text(w['text']) == 'AMOUNT'), None)
+    if desc_hdr is None or amt_hdr is None:
+        return []
+    threshold = (desc_hdr['cx'] + amt_hdr['cx']) / 2
+    rows = []
+    below = sorted((ln for ln in lines if ln['cy'] > header_line['cy'] + 2),
+                   key=lambda ln: ln['cy'])
+    for ln in below:
+        comp = _compact_text(ln['text'])
+        if 'TOTAL' in comp or 'NOTES' in comp or 'NOTICE' in comp:
+            break
+        desc = ' '.join(w['text'] for w in ln['items'] if w['cx'] < threshold)
+        amt = ' '.join(w['text'] for w in ln['items'] if w['cx'] >= threshold)
+        if desc or amt:
+            rows.append((desc, amt))
+    return rows
+
+
+def extract_jingzhun_page(items):
+    """精准（Accuracy Customs Brokers）发票单页：字段值 + Description|Amount 表行。
+    返回 ({invoice_no, master_bl, containers}, [(desc, amount), ...])。"""
+    if not items:
+        return {}, []
+    lines = _group_detail_lines(items)
+    # 表头行：同时含 DESCRIPTION 和 AMOUNT（避免把上方的 Commercial Description 标签当表头）
+    header_line = None
+    for ln in lines:
+        comp = _compact_text(ln['text'])
+        if 'DESCRIPTION' in comp and 'AMOUNT' in comp:
+            header_line = ln
+            break
+    if header_line is None:
+        return {}, []
+    header_cy = header_line['cy']
+    field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
+    fields = {}
+    for key, line_key, word_key in (('invoice_no', 'INVOICENUMBER', 'INVOICE'),
+                                    ('master_bl', 'MASTERBLNO', 'MASTER'),
+                                    ('containers', 'CONTAINERS', 'CONTAINERS')):
+        anchor, label_line = _jz_label(field_lines, line_key, word_key)
+        fields[key] = _jz_value(field_lines, header_cy, anchor, label_line)
+    return fields, _jz_table(lines, header_line)
+
+
+def extract_jingzhun_from_pdfs(pdf_paths):
+    """批量识别精准发票，返回明细行和处理统计。续页自动继承上一页的字段值。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_jingzhun_page(items)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                last = merged
+                for desc, amt in rows:
+                    all_rows.append([merged.get('invoice_no', '未知'),
+                                     merged.get('master_bl', '未知'),
+                                     merged.get('containers', '未知'),
+                                     desc, amt])
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def jingzhun_mode(pdf_paths):
+    """精准发票：提取 Invoice Number / Master B/L No / Containers / Description / Amount，
+    输出到 精准发票-日期 文件夹。"""
+    print('识别精准发票明细（Accuracy Customs Brokers，文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_jingzhun_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '精准发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=JINGZHUN_OUTPUT_HEADERS,
+                       numeric_cols={4}, widths=[16, 26, 18, 50, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
+def detail_mode(pdf_paths, inv_type):
+    """模式 2：识别发票明细并导出 Excel。inv_type: '1' canexs | '2' 精准。"""
+    if inv_type == '2':
+        jingzhun_mode(pdf_paths)
+    else:
+        canexs_mode(pdf_paths)
 
 
 # 图片固定 10cm x 15cm。openpyxl 图片锚定单元格左上角、尺寸不受单元格约束，
@@ -847,6 +1118,15 @@ def main():
                 break
             print('请输入 1 或 2。')
 
+        # ---- 付款组：先选发票类型，再拖入 PDF ----
+        inv_type = None
+        if top_mode == '2':
+            while True:
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准：').strip()
+                if inv_type in ('1', '2'):
+                    break
+                print('请输入 1 或 2。')
+
         # ---- 再拖入 PDF ----
         # 经典终端多选拖入只插第一个路径，可输入 'c' 从剪贴板读取全部路径
         # （在资源管理器多选文件后 Ctrl+C，剪贴板保存全部路径，每行一个）。
@@ -858,11 +1138,12 @@ def main():
                          if p.lower().endswith('.pdf')]
             if pdf_paths:
                 break
-            print('未检测到有效的 PDF 路径，请重新操作（可多选文件后 Ctrl+C 复制，再输入 c）。')
+            print('未检测到有效的 PDF 路径。若输入了 c，请先在资源管理器里选中 PDF 文件按 Ctrl+C'
+                  '（复制文件本身，不是复制文字），再输入 c；或直接把文件拖入窗口。')
 
         if top_mode == '2':
             try:
-                detail_mode(pdf_paths)
+                detail_mode(pdf_paths, inv_type)
             except Exception as e:
                 print('发票明细识别失败：%s' % e)
         else:
@@ -874,7 +1155,6 @@ def main():
             break
 
     print('已完成，谢谢使用。')
-    print('玛卡巴卡""')
 
 
 if __name__ == '__main__':
@@ -882,5 +1162,4 @@ if __name__ == '__main__':
         main()
     except KeyboardInterrupt:
         print('\n用户取消操作。')
-        print('玛卡巴卡""')
     sys.exit(0)
