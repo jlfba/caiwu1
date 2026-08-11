@@ -760,7 +760,7 @@ def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, width
         ws.column_dimensions[get_column_letter(i)].width = width
     for row in ws.iter_rows(min_row=2):
         for cell in row:
-            cell.alignment = Alignment(vertical='top', wrap_text=True)
+            cell.alignment = Alignment(horizontal='right', vertical='top', wrap_text=True)
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions
     wb.save(output_path)
