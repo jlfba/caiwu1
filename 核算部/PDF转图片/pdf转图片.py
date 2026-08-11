@@ -252,8 +252,9 @@ def sanitize(name):
 # ---------------------------------------------------------------------------
 # PDF 转图片
 # ---------------------------------------------------------------------------
-def pdf_to_images(pdf_path, out_dir, start_index=0, dpi=RENDER_DPI):
-    """把 PDF 每一页渲染为 PNG，返回 (图片文件列表, 全局页计数)。"""
+def pdf_to_images(pdf_path, out_dir, start_index=0, dpi=RENDER_DPI, progress_cb=None):
+    """把 PDF 每一页渲染为 PNG，返回 (图片文件列表, 全局页计数)。
+    progress_cb(stage, done, total)：每渲染完一页回调一次，供网页版显示进度（可选）。"""
     if not os.path.isfile(pdf_path):
         raise FileNotFoundError('找不到文件：%s' % pdf_path)
 
@@ -280,6 +281,8 @@ def pdf_to_images(pdf_path, out_dir, start_index=0, dpi=RENDER_DPI):
             pix.save(img_path)
             images.append(img_path)
             print('    [%d/%d] %s' % (i + 1, total, img_name))
+            if progress_cb is not None:
+                progress_cb('render', i + 1, total)
     finally:
         doc.close()
 
