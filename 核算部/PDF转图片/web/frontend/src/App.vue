@@ -207,7 +207,7 @@ onUnmounted(stopPolling)
         </svg>
       </span>
       <span class="brand-text">
-        <span class="brand-name">PDF 工具</span>
+        <span class="brand-name">财务内部在线工具</span>
         <span class="brand-sub">发票识别 · 明细转表 · 在线导出</span>
       </span>
     </div>
@@ -259,41 +259,6 @@ onUnmounted(stopPolling)
         <h2 class="step-title">上传 PDF 文件</h2>
         <p class="step-sub">支持多选，一次拖入全部发票</p>
 
-        <div v-if="mode === '1'" class="layout-options">
-          <div class="lo-field">
-            <span class="lo-label">排版方向</span>
-            <div class="seg" role="radiogroup" aria-label="排版方向">
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ on: layoutDir === 'v' }"
-                @click="layoutDir = 'v'"
-              >纵向</button>
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ on: layoutDir === 'h' }"
-                @click="layoutDir = 'h'"
-              >横向</button>
-            </div>
-          </div>
-          <div class="lo-field">
-            <label class="lo-label" for="start-cell">起始位置</label>
-            <input
-              id="start-cell"
-              v-model="startCell"
-              class="cell-input"
-              :class="{ invalid: !startCellValid }"
-              spellcheck="false"
-            />
-            <span v-if="!startCellValid" class="lo-error">请输入如 A1、C5 的格位置</span>
-          </div>
-          <p class="lo-hint">
-            <template v-if="layoutDir === 'v'">纵向：图片沿列向下排，字段标在图片右侧</template>
-            <template v-else>横向：图片沿行向右排，字段标在图片下方</template>
-          </p>
-        </div>
-
         <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
@@ -338,6 +303,47 @@ onUnmounted(stopPolling)
             </div>
           </div>
           <p v-if="sheetError" class="lo-error">{{ sheetError }}</p>
+        </div>
+
+        <div v-if="mode === '1'" class="layout-options">
+          <div class="ts-head">
+            <span class="ts-label">排版位置</span>
+            <span class="ts-tip">图片在表格里的排布方式</span>
+          </div>
+          <div class="lo-row">
+            <div class="lo-field">
+              <span class="lo-label">排版方向</span>
+              <div class="seg" role="radiogroup" aria-label="排版方向">
+                <button
+                  type="button"
+                  class="seg-btn"
+                  :class="{ on: layoutDir === 'v' }"
+                  @click="layoutDir = 'v'"
+                >纵向</button>
+                <button
+                  type="button"
+                  class="seg-btn"
+                  :class="{ on: layoutDir === 'h' }"
+                  @click="layoutDir = 'h'"
+                >横向</button>
+              </div>
+            </div>
+            <div class="lo-field">
+              <label class="lo-label" for="start-cell">起始位置</label>
+              <input
+                id="start-cell"
+                v-model="startCell"
+                class="cell-input"
+                :class="{ invalid: !startCellValid }"
+                spellcheck="false"
+              />
+              <span v-if="!startCellValid" class="lo-error">请输入如 A1、C5 的格位置</span>
+            </div>
+          </div>
+          <p class="lo-hint">
+            <template v-if="layoutDir === 'v'">纵向：图片沿列向下排，字段标在图片右侧</template>
+            <template v-else>横向：图片沿行向右排，字段标在图片下方</template>
+          </p>
         </div>
       </div>
     </section>
@@ -560,15 +566,19 @@ onUnmounted(stopPolling)
 }
 
 .layout-options {
-  margin-top: 22px;
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px dashed var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lo-row {
   display: flex;
   align-items: center;
   gap: 26px;
   flex-wrap: wrap;
-  padding: 14px 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
-  background: var(--surface-2);
 }
 
 .lo-field {
@@ -642,7 +652,6 @@ onUnmounted(stopPolling)
 }
 
 .lo-hint {
-  flex-basis: 100%;
   margin: 0;
   font-size: 12px;
   color: var(--text-faint);
