@@ -18,101 +18,83 @@ const percent = computed(() => {
 <template>
   <div class="progress-panel">
     <div class="pp-head">
-      <span class="pp-status" :class="status">
-        <span class="dot"></span>
-        {{ status === 'processing' ? '正在处理' : status === 'pending' ? '排队等待' : '处理完成' }}
-      </span>
-      <span class="pp-percent">{{ percent }}%</span>
+      <span class="pp-label">处理进度</span>
+      <span class="pp-percent">{{ percent }}<i>%</i></span>
     </div>
-
-    <div class="track">
-      <div class="bar" :class="{ error: status === 'error' }" :style="{ width: percent + '%' }"></div>
+    <div class="track" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
+      <div class="bar" :style="{ width: percent + '%' }"></div>
     </div>
-
-    <div class="pp-msg">{{ message }}</div>
+    <p class="pp-msg">{{ message }}</p>
   </div>
 </template>
 
 <style scoped>
 .progress-panel {
-  background: var(--card);
+  background: var(--surface);
   border: 1.5px solid var(--border);
   border-radius: var(--radius);
-  padding: 18px 20px;
-  box-shadow: var(--shadow-sm);
+  padding: 20px 22px;
+  animation: fade 0.3s var(--ease-out);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .pp-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
   margin-bottom: 12px;
 }
 
-.pp-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+.pp-label {
+  font-size: 13px;
   font-weight: 700;
-  font-size: 14px;
-  color: var(--text);
-}
-
-.pp-status .dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-
-.pp-status.processing .dot {
-  background: var(--accent);
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-.pp-status.done .dot {
-  background: var(--primary);
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
+  letter-spacing: 0.3px;
 }
 
 .pp-percent {
-  font-size: 15px;
+  font-family: var(--font-num);
+  font-size: 20px;
   font-weight: 800;
   color: var(--primary);
   font-variant-numeric: tabular-nums;
 }
 
+.pp-percent i {
+  font-style: normal;
+  font-size: 13px;
+  color: var(--text-faint);
+  margin-left: 1px;
+}
+
 .track {
-  height: 10px;
-  background: #e8eef5;
+  height: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: 999px;
   overflow: hidden;
 }
 
 .bar {
   height: 100%;
-  background: linear-gradient(90deg, var(--primary), var(--accent));
   border-radius: 999px;
-  transition: width 0.4s ease;
-}
-
-.bar.error {
-  background: var(--danger);
+  background: linear-gradient(90deg, var(--primary), var(--primary-strong));
+  transition: width 0.45s var(--ease-out);
+  box-shadow: 0 0 0 1px rgba(13, 138, 122, 0.15);
 }
 
 .pp-msg {
-  margin-top: 12px;
-  font-size: 13px;
+  margin: 12px 0 0;
+  font-size: 12.5px;
   color: var(--text-soft);
-  line-height: 1.5;
 }
 </style>

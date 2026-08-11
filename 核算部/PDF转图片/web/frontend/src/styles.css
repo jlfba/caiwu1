@@ -1,19 +1,30 @@
 :root {
-  --bg: #eef2f7;
-  --card: #ffffff;
-  --primary: #0f766e;
-  --primary-strong: #115e59;
-  --primary-soft: #ccfbf1;
-  --primary-softer: #f0fdfa;
-  --accent: #0ea5e9;
-  --text: #1f2937;
-  --text-soft: #64748b;
-  --text-faint: #94a3b8;
-  --border: #e2e8f0;
-  --danger: #dc2626;
-  --radius: 14px;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 10px 30px -12px rgba(15, 23, 42, 0.18);
+  /* 色板：青绿色单色系 + 偏冷中性色（非纯白/纯黑） */
+  --bg: #eef3f5;
+  --surface: #fbfdfe;
+  --surface-2: #f3f7f8;
+  --primary: #0d8a7a;
+  --primary-strong: #0a6d61;
+  --primary-soft: #ddf1ee;
+  --primary-ink: #0a564c;
+  --text: #17272c;
+  --text-soft: #51666d;
+  --text-faint: #8aa1a9;
+  --border: #dde6e9;
+  --border-strong: #c3d2d6;
+  --danger: #c2413c;
+  --danger-soft: #fbe9e8;
+  --shadow-sm: 0 1px 2px rgba(18, 43, 49, 0.05);
+  --shadow-md: 0 12px 32px -16px rgba(18, 43, 49, 0.18);
+  --radius-s: 10px;
+  --radius: 16px;
+
+  --font-sans: "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
+    "Microsoft YaHei", "微软雅黑", system-ui, sans-serif;
+  --font-serif: "Source Han Serif SC", "Songti SC", "SimSun", "宋体", serif;
+  --font-num: "DIN Alternate", "Bahnschrift", "Segoe UI", var(--font-sans);
+
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 * {
@@ -27,24 +38,36 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei',
-    'PingFang SC', 'Hiragino Sans GB', sans-serif;
+  font-family: var(--font-sans);
   background:
-    radial-gradient(1200px 400px at 20% -10%, rgba(15, 118, 110, 0.08), transparent 60%),
-    radial-gradient(1000px 400px at 90% 0%, rgba(14, 165, 233, 0.07), transparent 55%),
+    radial-gradient(900px 320px at 12% -8%, rgba(13, 138, 122, 0.06), transparent 60%),
+    radial-gradient(800px 300px at 92% -6%, rgba(71, 135, 160, 0.05), transparent 55%),
     var(--bg);
   color: var(--text);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
 }
 
-button {
+button,
+input {
   font-family: inherit;
-  cursor: pointer;
+  color: inherit;
 }
 
 #app {
-  max-width: 760px;
+  max-width: 860px;
   margin: 0 auto;
-  padding: 28px 20px 60px;
+  padding: 40px 28px 80px;
+}
+
+::selection {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+
+@media (max-width: 640px) {
+  #app {
+    padding: 24px 16px 64px;
+  }
 }

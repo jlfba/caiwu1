@@ -21,7 +21,24 @@ const error = ref('')
 
 let pollTimer = null
 
-const step = computed(() => {
+const steps = computed(() => {
+  const list = [
+    { key: 'mode', no: 1, label: '选择功能' },
+    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '2' },
+    { key: 'upload', no: 3, label: '上传 PDF' },
+    { key: 'run', no: 4, label: '制作' }
+  ]
+  // 收款组少一步发票类型
+  if (mode.value !== '2') list[2].no = 2
+  if (mode.value !== '2') list[3].no = 3
+  let stepNo = 0
+  for (const s of list) {
+    if (s.visible) s.cur = ++stepNo
+  }
+  return list
+})
+
+const currentStep = computed(() => {
   if (!mode.value) return 1
   if (mode.value === '2') return 2
   return 3
@@ -129,190 +146,381 @@ onUnmounted(stopPolling)
 </script>
 
 <template>
-  <header class="page-head">
+  <header class="masthead">
     <div class="brand">
-      <span class="brand-logo">🧾</span>
-      <div>
-        <h1>PDF 工具网页版</h1>
-        <p>发票图片识别 · 发票明细转表格 · 在线处理</p>
-      </div>
+      <span class="brand-mark">
+        <svg viewBox="0 0 32 32" width="30" height="30" fill="none" aria-hidden="true">
+          <rect x="4" y="2.5" width="24" height="27" rx="5" fill="var(--primary-soft)" />
+          <path d="M9 9h14M9 14h14M9 19h9" stroke="var(--primary-strong)" stroke-width="2.4" stroke-linecap="round" />
+          <path d="M20 22.5l4 4 6-6" stroke="var(--primary)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">PDF 工具</span>
+        <span class="brand-sub">发票识别 · 明细转表 · 在线导出</span>
+      </span>
     </div>
+    <span class="masthead-tag" v-if="status === 'idle'">网页版</span>
   </header>
 
-  <main>
+  <main class="workspace">
+    <div class="rail" aria-hidden="true"></div>
+
     <!-- 步骤 1：选择功能 -->
-    <section class="card">
-      <div class="step-head">
-        <span class="step-no" :class="{ on: step >= 1 }">1</span>
-        <span class="step-label">选择功能</span>
+    <section class="step">
+      <span class="step-dot" :class="{ done: mode, cur: currentStep === 1 }">
+        <svg v-if="mode" viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <template v-else>1</template>
+      </span>
+      <div class="step-body">
+        <h2 class="step-title">选择功能</h2>
+        <p class="step-sub">根据要处理的内容选择模式</p>
+        <ModeSelect v-model="mode" :disabled="submitting" />
       </div>
-      <ModeSelect v-model="mode" :disabled="submitting" />
     </section>
 
     <!-- 步骤 2：选择发票类型（付款组） -->
-    <section v-if="mode === '2'" class="card">
-      <div class="step-head">
-        <span class="step-no" :class="{ on: step >= 2 }">2</span>
-        <span class="step-label">选择发票类型</span>
+    <section v-if="mode === '2'" class="step">
+      <span class="step-dot" :class="{ done: false, cur: currentStep === 2 }">
+        <svg v-if="currentStep > 2" viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <template v-else>2</template>
+      </span>
+      <div class="step-body">
+        <h2 class="step-title">选择发票类型</h2>
+        <p class="step-sub">两种版式，选错会识别不到明细</p>
+        <InvoiceTypeSelect v-model="invType" :disabled="submitting" />
       </div>
-      <InvoiceTypeSelect v-model="invType" :disabled="submitting" />
     </section>
 
-    <!-- 步骤 3：上传 PDF -->
-    <section class="card">
-      <div class="step-head">
-        <span class="step-no" :class="{ on: step >= 3 }">
-          {{ mode === '2' ? '3' : '2' }}
-        </span>
-        <span class="step-label">上传 PDF 文件</span>
+    <!-- 步骤 3/2：上传 PDF -->
+    <section class="step">
+      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '2' ? 3 : 2) }">
+        <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <template v-else>{{ mode === '2' ? 3 : 2 }}</template>
+      </span>
+      <div class="step-body">
+        <h2 class="step-title">上传 PDF 文件</h2>
+        <p class="step-sub">支持多选，一次拖入全部发票</p>
+        <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
+            <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
+              <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
+              <path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
+              <path d="M8.5 11h4M8.5 14h4" stroke="var(--primary)" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+            <span class="file-name" :title="f.name">{{ f.name }}</span>
+            <span class="file-size">{{ formatSize(f.size) }}</span>
+            <button
+              class="file-remove"
+              type="button"
+              :disabled="submitting"
+              :aria-label="'移除 ' + f.name"
+              @click="removeFile(i)"
+            >✕</button>
+          </div>
+        </UploadArea>
       </div>
+    </section>
 
-      <UploadArea
-        :disabled="submitting"
-        @add="addFiles"
-        @remove="removeFile"
-        @clear="clearFiles"
-      >
-        <div v-for="(f, i) in files" :key="f.name + i" class="file-item">
-          <span class="file-icon">📄</span>
-          <span class="file-name" :title="f.name">{{ f.name }}</span>
-          <span class="file-size">{{ formatSize(f.size) }}</span>
+    <!-- 步骤 4/3：制作 -->
+    <section class="step">
+      <span class="step-dot" :class="{ cur: currentStep >= 3 }">
+        <svg v-if="status === 'done'" viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <template v-else>{{ mode === '2' ? 4 : 3 }}</template>
+      </span>
+      <div class="step-body">
+        <h2 class="step-title">制作</h2>
+        <p class="step-sub">后端处理完成后，表格会直接从浏览器下载</p>
+
+        <div class="run-area">
           <button
-            class="file-remove"
+            class="btn-make"
             type="button"
-            :disabled="submitting"
-            @click="removeFile(i)"
-          >✕</button>
+            :disabled="!canSubmit"
+            @click="submit"
+          >
+            <span v-if="submitting" class="spinner" aria-hidden="true"></span>
+            <span>{{ submitting ? '正在制作…' : '开始制作' }}</span>
+          </button>
+          <p class="run-hint">
+            <template v-if="files.length">
+              已选 <b>{{ files.length }}</b> 个文件
+            </template>
+            <template v-else>请先上传 PDF</template>
+          </p>
         </div>
-        <div v-if="!files.length" class="file-empty">尚未添加文件</div>
-      </UploadArea>
-    </section>
 
-    <!-- 步骤 4：制作 -->
-    <section class="card">
-      <div class="submit-row">
-        <button
-          class="btn make"
-          type="button"
-          :disabled="!canSubmit"
-          @click="submit"
-        >
-          <span v-if="submitting" class="spinner"></span>
-          {{ submitting ? '正在制作…' : '开始制作' }}
-        </button>
-        <p class="submit-hint">
-          已选择 {{ files.length }} 个 PDF，生成结果将直接从浏览器下载。
-        </p>
+        <ProgressPanel
+          v-if="submitting"
+          :status="'processing'"
+          :current="current"
+          :total="total"
+          :message="message"
+        />
+
+        <ResultPanel
+          v-if="status === 'done' || status === 'error'"
+          :status="status"
+          :task-id="taskId"
+          :filename="filename"
+          :error="error"
+          @reset="reset"
+        />
       </div>
-
-      <ProgressPanel
-        v-if="submitting"
-        :status="'processing'"
-        :current="current"
-        :total="total"
-        :message="message"
-      />
-
-      <ResultPanel
-        v-if="status === 'done' || status === 'error'"
-        :status="status"
-        :task-id="taskId"
-        :filename="filename"
-        :error="error"
-        @reset="reset"
-      />
     </section>
   </main>
 
-  <footer class="page-foot">内部工具 · 处理数据仅保留在本次任务内，不落盘保存</footer>
+  <footer class="colophon">
+    内部工具 · 文件仅在本次任务内处理，完成后清理
+  </footer>
 </template>
 
 <style scoped>
-.page-head {
-  margin-bottom: 26px;
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 44px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 
-.brand-logo {
-  font-size: 38px;
-  line-height: 1;
+.brand-mark {
+  display: grid;
+  place-items: center;
 }
 
-.brand h1 {
-  margin: 0;
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand-name {
+  font-family: var(--font-serif);
   font-size: 26px;
-  font-weight: 800;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text);
+}
+
+.brand-sub {
+  font-size: 12.5px;
+  color: var(--text-soft);
+  letter-spacing: 0.3px;
+}
+
+.masthead-tag {
+  font-size: 12px;
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border: 1px solid rgba(13, 138, 122, 0.18);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 600;
   letter-spacing: 0.5px;
 }
 
-.brand p {
-  margin: 4px 0 0;
-  font-size: 13px;
-  color: var(--text-soft);
+.workspace {
+  position: relative;
+  padding-left: 52px;
 }
 
-main {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.rail {
+  position: absolute;
+  left: 15px;
+  top: 10px;
+  bottom: 14px;
+  width: 2px;
+  background: var(--border);
+  border-radius: 2px;
 }
 
-.card {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 22px 24px;
-  box-shadow: var(--shadow-sm);
+.step {
+  position: relative;
+  padding-bottom: 46px;
 }
 
-.step-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
+.step:last-child {
+  padding-bottom: 0;
 }
 
-.step-no {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: #f1f5f9;
+.step-dot {
+  position: absolute;
+  left: -52px;
+  top: 2px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 2px solid var(--border-strong);
   color: var(--text-faint);
   display: grid;
   place-items: center;
   font-size: 13px;
-  font-weight: 800;
-  transition: all 0.2s ease;
+  font-weight: 700;
+  font-family: var(--font-num);
+  transition: all 0.3s var(--ease-out);
 }
 
-.step-no.on {
+.step-dot.cur {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--surface);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.step-dot.done {
+  border-color: var(--primary);
   background: var(--primary);
   color: #fff;
 }
 
-.step-label {
-  font-size: 16px;
-  font-weight: 800;
+.step-body {
+  animation: rise 0.5s var(--ease-out) both;
 }
 
-.file-item {
+.step:nth-child(1) .step-body {
+  animation-delay: 0.04s;
+}
+.step:nth-child(2) .step-body {
+  animation-delay: 0.1s;
+}
+.step:nth-child(3) .step-body {
+  animation-delay: 0.16s;
+}
+.step:nth-child(4) .step-body {
+  animation-delay: 0.22s;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.step-title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.step-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-soft);
+}
+
+.step-body > :deep(.mode-select),
+.step-body > :deep(.inv-type),
+.step-body > :deep(.dropzone-wrap),
+.step-body > :deep(.progress-panel),
+.step-body > :deep(.result-panel) {
+  margin-top: 20px;
+}
+
+.run-area {
+  margin-top: 24px;
   display: flex;
   align-items: center;
-  gap: 10px;
-  background: #f8fafc;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 13px;
+  gap: 18px;
+  flex-wrap: wrap;
 }
 
-.file-icon {
-  font-size: 16px;
+.btn-make {
+  border: none;
+  border-radius: 12px;
+  padding: 13px 38px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--primary);
+  box-shadow: 0 8px 20px -8px rgba(13, 138, 122, 0.55);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out),
+    background 0.18s var(--ease-out), opacity 0.18s var(--ease-out);
+}
+
+.btn-make:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: var(--primary-strong);
+  box-shadow: 0 12px 24px -8px rgba(13, 138, 122, 0.6);
+}
+
+.btn-make:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-make:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.run-hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.run-hint b {
+  color: var(--primary-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  border: 2.5px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  font-size: 13px;
+  transition: border-color 0.15s var(--ease-out);
+}
+
+.file-row:hover {
+  border-color: var(--border-strong);
+}
+
+.file-glyph {
+  flex-shrink: 0;
 }
 
 .file-name {
@@ -326,6 +534,7 @@ main {
 
 .file-size {
   color: var(--text-faint);
+  font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
 }
 
@@ -333,14 +542,15 @@ main {
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 14px;
+  font-size: 13px;
   padding: 2px 6px;
   border-radius: 6px;
-  transition: all 0.15s ease;
+  cursor: pointer;
+  transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out);
 }
 
 .file-remove:hover:not(:disabled) {
-  background: #fee2e2;
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
@@ -349,71 +559,26 @@ main {
   cursor: not-allowed;
 }
 
-.file-empty {
-  text-align: center;
-  color: var(--text-faint);
-  font-size: 12.5px;
-  padding: 4px 0;
-}
-
-.submit-row {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.btn.make {
-  border: none;
-  border-radius: 12px;
-  padding: 14px 56px;
-  font-size: 16px;
-  font-weight: 800;
-  color: #fff;
-  background: linear-gradient(120deg, var(--primary), var(--primary-strong));
-  box-shadow: 0 10px 24px -10px rgba(15, 118, 110, 0.6);
-  transition: all 0.18s ease;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.btn.make:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 14px 28px -10px rgba(15, 118, 110, 0.7);
-}
-
-.btn.make:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-.spinner {
-  width: 16px;
-  height: 16px;
-  border: 2.5px solid rgba(255, 255, 255, 0.4);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.submit-hint {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--text-soft);
-}
-
-.page-foot {
-  margin-top: 26px;
+.colophon {
+  margin-top: 52px;
   text-align: center;
   font-size: 12px;
   color: var(--text-faint);
+  letter-spacing: 0.3px;
+}
+
+@media (max-width: 640px) {
+  .masthead {
+    margin-bottom: 32px;
+  }
+  .workspace {
+    padding-left: 46px;
+  }
+  .step-dot {
+    left: -46px;
+  }
+  .step {
+    padding-bottom: 36px;
+  }
 }
 </style>

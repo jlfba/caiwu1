@@ -1,35 +1,35 @@
 <script setup>
-defineProps({ modelValue: String })
+defineProps({ modelValue: String, disabled: Boolean })
 defineEmits(['update:modelValue'])
 
 const types = [
-  { id: '1', label: 'canexs', hint: '美国货运发票（INVOICE / TRACKING NO. / 明细行）' },
+  { id: '1', label: 'canexs', hint: '美国货运发票 · INVOICE / TRACKING NO. / 明细行' },
   { id: '2', label: '精准', hint: 'Accuracy Customs Brokers 清关发票' }
 ]
 </script>
 
 <template>
-  <section class="inv-type">
-    <div
+  <div class="inv-type" role="radiogroup" aria-label="选择发票类型">
+    <button
       v-for="t in types"
       :key="t.id"
       class="type-option"
       :class="{ active: modelValue === t.id }"
       role="radio"
       :aria-checked="modelValue === t.id"
-      tabindex="0"
+      type="button"
+      :disabled="disabled"
       @click="$emit('update:modelValue', t.id)"
-      @keydown.enter="$emit('update:modelValue', t.id)"
     >
       <span class="radio" :class="{ on: modelValue === t.id }">
-        <span class="radio-dot" v-if="modelValue === t.id"></span>
+        <span class="radio-dot"></span>
       </span>
-      <span class="type-body">
+      <span class="type-text">
         <span class="type-label">{{ t.label }}</span>
         <span class="type-hint">{{ t.hint }}</span>
       </span>
-    </div>
-  </section>
+    </button>
+  </div>
 </template>
 
 <style scoped>
@@ -41,35 +41,48 @@ const types = [
 
 .type-option {
   display: flex;
-  gap: 12px;
+  gap: 13px;
   align-items: flex-start;
-  padding: 16px 18px;
-  background: var(--card);
+  text-align: left;
+  padding: 15px 17px;
+  background: var(--surface);
   border: 1.5px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-s);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: border-color 0.2s var(--ease-out), background 0.2s var(--ease-out),
+    transform 0.2s var(--ease-out);
 }
 
-.type-option:hover {
-  border-color: #99f6e4;
+.type-option:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.type-option:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 .type-option.active {
   border-color: var(--primary);
-  background: var(--primary-softer);
+  background: var(--primary-soft);
+}
+
+.type-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .radio {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2px solid var(--border);
+  border: 1.5px solid var(--border-strong);
   display: grid;
   place-items: center;
   margin-top: 2px;
   flex-shrink: 0;
-  transition: all 0.15s ease;
+  transition: all 0.2s var(--ease-out);
 }
 
 .radio.on {
@@ -77,25 +90,36 @@ const types = [
 }
 
 .radio-dot {
-  width: 9px;
-  height: 9px;
+  width: 0;
+  height: 0;
   border-radius: 50%;
   background: var(--primary);
+  transition: all 0.2s var(--ease-out);
 }
 
-.type-body {
+.radio.on .radio-dot {
+  width: 8px;
+  height: 8px;
+}
+
+.type-text {
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
 
 .type-label {
+  font-size: 14.5px;
   font-weight: 700;
-  font-size: 15px;
+  color: var(--text);
+}
+
+.type-option.active .type-label {
+  color: var(--primary-ink);
 }
 
 .type-hint {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text-soft);
   line-height: 1.5;
 }

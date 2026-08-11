@@ -11,23 +11,41 @@ defineEmits(['reset'])
 </script>
 
 <template>
-  <div v-if="status === 'done'" class="result-panel done">
-    <div class="result-icon">✅</div>
-    <div class="result-title">处理完成！</div>
-    <div class="result-sub">{{ filename || '已生成表格' }}</div>
-    <div class="result-actions">
+  <div v-if="status === 'done'" class="result-panel" :class="status">
+    <span class="rp-icon">
+      <svg viewBox="0 0 40 40" width="40" height="40" fill="none" aria-hidden="true">
+        <circle cx="20" cy="20" r="19" fill="var(--primary-soft)" />
+        <path d="M13 20.5l4.8 4.5L27.5 15" stroke="var(--primary-strong)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </span>
+    <div class="rp-text">
+      <h3 class="rp-title">处理完成</h3>
+      <p class="rp-sub" :title="filename">{{ filename || '表格已生成' }}</p>
+    </div>
+    <div class="rp-actions">
       <a class="btn primary" :href="downloadUrl(taskId)" :download="filename">
-        下载 {{ filename || 'Excel 表格' }}
+        <svg viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true">
+          <path d="M10 3v9m0 0l-3.5-3.5M10 12l3.5-3.5M4.5 15.5h11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        下载表格
       </a>
-      <button class="btn ghost" type="button" @click="$emit('reset')">再做一个</button>
+      <button class="btn ghost" type="button" @click="$emit('reset')">继续处理</button>
     </div>
   </div>
 
-  <div v-else-if="status === 'error'" class="result-panel error">
-    <div class="result-icon">⚠️</div>
-    <div class="result-title">处理失败</div>
-    <div class="result-sub">{{ error }}</div>
-    <div class="result-actions">
+  <div v-else-if="status === 'error'" class="result-panel" :class="status">
+    <span class="rp-icon">
+      <svg viewBox="0 0 40 40" width="40" height="40" fill="none" aria-hidden="true">
+        <circle cx="20" cy="20" r="19" fill="var(--danger-soft)" />
+        <path d="M20 12v9" stroke="var(--danger)" stroke-width="3" stroke-linecap="round" />
+        <circle cx="20" cy="26" r="1.8" fill="var(--danger)" />
+      </svg>
+    </span>
+    <div class="rp-text">
+      <h3 class="rp-title">处理失败</h3>
+      <p class="rp-sub">{{ error }}</p>
+    </div>
+    <div class="rp-actions">
       <button class="btn ghost" type="button" @click="$emit('reset')">返回重试</button>
     </div>
   </div>
@@ -35,64 +53,92 @@ defineEmits(['reset'])
 
 <style scoped>
 .result-panel {
-  background: var(--card);
-  border: 1.5px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 22px 24px;
   border-radius: var(--radius);
-  padding: 28px 24px;
-  text-align: center;
-  box-shadow: var(--shadow-sm);
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  animation: fade 0.35s var(--ease-out);
 }
 
 .result-panel.done {
-  border-color: #99f6e4;
+  border-color: var(--primary);
+  background: linear-gradient(180deg, var(--primary-soft), var(--surface) 56%);
 }
 
 .result-panel.error {
-  border-color: #fecaca;
+  border-color: rgba(194, 65, 60, 0.4);
+  background: linear-gradient(180deg, var(--danger-soft), var(--surface) 56%);
 }
 
-.result-icon {
-  font-size: 40px;
-  line-height: 1;
-  margin-bottom: 12px;
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.result-title {
-  font-size: 18px;
+.rp-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+
+.rp-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.rp-title {
+  margin: 0;
+  font-size: 16px;
   font-weight: 800;
 }
 
-.result-sub {
-  margin-top: 6px;
-  font-size: 13px;
+.rp-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
   color: var(--text-soft);
   word-break: break-all;
 }
 
-.result-actions {
-  margin-top: 20px;
+.rp-actions {
   display: flex;
-  justify-content: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .btn {
-  border: none;
-  border-radius: 10px;
-  padding: 11px 22px;
-  font-size: 14px;
-  font-weight: 700;
-  text-decoration: none;
   display: inline-flex;
   align-items: center;
-  transition: all 0.15s ease;
+  gap: 8px;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 0.16s var(--ease-out), background 0.16s var(--ease-out),
+    box-shadow 0.16s var(--ease-out);
+}
+
+.btn:active {
+  transform: scale(0.97);
 }
 
 .btn.primary {
   background: var(--primary);
   color: #fff;
-  box-shadow: 0 6px 16px -6px rgba(15, 118, 110, 0.5);
+  box-shadow: 0 8px 18px -8px rgba(13, 138, 122, 0.55);
 }
 
 .btn.primary:hover {
@@ -100,11 +146,24 @@ defineEmits(['reset'])
 }
 
 .btn.ghost {
-  background: #f1f5f9;
-  color: var(--text);
+  background: var(--surface);
+  color: var(--text-soft);
+  border: 1.5px solid var(--border);
 }
 
 .btn.ghost:hover {
-  background: #e2e8f0;
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 640px) {
+  .rp-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .btn {
+    flex: 1;
+    justify-content: center;
+  }
 }
 </style>
