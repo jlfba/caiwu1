@@ -28,11 +28,15 @@ _XLSX_MEDIA = ('application/vnd.openxmlformats-officedocument.'
 @app.post('/api/tasks')
 async def create_task(files: list[UploadFile] = File(...),
                       mode: str = Form(...),
-                      inv_type: str = Form('1')):
+                      inv_type: str = Form('1'),
+                      layout: str = Form('v'),
+                      start_cell: str = Form('A1')):
     if mode not in ('1', '2'):
         return JSONResponse({'detail': 'mode 无效，应为 1 或 2'}, status_code=400)
     if mode == '2' and inv_type not in ('1', '2'):
         return JSONResponse({'detail': 'inv_type 无效，应为 1 或 2'}, status_code=400)
+    if layout not in ('v', 'h'):
+        return JSONResponse({'detail': 'layout 无效，应为 v 或 h'}, status_code=400)
     if not files:
         return JSONResponse({'detail': '未上传任何文件'}, status_code=400)
 
@@ -43,7 +47,7 @@ async def create_task(files: list[UploadFile] = File(...),
                                 status_code=400)
         pdfs.append((f.filename or 'file.pdf', await f.read()))
 
-    task_id = tasks.create_task(pdfs, mode, inv_type)
+    task_id = tasks.create_task(pdfs, mode, inv_type, layout, start_cell)
     return {'task_id': task_id, 'files': len(pdfs)}
 
 

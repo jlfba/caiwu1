@@ -10,6 +10,8 @@ import { createTask, getTask } from './api'
 const mode = ref('')
 const invType = ref('1')
 const files = ref([])
+const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
+const startCell = ref('A1') // 收款组起始格
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -45,7 +47,13 @@ const currentStep = computed(() => {
 })
 
 const submitting = computed(() => status.value === 'processing')
-const canSubmit = computed(() => files.value.length > 0 && !submitting.value)
+const startCellValid = computed(() => /^[A-Za-z]{1,3}\d{1,7}$/.test(startCell.value))
+const canSubmit = computed(
+  () =>
+    files.value.length > 0 &&
+    !submitting.value &&
+    (mode.value !== '1' || startCellValid.value)
+)
 
 // 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
 watch(mode, (val, old) => {
@@ -101,7 +109,9 @@ async function submit() {
     const data = await createTask({
       files: files.value,
       mode: mode.value,
-      invType: invType.value
+      invType: invType.value,
+      layout: mode.value === '1' ? layoutDir.value : 'v',
+      startCell: mode.value === '1' ? startCell.value : 'A1'
     })
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
@@ -215,6 +225,42 @@ onUnmounted(stopPolling)
       <div class="step-body">
         <h2 class="step-title">上传 PDF 文件</h2>
         <p class="step-sub">支持多选，一次拖入全部发票</p>
+
+        <div v-if="mode === '1'" class="layout-options">
+          <div class="lo-field">
+            <span class="lo-label">排版方向</span>
+            <div class="seg" role="radiogroup" aria-label="排版方向">
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ on: layoutDir === 'v' }"
+                @click="layoutDir = 'v'"
+              >纵向</button>
+              <button
+                type="button"
+                class="seg-btn"
+                :class="{ on: layoutDir === 'h' }"
+                @click="layoutDir = 'h'"
+              >横向</button>
+            </div>
+          </div>
+          <div class="lo-field">
+            <label class="lo-label" for="start-cell">起始位置</label>
+            <input
+              id="start-cell"
+              v-model="startCell"
+              class="cell-input"
+              :class="{ invalid: !startCellValid }"
+              spellcheck="false"
+            />
+            <span v-if="!startCellValid" class="lo-error">请输入如 A1、C5 的格位置</span>
+          </div>
+          <p class="lo-hint">
+            <template v-if="layoutDir === 'v'">纵向：图片沿列向下排，字段标在图片右侧</template>
+            <template v-else>横向：图片沿行向右排，字段标在图片下方</template>
+          </p>
+        </div>
+
         <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
@@ -451,6 +497,95 @@ onUnmounted(stopPolling)
   align-items: center;
   gap: 18px;
   flex-wrap: wrap;
+}
+
+.layout-options {
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+
+.lo-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lo-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.seg-btn {
+  border: none;
+  background: transparent;
+  padding: 6px 18px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 0.16s var(--ease-out), color 0.16s var(--ease-out);
+}
+
+.seg-btn:hover {
+  color: var(--text);
+}
+
+.seg-btn.on {
+  background: var(--primary);
+  color: #fff;
+}
+
+.cell-input {
+  width: 86px;
+  padding: 7px 12px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 700;
+  background: var(--surface);
+  text-transform: uppercase;
+  outline: none;
+  transition: border-color 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
+}
+
+.cell-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.cell-input.invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+
+.lo-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.lo-hint {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-faint);
 }
 
 .btn-make {

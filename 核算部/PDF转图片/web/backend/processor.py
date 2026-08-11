@@ -29,17 +29,24 @@ def _blank_workbook(path):
     wb.save(path)
 
 
-def process_mode1(pdf_paths, out_dir, progress=None):
+def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'):
     """收款组：PDF 转图片 + OCR 识别重命名 + 生成含图 Excel。
 
     pdf_paths: 已保存到磁盘的 PDF 绝对路径列表。
     out_dir:   本任务输出目录。
     progress(current, total, message): 进度回调。
+    layout:    图片排版方向 'v' 纵向（沿列向下）| 'h' 横向（沿行向右）。
+    start_cell: 第一张图的起始单元格（如 A1 / C5）。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
         if progress:
             progress(cur, tot, msg)
+
+    if layout not in ('v', 'h'):
+        layout = 'v'
+    if tool.parse_cell(start_cell) is None:
+        raise ValueError('无效的起始格位置：%s' % start_cell)
 
     img_dir = os.path.join(out_dir, 'images')
     os.makedirs(img_dir, exist_ok=True)
@@ -89,7 +96,8 @@ def process_mode1(pdf_paths, out_dir, progress=None):
     report(total_units, total_units, '正在生成 Excel…')
     xlsx_path = os.path.join(out_dir, '发票图片表.xlsx')
     _blank_workbook(xlsx_path)
-    tool.images_into_excel(xlsx_path, images, direction='v')
+    tool.images_into_excel(xlsx_path, images,
+                           start_cell=start_cell.upper(), direction=layout)
     return xlsx_path
 
 

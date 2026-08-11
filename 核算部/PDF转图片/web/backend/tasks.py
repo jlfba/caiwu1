@@ -23,7 +23,7 @@ def _make_task_id():
     return uuid.uuid4().hex[:12]
 
 
-def create_task(pdf_files, mode, inv_type):
+def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1'):
     """创建后台任务。pdf_files: [(原始文件名, bytes), ...]。返回 task_id。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
@@ -57,7 +57,7 @@ def create_task(pdf_files, mode, inv_type):
     }
     with _LOCK:
         _TASKS[task_id] = task
-    _QUEUE.put((task_id, saved, mode, inv_type))
+    _QUEUE.put((task_id, saved, mode, inv_type, layout, start_cell))
     return task_id
 
 
@@ -80,7 +80,7 @@ def download_path(task_id):
 def _worker():
     """单 worker：FIFO 串行处理，进度写回任务表。"""
     while True:
-        task_id, pdfs, mode, inv_type = _QUEUE.get()
+        task_id, pdfs, mode, inv_type, layout, start_cell = _QUEUE.get()
         task = _TASKS.get(task_id)
         if task is None:
             continue
@@ -94,7 +94,8 @@ def _worker():
 
         try:
             if mode == '1':
-                result = processor.process_mode1(pdfs, task['out_dir'], progress)
+                result = processor.process_mode1(pdfs, task['out_dir'], progress,
+                                                 layout=layout, start_cell=start_cell)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = os.path.basename(result)
