@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import UploadArea from './components/UploadArea.vue'
@@ -46,6 +46,14 @@ const currentStep = computed(() => {
 
 const submitting = computed(() => status.value === 'processing')
 const canSubmit = computed(() => files.value.length > 0 && !submitting.value)
+
+// 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
+watch(mode, (val, old) => {
+  if (val !== old && !submitting.value) files.value = []
+})
+watch(invType, (val, old) => {
+  if (val !== old && !submitting.value) files.value = []
+})
 
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
