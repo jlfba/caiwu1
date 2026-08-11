@@ -1,23 +1,30 @@
-# PDF 工具网页版
+# 财务内部在线工具网页版
 
 在浏览器里操作 PDF 发票：批量上传 → 选择模式 → 制作 → 直接下载 Excel。
 
 ## 快速开始
 
+**日常使用（推荐，一条命令）**——前端已构建，页面和接口都在 8000 端口：
+
 ```bash
-# 1. 构建前端（改过前端才需要重跑）
-cd web/frontend
-npm install
-npm run build
-
-# 2. 启动后端（页面 + 接口一起提供）
-cd web/backend
-python run.py
-# 默认 0.0.0.0:8000；内网其他电脑访问 http://<本机IP>:8000
-
-# 3. 浏览器打开
-http://127.0.0.1:8000
+cd web
+python backend/run.py
+# 或用脚本：双击 web/start.bat
 ```
+
+浏览器打开 `http://127.0.0.1:8000` 即可，**不需要 npm**。
+
+**开发前端（要热更新）**——运行 `web/dev.bat`（自动开两个窗口），或手动：
+
+```bash
+# 终端1：后端
+cd web/backend && python run.py
+# 终端2：前端（vite 代理 /api → 8000，改代码自动刷新）
+cd web/frontend && npm run dev   # 打开 http://127.0.0.1:5173
+```
+
+> `npm run dev` 必须在 `web/frontend/` 目录下执行（package.json 在那里）。
+> 改完前端要发布时：`cd web/frontend && npm run build`，之后 `python backend/run.py` 就直接提供新版页面。
 
 ## 功能
 
