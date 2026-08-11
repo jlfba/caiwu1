@@ -4,5 +4,6 @@ frontend/dist/
 
 # 后端临时任务目录与缓存
 backend/.tmp/
+backend/.tmp_*
 __pycache__/
 *.pyc

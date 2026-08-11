@@ -23,8 +23,10 @@ def _make_task_id():
     return uuid.uuid4().hex[:12]
 
 
-def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1'):
-    """创建后台任务。pdf_files: [(原始文件名, bytes), ...]。返回 task_id。"""
+def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
+                template=None, sheet_name=''):
+    """创建后台任务。pdf_files: [(原始文件名, bytes), ...]；template: (原始文件名, bytes) 或 None。
+    返回 task_id。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
     in_dir = os.path.join(task_dir, 'in')
@@ -43,6 +45,16 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1'):
             f.write(data)
         saved.append(path)
 
+    # 保存可选表格模板
+    template_path = None
+    if template:
+        tname = processor.sanitize_filename(template[0])
+        if not tname.lower().endswith(('.xlsx', '.xlsm')):
+            tname += '.xlsx'
+        template_path = os.path.join(in_dir, 'template_' + tname)
+        with open(template_path, 'wb') as f:
+            f.write(template[1])
+
     task = {
         'id': task_id,
         'dir': task_dir,
@@ -57,7 +69,8 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1'):
     }
     with _LOCK:
         _TASKS[task_id] = task
-    _QUEUE.put((task_id, saved, mode, inv_type, layout, start_cell))
+    _QUEUE.put((task_id, saved, mode, inv_type, layout, start_cell,
+                template_path, sheet_name))
     return task_id
 
 
@@ -80,7 +93,7 @@ def download_path(task_id):
 def _worker():
     """单 worker：FIFO 串行处理，进度写回任务表。"""
     while True:
-        task_id, pdfs, mode, inv_type, layout, start_cell = _QUEUE.get()
+        task_id, pdfs, mode, inv_type, layout, start_cell, template_path, sheet_name = _QUEUE.get()
         task = _TASKS.get(task_id)
         if task is None:
             continue
@@ -94,8 +107,10 @@ def _worker():
 
         try:
             if mode == '1':
-                result = processor.process_mode1(pdfs, task['out_dir'], progress,
-                                                 layout=layout, start_cell=start_cell)
+                result = processor.process_mode1(
+                    pdfs, task['out_dir'], progress,
+                    layout=layout, start_cell=start_cell,
+                    template_path=template_path, sheet_name=sheet_name)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = os.path.basename(result)

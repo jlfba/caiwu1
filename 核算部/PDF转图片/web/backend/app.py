@@ -8,6 +8,8 @@
 """
 import os
 import sys
+import tempfile
+import uuid
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,12 +27,39 @@ _XLSX_MEDIA = ('application/vnd.openxmlformats-officedocument.'
                'spreadsheetml.sheet')
 
 
+@app.post('/api/worksheets')
+async def read_worksheets(template: UploadFile = File(...)):
+    """读取上传表格的工作表列表，供前端选工作表用。返回 {sheets: [...]}。"""
+    if not (template.filename or '').lower().endswith(('.xlsx', '.xlsm')):
+        return JSONResponse({'detail': '仅支持 .xlsx / .xlsm 表格：%s' % template.filename},
+                            status_code=400)
+    data = await template.read()
+    tmp = os.path.join(tempfile.gettempdir(), 'ws_%s.xlsx' % uuid.uuid4().hex[:8])
+    with open(tmp, 'wb') as f:
+        f.write(data)
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(tmp, read_only=True)
+        sheets = wb.sheetnames
+        wb.close()
+    except Exception as e:
+        return JSONResponse({'detail': '无法读取表格：%s' % e}, status_code=400)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return {'sheets': sheets}
+
+
 @app.post('/api/tasks')
 async def create_task(files: list[UploadFile] = File(...),
                       mode: str = Form(...),
                       inv_type: str = Form('1'),
                       layout: str = Form('v'),
-                      start_cell: str = Form('A1')):
+                      start_cell: str = Form('A1'),
+                      template: UploadFile = File(None),
+                      sheet_name: str = Form('')):
     if mode not in ('1', '2'):
         return JSONResponse({'detail': 'mode 无效，应为 1 或 2'}, status_code=400)
     if mode == '2' and inv_type not in ('1', '2'):
@@ -39,6 +68,8 @@ async def create_task(files: list[UploadFile] = File(...),
         return JSONResponse({'detail': 'layout 无效，应为 v 或 h'}, status_code=400)
     if not files:
         return JSONResponse({'detail': '未上传任何文件'}, status_code=400)
+    if template and not (template.filename or '').lower().endswith(('.xlsx', '.xlsm')):
+        return JSONResponse({'detail': '表格模板仅支持 .xlsx / .xlsm'}, status_code=400)
 
     pdfs = []
     for f in files:
@@ -47,7 +78,12 @@ async def create_task(files: list[UploadFile] = File(...),
                                 status_code=400)
         pdfs.append((f.filename or 'file.pdf', await f.read()))
 
-    task_id = tasks.create_task(pdfs, mode, inv_type, layout, start_cell)
+    tpl = None
+    if template:
+        tpl = (template.filename or 'template.xlsx', await template.read())
+
+    task_id = tasks.create_task(pdfs, mode, inv_type, layout, start_cell,
+                                template=tpl, sheet_name=sheet_name.strip())
     return {'task_id': task_id, 'files': len(pdfs)}
 
 

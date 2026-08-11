@@ -3,15 +3,20 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import UploadArea from './components/UploadArea.vue'
+import TemplateUpload from './components/TemplateUpload.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ResultPanel from './components/ResultPanel.vue'
-import { createTask, getTask } from './api'
+import { createTask, getTask, getWorksheets } from './api'
 
 const mode = ref('')
 const invType = ref('1')
 const files = ref([])
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
 const startCell = ref('A1') // 收款组起始格
+const templateFile = ref(null) // 收款组可选表格模板
+const sheets = ref([]) // 模板的工作表列表
+const selectedSheet = ref('') // 选中的工作表
+const sheetError = ref('')
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -52,12 +57,16 @@ const canSubmit = computed(
   () =>
     files.value.length > 0 &&
     !submitting.value &&
-    (mode.value !== '1' || startCellValid.value)
+    (mode.value !== '1' || startCellValid.value) &&
+    (mode.value !== '1' || !templateFile.value || selectedSheet.value)
 )
 
 // 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
 watch(mode, (val, old) => {
-  if (val !== old && !submitting.value) files.value = []
+  if (val !== old && !submitting.value) {
+    files.value = []
+    clearTemplate()
+  }
 })
 watch(invType, (val, old) => {
   if (val !== old && !submitting.value) files.value = []
@@ -89,6 +98,27 @@ function clearFiles() {
   files.value = []
 }
 
+function clearTemplate() {
+  templateFile.value = null
+  sheets.value = []
+  selectedSheet.value = ''
+  sheetError.value = ''
+}
+
+async function onTemplateSelected(file) {
+  templateFile.value = file
+  sheets.value = []
+  selectedSheet.value = ''
+  sheetError.value = ''
+  try {
+    const list = await getWorksheets(file)
+    sheets.value = list
+    selectedSheet.value = list[0] || ''
+  } catch (e) {
+    sheetError.value = e.message
+  }
+}
+
 function stopPolling() {
   if (pollTimer) {
     clearInterval(pollTimer)
@@ -111,7 +141,9 @@ async function submit() {
       mode: mode.value,
       invType: invType.value,
       layout: mode.value === '1' ? layoutDir.value : 'v',
-      startCell: mode.value === '1' ? startCell.value : 'A1'
+      startCell: mode.value === '1' ? startCell.value : 'A1',
+      template: mode.value === '1' ? templateFile.value : null,
+      sheetName: mode.value === '1' ? selectedSheet.value : ''
     })
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
@@ -158,6 +190,7 @@ function reset() {
   filename.value = ''
   error.value = ''
   files.value = []
+  clearTemplate()
 }
 
 onUnmounted(stopPolling)
@@ -279,6 +312,33 @@ onUnmounted(stopPolling)
             >✕</button>
           </div>
         </UploadArea>
+
+        <div v-if="mode === '1'" class="template-section">
+          <div class="ts-head">
+            <span class="ts-label">插入已有表格（可选）</span>
+            <span class="ts-tip">不传模板则自动生成新表格</span>
+          </div>
+          <TemplateUpload
+            :disabled="submitting"
+            @selected="onTemplateSelected"
+            @cleared="clearTemplate"
+          />
+          <div v-if="templateFile && !sheetError" class="sheet-pick">
+            <span class="lo-label">选择工作表</span>
+            <div class="sheet-btns" role="radiogroup" aria-label="选择工作表">
+              <button
+                v-for="s in sheets"
+                :key="s"
+                type="button"
+                class="sheet-btn"
+                :class="{ on: selectedSheet === s }"
+                :disabled="submitting"
+                @click="selectedSheet = s"
+              >{{ s }}</button>
+            </div>
+          </div>
+          <p v-if="sheetError" class="lo-error">{{ sheetError }}</p>
+        </div>
       </div>
     </section>
 
@@ -586,6 +646,77 @@ onUnmounted(stopPolling)
   margin: 0;
   font-size: 12px;
   color: var(--text-faint);
+}
+
+.template-section {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.ts-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ts-label {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+}
+
+.ts-tip {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.sheet-pick {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.sheet-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sheet-btn {
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 9px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-soft);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: all 0.16s var(--ease-out);
+}
+
+.sheet-btn:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--primary-ink);
+}
+
+.sheet-btn.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.sheet-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-make {

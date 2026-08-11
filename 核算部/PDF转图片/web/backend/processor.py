@@ -5,6 +5,7 @@
 后续对控制台版逻辑的修改会自动同步到网页版。
 """
 import os
+import shutil
 import sys
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
@@ -29,7 +30,8 @@ def _blank_workbook(path):
     wb.save(path)
 
 
-def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'):
+def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1',
+                  template_path=None, sheet_name=''):
     """收款组：PDF 转图片 + OCR 识别重命名 + 生成含图 Excel。
 
     pdf_paths: 已保存到磁盘的 PDF 绝对路径列表。
@@ -37,6 +39,8 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
     progress(current, total, message): 进度回调。
     layout:    图片排版方向 'v' 纵向（沿列向下）| 'h' 横向（沿行向右）。
     start_cell: 第一张图的起始单元格（如 A1 / C5）。
+    template_path: 可选的已有表格模板（.xlsx/.xlsm），图片插入到其中；不传则自动新建表格。
+    sheet_name:   插入到模板的哪个工作表（空则用活动工作表）。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
@@ -94,11 +98,19 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
 
     # ---- 生成含图 Excel ----
     report(total_units, total_units, '正在生成 Excel…')
-    xlsx_path = os.path.join(out_dir, '发票图片表.xlsx')
-    _blank_workbook(xlsx_path)
-    tool.images_into_excel(xlsx_path, images,
-                           start_cell=start_cell.upper(), direction=layout)
-    return xlsx_path
+    if template_path and os.path.isfile(template_path):
+        # 插入到用户上传的模板（复制一份到输出目录，不破坏原始上传）
+        out = os.path.join(out_dir, os.path.basename(template_path))
+        shutil.copy2(template_path, out)
+        tool.images_into_excel(out, images, sheet_name=sheet_name or None,
+                               start_cell=start_cell.upper(), direction=layout)
+    else:
+        # 未传模板：自动新建表格
+        out = os.path.join(out_dir, '发票图片表.xlsx')
+        _blank_workbook(out)
+        tool.images_into_excel(out, images,
+                               start_cell=start_cell.upper(), direction=layout)
+    return out
 
 
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
