@@ -700,10 +700,13 @@ def to_number(s):
     return s
 
 
-def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, widths=None):
+def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, widths=None, text_cols=None, zero_pad_cols=None):
     """将发票明细写入 Excel，并开启筛选、冻结和换行。
     headers：输出表头；numeric_cols：转成纯数字的列序号（可转的才转）；
-    widths：各列宽。缺省按 canexs 明细表（发票号/QTY/RATE/AMOUNT 转数字）。
+    widths：各列宽；text_cols：强制按文本写入并设文本格式的列序号；
+    zero_pad_cols：转成数字 + 自定义格式补前导 0 的列序号（如发票号 0098726 →
+    存数字 98726、格式 0000000，显示仍是 0098726，且不会出现"数字以文本存储"的绿三角）。
+    缺省按 canexs 明细表（发票号/QTY/RATE/AMOUNT 转数字）。
     """
     if not OPENPYXL_OK:
         raise RuntimeError('未安装 openpyxl，无法写入 Excel。请运行：pip install openpyxl')
@@ -715,6 +718,10 @@ def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, width
         numeric_cols = {0, 5, 6, 7}
     if widths is None:
         widths = [18, 24, 28, 45, 25, 12, 14, 16]
+    if text_cols is None:
+        text_cols = set()
+    if zero_pad_cols is None:
+        zero_pad_cols = set()
     wb = load_workbook(output_path) if os.path.exists(output_path) else None
     if wb is None:
         from openpyxl import Workbook
@@ -727,8 +734,28 @@ def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, width
         cell.font = Font(bold=True, color='FFFFFF')
         cell.fill = PatternFill(start_color='113584', end_color='113584', fill_type='solid')
         cell.alignment = Alignment(horizontal='center', vertical='center')
+    # 零填充列的最长位数（按原始文本长度，保证显示既不缺也不多补 0）
+    pad_lens = {}
+    for i in zero_pad_cols:
+        lens = [len(str(row[i])) for row in rows if row[i] not in (None, '')]
+        pad_lens[i] = max(lens) if lens else 0
+    numeric_set = numeric_cols | zero_pad_cols
     for row in rows:
-        ws.append([to_number(v) if i in numeric_cols else v for i, v in enumerate(row)])
+        ws.append([to_number(v) if i in numeric_set else v for i, v in enumerate(row)])
+    # 文本列：显式设文本格式，值若被转成数字也还原为字符串（保住前导 0）
+    for i in text_cols:
+        for cell in ws[get_column_letter(i + 1)][1:]:
+            if isinstance(cell.value, (int, float)):
+                cell.value = str(cell.value)
+            cell.number_format = '@'
+    # 零填充数字列：真实值是数字，自定义格式补前导 0（无绿三角，显示仍带 0）
+    for i in zero_pad_cols:
+        n = pad_lens.get(i, 0)
+        if n <= 0:
+            continue
+        for cell in ws[get_column_letter(i + 1)][1:]:
+            if isinstance(cell.value, (int, float)):
+                cell.number_format = '0' * n
     for i, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
     for row in ws.iter_rows(min_row=2):
@@ -883,7 +910,7 @@ def jingzhun_mode(pdf_paths):
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=JINGZHUN_OUTPUT_HEADERS,
-                       numeric_cols={4}, widths=[16, 26, 18, 50, 16])
+                       numeric_cols={4}, zero_pad_cols={0}, widths=[16, 26, 18, 50, 16])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
