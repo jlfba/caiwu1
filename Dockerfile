@@ -40,6 +40,6 @@ RUN mkdir -p backend/.tmp
 # PaddleOCR 运行时模型缓存目录
 ENV PADDLEOCR_HOME=/root/.paddleocr
 
-EXPOSE 8000
+EXPOSE 15618
 
 CMD ["python", "backend/run.py"]
