@@ -14,5 +14,7 @@ openpyxl==3.1.5
 Pillow==11.3.0
 
 # OCR 识别发票（扫描件需要）
-paddleocr==3.4.0
-paddlepaddle==3.3.0
+# 用 rapidocr_onnxruntime 替代 paddleocr/paddlepaddle：
+# - PaddlePaddle 官方 wheel 要求 AVX 指令集，在无 AVX CPU（如 Pentium Gold）上必崩（SIGILL）
+# - rapidocr 跑同一套 PP-OCRv4 ONNX 模型（wheel 内置，无需下载），onnxruntime 支持 SSE4.2 老 CPU
+rapidocr_onnxruntime==1.4.4

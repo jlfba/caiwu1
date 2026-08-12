@@ -5,7 +5,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
 功能（顶层选择）：
 1. 功能：PDF 转图片 + 发票识别
    - 支持一次拖入多个 PDF（用 " " 分隔），逐页渲染为 PNG。
-   - 用 PaddleOCR 识别每页发票的四个字段：
+   - 用 OCR（RapidOCR，PP-OCRv4 模型）识别每页发票的四个字段：
      发票号码（右上角）、购买方名称、销售方名称、金额（小写）。
    - 图片按 发票号码_购买方_销售方_金额.png 重新命名。
    - 再选择：1 直接保存到文件夹；2 拖入 Excel 表格，选工作表、起始单元格、方向后批量插入。
@@ -13,7 +13,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
 2. 发票明细识别并转 Excel（v2.0.0 新增）
    - 从英文发票 PDF 中识别 INVOICE 号码（右侧）、TRACKING NO.（下一行）
      和 DATE / DESCRIPTION / TAX / QTY / RATE / AMOUNT 明细行。
-   - 有文字层的 PDF 用 PyMuPDF 原生坐标，扫描件自动回退 PaddleOCR。
+   - 有文字层的 PDF 用 PyMuPDF 原生坐标，扫描件自动回退 OCR（RapidOCR）。
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
@@ -296,46 +296,36 @@ _ocr = None
 
 
 def get_ocr():
-    """惰性初始化 PaddleOCR（全局单例，避免重复加载模型）。"""
+    """惰性初始化 OCR（全局单例，避免重复加载模型）。
+
+    用 RapidOCR（onnxruntime）替代 PaddleOCR：
+    - PaddlePaddle 官方 wheel 要求 AVX 指令集，在无 AVX 的 CPU（如 Pentium）上必崩（SIGILL）
+    - RapidOCR 跑同一套 PP-OCRv4 ONNX 模型（wheel 内置，无需下载），onnxruntime 支持 SSE4.2 老 CPU
+    """
     global _ocr
     if _ocr is None:
-        from paddleocr import PaddleOCR
-        # enable_mkldnn=False 避免 PaddlePaddle 3.3.0 oneDNN CPU 兼容性报错
-        # 用 PP-OCRv4 mobile 模型：发票固定版式，速度快、CPU 友好
-        _ocr = PaddleOCR(ocr_version='PP-OCRv4', lang='ch',
-                         use_doc_orientation_classify=False,
-                         use_doc_unwarping=False,
-                         use_textline_orientation=False,
-                         enable_mkldnn=False)
+        from rapidocr_onnxruntime import RapidOCR
+        _ocr = RapidOCR()
     return _ocr
 
 
 def ocr_lines(image_path):
     """对图片做 OCR，返回带坐标的文本条目列表。
     每条为 dict：{text, cx, cy, w, h, aspect}。
-    box 可能是 4 元素（[x1,y1,x2,y2]）或 8 元素（四点）。
+    RapidOCR 返回 result = [[box(4x2), text, score], ...]，box 是四点坐标。
     """
-    res = get_ocr().predict(image_path)[0]
-    texts = res['rec_texts']
-    boxes = res['rec_boxes']
-
-    def bbox(b):
-        b = b.tolist()
-        if len(b) >= 6:
-            xs = b[0::2]
-            ys = b[1::2]
-        else:
-            xs, ys = b[0:2], b[2:4]
-        x1, x2 = min(xs), max(xs)
-        y1, y2 = min(ys), max(ys)
-        return x1, y1, x2, y2
-
+    result, _ = get_ocr()(image_path)
     items = []
-    for text, box in zip(texts, boxes):
+    if not result:
+        return items
+    for box, text, _score in result:
         text = text.strip()
         if not text:
             continue
-        x1, y1, x2, y2 = bbox(box)
+        xs = [float(p[0]) for p in box]
+        ys = [float(p[1]) for p in box]
+        x1, x2 = min(xs), max(xs)
+        y1, y2 = min(ys), max(ys)
         w, h = x2 - x1, y2 - y1
         items.append({'text': text,
                       'cx': (x1 + x2) / 2,
@@ -396,9 +386,10 @@ def extract_invoice_fields(image_path):
     # 3. 金额（小写）
     for it in items:
         if '小写' in it['text']:
-            m = re.search(r'(?:¥\s*)?([\d,]+\.\d{1,2})', it['text'])
+            # 兼容 OCR 可能输出的中文全角逗号（，）与英文半角逗号（,）
+            m = re.search(r'(?:¥\s*)?([\d,，]+\.\d{1,2})', it['text'])
             if m:
-                fields['amount'] = m.group(1).replace(',', '')
+                fields['amount'] = m.group(1).replace(',', '').replace('，', '')
             break
 
     return fields

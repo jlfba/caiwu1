@@ -14,8 +14,8 @@ RUN npm run build
 FROM python:3.11-slim
 
 # 系统依赖：
-# - libgomp1     PaddlePaddle CPU 需要 OpenMP 运行时
-# - libgl1       OpenCV（PaddleOCR 依赖）需要 libGL.so.1
+# - libgomp1     onnxruntime/OpenMP 运行时
+# - libgl1       OpenCV（rapidocr 依赖）需要 libGL.so.1
 # - libglib2.0-0 OpenCV 常用依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
@@ -41,9 +41,6 @@ COPY --from=frontend-build /build/dist frontend/dist/
 
 # 创建后端临时目录
 RUN mkdir -p backend/.tmp
-
-# PaddleOCR 运行时模型缓存目录
-ENV PADDLEOCR_HOME=/root/.paddleocr
 
 EXPOSE 15618
 
