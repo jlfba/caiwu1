@@ -87,13 +87,23 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
         raise RuntimeError('没有成功转换的图片')
 
     # ---- OCR 识别四字段并重命名 ----
-    renamed = []
-    for i, img in enumerate(images, 1):
-        fields = tool.extract_invoice_fields(img)
-        new = tool.rename_with_fields(img, fields)
-        renamed.append(new)
-        report(total_pages + i, total_units,
-               '正在识别发票字段 %d/%d 张…' % (i, len(images)))
+    # 并行 OCR：RapidOCR 线程安全（实测可共用单例并发推理），
+    # 多线程并行处理多张图片，在 CPU 核数有限的服务器上显著降低总耗时。
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    tool.get_ocr()  # 预热单例，避免多线程首次初始化竞争
+    max_workers = max(1, min(4, (os.cpu_count() or 2) // 2))
+    renamed = [None] * len(images)
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {pool.submit(tool.extract_invoice_fields, img): i
+                      for i, img in enumerate(images)}
+        for fut in as_completed(future_map):
+            i = future_map[fut]
+            fields = fut.result()
+            renamed[i] = tool.rename_with_fields(images[i], fields)
+            done += 1
+            report(total_pages + done, total_units,
+                   '正在识别发票字段 %d/%d 张…' % (done, len(images)))
     images = renamed
 
     # ---- 生成含图 Excel ----
