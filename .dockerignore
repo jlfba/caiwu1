@@ -1,0 +1,25 @@
+# Git
+.git
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 前端构建产物（构建阶段重新生成）
+frontend/dist/
+
+# 后端临时任务目录与缓存
+backend/.tmp/
+backend/.tmp_*
+
+# 其他
+*.bat
+*.md
+测试.md
+绩效/
+生成销售数据脚本
+generate_sales_data.py
+generate_sales_data_v2.py
+excel_batch_processor.py
+tmp_script_test/

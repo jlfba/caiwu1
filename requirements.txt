@@ -1,0 +1,18 @@
+# 财务内部在线工具网页版
+# FastAPI + uvicorn 后端 + PDF发票识别
+fastapi
+uvicorn[standard]
+python-multipart
+
+# PDF 渲染
+pymupdf==1.26.5
+
+# Excel 读写
+openpyxl==3.1.5
+
+# 图片处理
+Pillow==11.3.0
+
+# OCR 识别发票（扫描件需要）
+paddleocr==3.4.0
+paddlepaddle==3.3.0
