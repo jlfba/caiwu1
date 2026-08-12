@@ -8,3 +8,6 @@ backend/.tmp_*
 __pycache__/
 *.pyc
 *.pyo
+
+# 根目录临时调试文件
+.tmp_*
