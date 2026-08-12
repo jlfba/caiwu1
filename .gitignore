@@ -1,3 +1,10 @@
+# 前端依赖与构建产物
+frontend/node_modules/
+frontend/dist/
+
+# 后端临时任务目录与缓存
+backend/.tmp/
+backend/.tmp_*
 __pycache__/
 *.pyc
 *.pyo
