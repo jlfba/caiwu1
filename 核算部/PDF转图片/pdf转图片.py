@@ -36,8 +36,9 @@ try:
 except ImportError:
     OPENPYXL_OK = False
 
-# 渲染分辨率（DPI）
-RENDER_DPI = 150
+# 渲染分辨率（DPI）：150 → 120，OCR 检测模型耗时随图片面积下降（约快 1.2 倍）
+# 发票四字段（号码/名称/金额）字号较大，120 DPI 仍可清晰识别；若个别发票小字识别失败可调回 150
+RENDER_DPI = 120
 
 CELL_RE = re.compile(r'^([A-Za-z]+)(\d+)$')
 
