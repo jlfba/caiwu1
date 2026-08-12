@@ -13,9 +13,14 @@ RUN npm run build
 # ============================================
 FROM python:3.11-slim
 
-# 系统依赖：PaddlePaddle CPU 需要 OpenMP 运行时
+# 系统依赖：
+# - libgomp1     PaddlePaddle CPU 需要 OpenMP 运行时
+# - libgl1       OpenCV（PaddleOCR 依赖）需要 libGL.so.1
+# - libglib2.0-0 OpenCV 常用依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
