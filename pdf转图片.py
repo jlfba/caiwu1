@@ -17,6 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费。
 
 使用：
     python pdf转图片.py
@@ -337,6 +338,38 @@ def ocr_lines(image_path):
     return items
 
 
+def _merge_vertical_headers(items, axis_tol=25.0, gap_tol=48.0):
+    """把同一 x 列、纵向相邻的 OCR 条目拼成一段竖排文字。
+
+    RapidOCR 会把竖排标题（如"购买方信息"）拆成多行（"购"/"买方信"），
+    拆出的片段仍是同一列、间隔一条字高。按列聚类拼回后，
+    供 extract_invoice_fields 的关键词匹配兜底使用。
+    返回 [{'cx','cy','text','aspect'}]，aspect 取竖排值便于优先命中。
+    """
+    cols = []
+    for it in items:
+        best = None
+        for c in cols:
+            if abs(it['cx'] - c['cx']) <= axis_tol \
+                    and abs(it['cy'] - c['cy_mean']) <= gap_tol:
+                best = c
+                break
+        if best is None:
+            best = {'cx': it['cx'], 'cy_mean': it['cy'], 'items': []}
+            cols.append(best)
+        best['items'].append(it)
+        n = len(best['items'])
+        best['cy_mean'] = (best['cy_mean'] * (n - 1) + it['cy']) / n
+    merged = []
+    for c in cols:
+        c['items'].sort(key=lambda x: x['cy'])
+        merged.append({'cx': c['cx'],
+                       'cy': c['cy_mean'],
+                       'text': ''.join(x['text'] for x in c['items']),
+                       'aspect': 0.5})
+    return merged
+
+
 def extract_invoice_fields(image_path):
     """识别发票四字段，返回 dict：no/buyer/seller/amount。失败字段用 '未知'。
     适配两种布局：
@@ -365,6 +398,10 @@ def extract_invoice_fields(image_path):
     def find_name(header_kw):
         # 找标题条目（含关键词，优先竖排 aspect<1）
         headers = [it for it in items if header_kw in it['text']]
+        if not headers:
+            # 竖排标题被 OCR 拆行时（如 购买方信息 → 购/买方信），同列片段拼回后重试
+            headers = [c for c in _merge_vertical_headers(items)
+                       if header_kw in c['text']]
         if not headers:
             return '未知'
         header = min(headers, key=lambda it: it['aspect'])  # 最竖的那条
@@ -428,6 +465,23 @@ DETAIL_OUTPUT_HEADERS = ('发票号', 'TRACKING NO.', 'DATE', 'DESCRIPTION',
 # Invoice Number / Master B/L No / Containers 三个字段值按 Description 行重复
 JINGZHUN_OUTPUT_HEADERS = ('发票号', 'Master B/L No', 'Containers',
                            'Description', 'Amount')
+
+# 创时亚马逊卡派发票输出列：Invoice Number / Reference 按明细行重复，
+# Description 列内容拆成两列——带 // 的行放 Description，其余行放 Description(1)
+CHUANGSHI_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                            'Description(1)', 'Quantity', 'Unit Price', 'Amount GBP')
+
+# 创时卡派发票输出列：不带 Description(1)，只有一个 Description 列
+CHUANGSHI_CAR_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                                'Quantity', 'Unit Price', 'Amount GBP')
+
+# 创时清关费发票输出列：同创时卡派，6 列无 Description(1)
+CHUANGSHI_CLEARANCE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                                      'Quantity', 'Unit Price', 'Amount GBP')
+
+# 创时附加费发票输出列：6 列无 Description(1)
+CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                                      'Quantity', 'Unit Price', 'Amount GBP')
 
 
 def _compact_text(text):
@@ -910,10 +964,336 @@ def jingzhun_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def _jz_reference(lines, header_cy, anchor, label_line):
+    """Reference 标签下方、表格表头之前的所有内容行，换行合并成一个单元格。"""
+    if anchor is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2
+             and ln['cy'] < header_cy - 2]
+    parts = [' '.join(w['text'] for w in ln['items']).strip() for ln in below]
+    parts = [p for p in parts if p]
+    return '\n'.join(parts) or '未知'
+
+
+def _desc_amazon(desc_lines):
+    """创时亚马逊卡派：带 // 的行放 Description 列，其余行放 Description(1) 列。"""
+    slash = [d for d in desc_lines if '//' in d]
+    other = [d for d in desc_lines if '//' not in d]
+    return '\n'.join(slash), '\n'.join(other)
+
+
+# 创时卡派：货物明细行特征（重量/尺寸、PLTS 卡板、占板位置），单独成行
+_GOODS_LINE_RE = re.compile(r'^\d+kg|^\d+\s*PLTS|^占\d')
+
+
+def _is_goods_line(s):
+    return bool(_GOODS_LINE_RE.search(s))
+
+
+def _desc_car(desc_lines):
+    """创时卡派：// 链（可能跨视觉行换行）去行断拼接后按 // 切分，每段一行；
+    货物明细行（kg/尺寸、PLTS、占板）单独一行；全部合进 Description 单元格。"""
+    lines = [d.strip() for d in desc_lines if d.strip()]
+    chain, goods = '', []
+    for j, line in enumerate(lines):
+        if '//' not in line and _is_goods_line(line):
+            goods = lines[j:]
+            break
+        chain += line  # 去行断拼接（G51+3EB→G513EB），保留行内空格
+    if '//' in chain:
+        parts = [p.strip() for p in chain.split('//') if p.strip()]
+        out = parts + goods
+    else:
+        out = ([chain] if chain else []) + goods
+    return '\n'.join(out), ''
+
+
+def _has_digit(s):
+    """字符串是否含数字（用于区分价格行与页脚宽行）。"""
+    return any(ch.isdigit() for ch in s)
+
+
+def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
+    """创时亚马逊卡派/创时卡派等四列明细表 Description|Quantity|Unit Price|Amount GBP。
+
+    表头下方逐行按列归类；出现 Quantity/Unit Price/Amount（须含数字）的行 = 新一行明细的起始，
+    其后的 Description 行（可能多行）合并进该行，直到下一价格行或汇总行/页脚。
+    desc_parser(desc_lines) -> (desc, desc1)，决定 Description 两列如何拆分。
+    返回 (rows, head_desc)：
+      rows: 每行 [desc, desc1, qty, unit, amt]
+      head_desc: 首个价格行之前的 desc 续行（多页续页时并入上一页最后一行）。
+    """
+    def hdr(key):
+        for w in header_line['items']:
+            if _compact_text(w['text']) == key:
+                return w
+        return None
+
+    desc_hdr, qty_hdr = hdr('DESCRIPTION'), hdr('QUANTITY')
+    unit_hdr, amt_hdr = hdr('UNIT'), hdr('AMOUNT')
+    if desc_hdr is None or qty_hdr is None or unit_hdr is None or amt_hdr is None:
+        return [], []
+    bounds = [desc_hdr['cx'] - desc_hdr['w'] / 2,
+              qty_hdr['cx'] - qty_hdr['w'] / 2,
+              unit_hdr['cx'] - unit_hdr['w'] / 2,
+              amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
+    header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
+    rows, cur = [], None
+    head_desc = []
+    stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
+                  'REGISTRATION')
+    for ln in lines:
+        if ln['cy'] <= header_bottom + 2:
+            continue
+        comp = _compact_text(ln['text'])
+        if any(w in comp for w in stop_words):
+            break
+        cells = [''] * 4
+        for item in ln['items']:
+            ci = next((i for i in range(4)
+                       if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+            if ci is not None:
+                cells[ci] = (cells[ci] + ' ' + item['text']).strip()
+        desc, qty, unit, amt = cells
+        if _has_digit(qty) or _has_digit(unit) or _has_digit(amt):
+            cur = {'desc': [desc] if desc else [], 'qty': qty,
+                   'unit': unit, 'amt': amt}
+            rows.append(cur)
+        elif cur is None:
+            if desc:
+                head_desc.append(desc)
+        elif desc:
+            cur['desc'].append(desc)
+    result = []
+    for r in rows:
+        desc, desc1 = desc_parser(r['desc'])
+        result.append([desc, desc1, r['qty'], r['unit'], r['amt']])
+    return result, head_desc
+
+
+def extract_chuangshi_page(items, desc_parser=_desc_amazon):
+    """创时亚马逊卡派/创时卡派/创时清关费等发票单页：字段 + 四列明细行。
+    返回 ({invoice_no, reference}, rows, head_desc)：
+      rows: 每行 [desc, desc1, qty, unit, amt]；
+      head_desc: 本页表格首个价格行之前的 desc 续行（跨页并入上一页最后一行）。"""
+    if not items:
+        return {}, [], []
+    lines = _group_detail_lines(items)
+    header_line = None
+    for ln in lines:
+        comp = _compact_text(ln['text'])
+        if ('DESCRIPTION' in comp and 'QUANTITY' in comp
+                and 'PRICE' in comp and 'AMOUNT' in comp):
+            header_line = ln
+            break
+    if header_line is None:
+        return {}, [], []
+    header_cy = header_line['cy']
+    field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
+    fields = {}
+    anchor, label_line = _jz_label(field_lines, 'INVOICENUMBER', 'INVOICE')
+    fields['invoice_no'] = _jz_value(field_lines, header_cy, anchor, label_line)
+    anchor, label_line = _jz_label(field_lines, 'REFERENCE', 'REFERENCE')
+    fields['reference'] = _jz_reference(field_lines, header_cy, anchor, label_line)
+    rows, head_desc = _chuangshi_table(lines, header_line, desc_parser)
+    return fields, rows, head_desc
+
+
+def extract_chuangshi_from_pdfs(pdf_paths):
+    """批量识别创时亚马逊卡派发票，返回明细行和处理统计。续页继承上页字段值。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_chuangshi_page(items)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                last = merged
+                for r in rows:
+                    all_rows.append([merged.get('invoice_no', '未知'),
+                                     merged.get('reference', '未知')] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def chuangshi_mode(pdf_paths):
+    """创时亚马逊卡派发票：Invoice Number / Reference / Description 明细，
+    输出到 创时亚马逊卡派发票-日期 文件夹。"""
+    print('识别创时亚马逊卡派发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时亚马逊卡派发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_OUTPUT_HEADERS,
+                       numeric_cols={4, 5, 6}, zero_pad_cols=set(),
+                       widths=[16, 20, 24, 46, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
+def _desc_simple(desc_lines):
+    """创时清关费：Description 单列，行内容直接换行合并。"""
+    return '\n'.join(desc_lines), ''
+
+
+def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1):
+    """创时系列发票通用批量识别。
+
+    drop_desc1=True：输出 6 列（无 Description(1)）；否则 7 列。
+    续页继承字段值；页首 desc 续行（head_desc）并入上一页最后一行，支持跨页明细。
+    """
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        prev_row = None
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows, head_desc = extract_chuangshi_page(items, desc_parser)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                last = merged
+                if head_desc and prev_row is not None:
+                    prev_row[2] = (prev_row[2] + '\n' + '\n'.join(head_desc)).strip()
+                for r in rows:
+                    if drop_desc1:
+                        row = [merged.get('invoice_no', '未知'),
+                               merged.get('reference', '未知'),
+                               r[0], r[2], r[3], r[4]]
+                    else:
+                        row = [merged.get('invoice_no', '未知'),
+                               merged.get('reference', '未知')] + r
+                    all_rows.append(row)
+                    prev_row = row
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def extract_chuangshi_from_pdfs(pdf_paths):
+    """批量识别创时亚马逊卡派发票（// 行与其余行分两列）。"""
+    return _extract_chuangshi_batch(pdf_paths, _desc_amazon, drop_desc1=False)
+
+
+def extract_chuangshi_car_from_pdfs(pdf_paths):
+    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。
+    输出行 [invoice, reference, desc, qty, unit, amt]，不带 Description(1) 列。"""
+    return _extract_chuangshi_batch(pdf_paths, _desc_car, drop_desc1=True)
+
+
+def extract_chuangshi_clearance_from_pdfs(pdf_paths):
+    """批量识别创时清关费发票（Description 为单行明细）。
+    输出行 [invoice, reference, desc, qty, unit, amt]。"""
+    return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
+
+
+def extract_chuangshi_surcharge_from_pdfs(pdf_paths):
+    """批量识别创时附加费发票（多行 34 开头单号明细，支持跨页续行）。
+    输出行 [invoice, reference, desc, qty, unit, amt]。"""
+    return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
+
+
+def chuangshi_car_mode(pdf_paths):
+    """创时卡派发票：Invoice Number / Reference / Description 明细（// 链格式），
+    输出到 创时卡派发票-日期 文件夹。"""
+    print('识别创时卡派发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_car_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时卡派发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_CAR_OUTPUT_HEADERS,
+                       numeric_cols={3, 4, 5}, zero_pad_cols=set(),
+                       widths=[16, 20, 24, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
+def chuangshi_clearance_mode(pdf_paths):
+    """创时清关费发票：Invoice Number / Reference / Description 明细，
+    输出到 创时清关费发票-日期 文件夹。"""
+    print('识别创时清关费发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_clearance_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时清关费发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_CLEARANCE_OUTPUT_HEADERS,
+                       numeric_cols={3, 4, 5}, zero_pad_cols=set(),
+                       widths=[16, 20, 34, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
+def chuangshi_surcharge_mode(pdf_paths):
+    """创时附加费发票：Invoice Number / Reference / Description 明细（多行单号，跨页续行），
+    输出到 创时附加费发票-日期 文件夹。"""
+    print('识别创时附加费发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_surcharge_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时附加费发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_SURCHARGE_OUTPUT_HEADERS,
+                       numeric_cols={3, 4, 5}, zero_pad_cols=set(),
+                       widths=[16, 20, 40, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
-    """模式 2：识别发票明细并导出 Excel。inv_type: '1' canexs | '2' 精准。"""
+    """模式 2：识别发票明细并导出 Excel。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
+    elif inv_type == '3':
+        chuangshi_mode(pdf_paths)
+    elif inv_type == '4':
+        chuangshi_car_mode(pdf_paths)
+    elif inv_type == '5':
+        chuangshi_clearance_mode(pdf_paths)
+    elif inv_type == '6':
+        chuangshi_surcharge_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1144,8 +1524,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准：').strip()
-                if inv_type in ('1', '2'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6'):
                     break
                 print('请输入 1 或 2。')
 

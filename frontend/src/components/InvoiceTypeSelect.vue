@@ -4,7 +4,11 @@ defineEmits(['update:modelValue'])
 
 const types = [
   { id: '1', label: 'canexs', hint: '美国货运发票 · INVOICE / TRACKING NO. / 明细行' },
-  { id: '2', label: '精准', hint: 'Accuracy Customs Brokers 清关发票' }
+  { id: '2', label: '精准', hint: 'Accuracy Customs Brokers 清关发票' },
+  { id: '3', label: '创时亚马逊卡派', hint: 'Invoice Number / Reference / Description 明细' },
+  { id: '4', label: '创时卡派', hint: '// 链 Description · 邮编换行拼接' },
+  { id: '5', label: '创时清关费', hint: '单行明细 · 海运清关 / DPD / DUTY & VAT' },
+  { id: '6', label: '创时附加费', hint: '多行 34 开头单号 · 支持跨页续行' }
 ]
 </script>
 
