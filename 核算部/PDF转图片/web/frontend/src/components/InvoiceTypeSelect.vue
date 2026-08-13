@@ -4,7 +4,8 @@ defineEmits(['update:modelValue'])
 
 const types = [
   { id: '1', label: 'canexs', hint: '美国货运发票 · INVOICE / TRACKING NO. / 明细行' },
-  { id: '2', label: '精准', hint: 'Accuracy Customs Brokers 清关发票' }
+  { id: '2', label: '精准', hint: 'Accuracy Customs Brokers 清关发票' },
+  { id: '3', label: '创时亚马逊卡派', hint: 'Invoice Number / Reference / Description 明细' }
 ]
 </script>
 
