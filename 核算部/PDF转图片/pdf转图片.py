@@ -435,6 +435,10 @@ JINGZHUN_OUTPUT_HEADERS = ('发票号', 'Master B/L No', 'Containers',
 CHUANGSHI_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
                             'Description(1)', 'Quantity', 'Unit Price', 'Amount GBP')
 
+# 创时卡派发票输出列：不带 Description(1)，只有一个 Description 列
+CHUANGSHI_CAR_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                                'Quantity', 'Unit Price', 'Amount GBP')
+
 
 def _compact_text(text):
     """统一 OCR/原生文字中的空格和标点，便于匹配英文标签。"""
@@ -1085,7 +1089,8 @@ def chuangshi_mode(pdf_paths):
 
 
 def extract_chuangshi_car_from_pdfs(pdf_paths):
-    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。"""
+    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。
+    输出行 [invoice, reference, desc, qty, unit, amt]，不带 Description(1) 列。"""
     all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
@@ -1104,7 +1109,8 @@ def extract_chuangshi_car_from_pdfs(pdf_paths):
                 last = merged
                 for r in rows:
                     all_rows.append([merged.get('invoice_no', '未知'),
-                                     merged.get('reference', '未知')] + r)
+                                     merged.get('reference', '未知'),
+                                     r[0], r[2], r[3], r[4]])
         finally:
             doc.close()
     return all_rows, pages, skipped
@@ -1125,9 +1131,9 @@ def chuangshi_car_mode(pdf_paths):
                           '创时卡派发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
-    write_detail_excel(rows, output, headers=CHUANGSHI_OUTPUT_HEADERS,
-                       numeric_cols={4, 5, 6}, zero_pad_cols=set(),
-                       widths=[16, 20, 24, 46, 12, 14, 16])
+    write_detail_excel(rows, output, headers=CHUANGSHI_CAR_OUTPUT_HEADERS,
+                       numeric_cols={3, 4, 5}, zero_pad_cols=set(),
+                       widths=[16, 20, 24, 12, 14, 16])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 

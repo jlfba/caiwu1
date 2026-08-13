@@ -157,8 +157,8 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
 
     if inv_type == '4':
         name, headers, numeric_cols, zero_pad_cols, widths = (
-            '创时卡派发票明细表.xlsx', tool.CHUANGSHI_OUTPUT_HEADERS,
-            {4, 5, 6}, set(), [16, 20, 24, 46, 12, 14, 16])
+            '创时卡派发票明细表.xlsx', tool.CHUANGSHI_CAR_OUTPUT_HEADERS,
+            {3, 4, 5}, set(), [16, 20, 24, 12, 14, 16])
     elif inv_type == '3':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             '创时亚马逊卡派发票明细表.xlsx', tool.CHUANGSHI_OUTPUT_HEADERS,
