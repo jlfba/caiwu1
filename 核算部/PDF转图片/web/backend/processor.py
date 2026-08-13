@@ -126,7 +126,7 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
@@ -139,7 +139,9 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
         if not os.path.isfile(pdf):
             skipped += 1
             continue
-        if inv_type == '4':
+        if inv_type == '5':
+            rows, pg, sk = tool.extract_chuangshi_clearance_from_pdfs([pdf])
+        elif inv_type == '4':
             rows, pg, sk = tool.extract_chuangshi_car_from_pdfs([pdf])
         elif inv_type == '3':
             rows, pg, sk = tool.extract_chuangshi_from_pdfs([pdf])
@@ -155,7 +157,11 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if not all_rows:
         raise RuntimeError('没有识别到任何明细，未生成 Excel（共 %d 个文件，%d 页）' % (n, pages))
 
-    if inv_type == '4':
+    if inv_type == '5':
+        name, headers, numeric_cols, zero_pad_cols, widths = (
+            '创时清关费发票明细表.xlsx', tool.CHUANGSHI_CLEARANCE_OUTPUT_HEADERS,
+            {3, 4, 5}, set(), [16, 20, 34, 12, 14, 16])
+    elif inv_type == '4':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             '创时卡派发票明细表.xlsx', tool.CHUANGSHI_CAR_OUTPUT_HEADERS,
             {3, 4, 5}, set(), [16, 20, 24, 12, 14, 16])

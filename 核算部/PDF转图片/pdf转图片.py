@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费。
 
 使用：
     python pdf转图片.py
@@ -438,6 +438,10 @@ CHUANGSHI_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
 # 创时卡派发票输出列：不带 Description(1)，只有一个 Description 列
 CHUANGSHI_CAR_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
                                 'Quantity', 'Unit Price', 'Amount GBP')
+
+# 创时清关费发票输出列：同创时卡派，6 列无 Description(1)
+CHUANGSHI_CLEARANCE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
+                                      'Quantity', 'Unit Price', 'Amount GBP')
 
 
 def _compact_text(text):
@@ -1088,9 +1092,13 @@ def chuangshi_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
-def extract_chuangshi_car_from_pdfs(pdf_paths):
-    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。
-    输出行 [invoice, reference, desc, qty, unit, amt]，不带 Description(1) 列。"""
+def _desc_simple(desc_lines):
+    """创时清关费：Description 单列，行内容直接换行合并。"""
+    return '\n'.join(desc_lines), ''
+
+
+def _extract_chuangshi_6col(pdf_paths, desc_parser):
+    """创时卡派/创时清关费通用批量识别（输出 6 列，无 Description(1)）。"""
     all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
@@ -1103,7 +1111,7 @@ def extract_chuangshi_car_from_pdfs(pdf_paths):
             for page_no, page in enumerate(doc, 1):
                 pages += 1
                 items = _detail_page_items(pdf_path, page, page_no)
-                fields, rows = extract_chuangshi_page(items, _desc_car)
+                fields, rows = extract_chuangshi_page(items, desc_parser)
                 merged = dict(last)
                 merged.update({k: v for k, v in fields.items() if v != '未知'})
                 last = merged
@@ -1114,6 +1122,18 @@ def extract_chuangshi_car_from_pdfs(pdf_paths):
         finally:
             doc.close()
     return all_rows, pages, skipped
+
+
+def extract_chuangshi_car_from_pdfs(pdf_paths):
+    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。
+    输出行 [invoice, reference, desc, qty, unit, amt]，不带 Description(1) 列。"""
+    return _extract_chuangshi_6col(pdf_paths, _desc_car)
+
+
+def extract_chuangshi_clearance_from_pdfs(pdf_paths):
+    """批量识别创时清关费发票（Description 为单行明细）。
+    输出行 [invoice, reference, desc, qty, unit, amt]。"""
+    return _extract_chuangshi_6col(pdf_paths, _desc_simple)
 
 
 def chuangshi_car_mode(pdf_paths):
@@ -1138,15 +1158,39 @@ def chuangshi_car_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def chuangshi_clearance_mode(pdf_paths):
+    """创时清关费发票：Invoice Number / Reference / Description 明细，
+    输出到 创时清关费发票-日期 文件夹。"""
+    print('识别创时清关费发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_clearance_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时清关费发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_CLEARANCE_OUTPUT_HEADERS,
+                       numeric_cols={3, 4, 5}, zero_pad_cols=set(),
+                       widths=[16, 20, 34, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
         chuangshi_mode(pdf_paths)
     elif inv_type == '4':
         chuangshi_car_mode(pdf_paths)
+    elif inv_type == '5':
+        chuangshi_clearance_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1377,8 +1421,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派：').strip()
-                if inv_type in ('1', '2', '3', '4'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费：').strip()
+                if inv_type in ('1', '2', '3', '4', '5'):
                     break
                 print('请输入 1 或 2。')
 
