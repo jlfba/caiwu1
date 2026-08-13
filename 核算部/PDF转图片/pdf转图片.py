@@ -338,6 +338,38 @@ def ocr_lines(image_path):
     return items
 
 
+def _merge_vertical_headers(items, axis_tol=25.0, gap_tol=48.0):
+    """把同一 x 列、纵向相邻的 OCR 条目拼成一段竖排文字。
+
+    RapidOCR 会把竖排标题（如"购买方信息"）拆成多行（"购"/"买方信"），
+    拆出的片段仍是同一列、间隔一条字高。按列聚类拼回后，
+    供 extract_invoice_fields 的关键词匹配兜底使用。
+    返回 [{'cx','cy','text','aspect'}]，aspect 取竖排值便于优先命中。
+    """
+    cols = []
+    for it in items:
+        best = None
+        for c in cols:
+            if abs(it['cx'] - c['cx']) <= axis_tol \
+                    and abs(it['cy'] - c['cy_mean']) <= gap_tol:
+                best = c
+                break
+        if best is None:
+            best = {'cx': it['cx'], 'cy_mean': it['cy'], 'items': []}
+            cols.append(best)
+        best['items'].append(it)
+        n = len(best['items'])
+        best['cy_mean'] = (best['cy_mean'] * (n - 1) + it['cy']) / n
+    merged = []
+    for c in cols:
+        c['items'].sort(key=lambda x: x['cy'])
+        merged.append({'cx': c['cx'],
+                       'cy': c['cy_mean'],
+                       'text': ''.join(x['text'] for x in c['items']),
+                       'aspect': 0.5})
+    return merged
+
+
 def extract_invoice_fields(image_path):
     """识别发票四字段，返回 dict：no/buyer/seller/amount。失败字段用 '未知'。
     适配两种布局：
@@ -366,6 +398,10 @@ def extract_invoice_fields(image_path):
     def find_name(header_kw):
         # 找标题条目（含关键词，优先竖排 aspect<1）
         headers = [it for it in items if header_kw in it['text']]
+        if not headers:
+            # 竖排标题被 OCR 拆行时（如 购买方信息 → 购/买方信），同列片段拼回后重试
+            headers = [c for c in _merge_vertical_headers(items)
+                       if header_kw in c['text']]
         if not headers:
             return '未知'
         header = min(headers, key=lambda it: it['aspect'])  # 最竖的那条
