@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派。
 
 使用：
     python pdf转图片.py
@@ -927,12 +927,46 @@ def _jz_reference(lines, header_cy, anchor, label_line):
     return '\n'.join(parts) or '未知'
 
 
-def _chuangshi_table(lines, header_line):
-    """创时亚马逊卡派四列明细表 Description|Quantity|Unit Price|Amount GBP。
+def _desc_amazon(desc_lines):
+    """创时亚马逊卡派：带 // 的行放 Description 列，其余行放 Description(1) 列。"""
+    slash = [d for d in desc_lines if '//' in d]
+    other = [d for d in desc_lines if '//' not in d]
+    return '\n'.join(slash), '\n'.join(other)
+
+
+# 创时卡派：货物明细行特征（重量/尺寸、PLTS 卡板、占板位置），单独成行
+_GOODS_LINE_RE = re.compile(r'^\d+kg|^\d+\s*PLTS|^占\d')
+
+
+def _is_goods_line(s):
+    return bool(_GOODS_LINE_RE.search(s))
+
+
+def _desc_car(desc_lines):
+    """创时卡派：// 链（可能跨视觉行换行）去行断拼接后按 // 切分，每段一行；
+    货物明细行（kg/尺寸、PLTS、占板）单独一行；全部合进 Description 单元格。"""
+    lines = [d.strip() for d in desc_lines if d.strip()]
+    chain, goods = '', []
+    for j, line in enumerate(lines):
+        if '//' not in line and _is_goods_line(line):
+            goods = lines[j:]
+            break
+        chain += line  # 去行断拼接（G51+3EB→G513EB），保留行内空格
+    if '//' in chain:
+        parts = [p.strip() for p in chain.split('//') if p.strip()]
+        out = parts + goods
+    else:
+        out = ([chain] if chain else []) + goods
+    return '\n'.join(out), ''
+
+
+def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
+    """创时亚马逊卡派/创时卡派四列明细表 Description|Quantity|Unit Price|Amount GBP。
 
     表头下方逐行按列归类；出现 Quantity/Unit Price/Amount 的行 = 新一行明细的起始，
     其后的 Description 行（可能多行）合并进该行，直到下一价格行或汇总行。
-    返回每行 [desc, desc1, qty, unit, amt]：desc 里带 // 的行放 desc，其余放 desc1。
+    desc_parser(desc_lines) -> (desc, desc1)，决定 Description 两列如何拆分。
+    返回每行 [desc, desc1, qty, unit, amt]。
     """
     def hdr(key):
         for w in header_line['items']:
@@ -972,15 +1006,13 @@ def _chuangshi_table(lines, header_line):
             cur['desc'].append(desc)
     result = []
     for r in rows:
-        slash = [d for d in r['desc'] if '//' in d]
-        other = [d for d in r['desc'] if '//' not in d]
-        result.append(['\n'.join(slash), '\n'.join(other),
-                       r['qty'], r['unit'], r['amt']])
+        desc, desc1 = desc_parser(r['desc'])
+        result.append([desc, desc1, r['qty'], r['unit'], r['amt']])
     return result
 
 
-def extract_chuangshi_page(items):
-    """创时亚马逊卡派发票单页：Invoice Number / Reference 字段 + 四列明细行。
+def extract_chuangshi_page(items, desc_parser=_desc_amazon):
+    """创时亚马逊卡派/创时卡派发票单页：Invoice Number / Reference 字段 + 四列明细行。
     返回 ({invoice_no, reference}, [[desc, desc1, qty, unit, amt], ...])。"""
     if not items:
         return {}, []
@@ -1001,7 +1033,7 @@ def extract_chuangshi_page(items):
     fields['invoice_no'] = _jz_value(field_lines, header_cy, anchor, label_line)
     anchor, label_line = _jz_label(field_lines, 'REFERENCE', 'REFERENCE')
     fields['reference'] = _jz_reference(field_lines, header_cy, anchor, label_line)
-    return fields, _chuangshi_table(lines, header_line)
+    return fields, _chuangshi_table(lines, header_line, desc_parser)
 
 
 def extract_chuangshi_from_pdfs(pdf_paths):
@@ -1052,12 +1084,63 @@ def chuangshi_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def extract_chuangshi_car_from_pdfs(pdf_paths):
+    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_chuangshi_page(items, _desc_car)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                last = merged
+                for r in rows:
+                    all_rows.append([merged.get('invoice_no', '未知'),
+                                     merged.get('reference', '未知')] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def chuangshi_car_mode(pdf_paths):
+    """创时卡派发票：Invoice Number / Reference / Description 明细（// 链格式），
+    输出到 创时卡派发票-日期 文件夹。"""
+    print('识别创时卡派发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_chuangshi_car_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          '创时卡派发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=CHUANGSHI_OUTPUT_HEADERS,
+                       numeric_cols={4, 5, 6}, zero_pad_cols=set(),
+                       widths=[16, 20, 24, 46, 12, 14, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
-    """模式 2：识别发票明细并导出 Excel。inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派。"""
+    """模式 2：识别发票明细并导出 Excel。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
         chuangshi_mode(pdf_paths)
+    elif inv_type == '4':
+        chuangshi_car_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1288,8 +1371,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派：').strip()
-                if inv_type in ('1', '2', '3'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派：').strip()
+                if inv_type in ('1', '2', '3', '4'):
                     break
                 print('请输入 1 或 2。')
 

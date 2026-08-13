@@ -13,7 +13,7 @@ const modes = [
     id: '2',
     title: '付款组',
     sub: '发票明细识别转 Excel',
-    desc: '识别英文发票的 INVOICE / 明细行，支持 canexs、精准、创时亚马逊卡派三种版式。'
+    desc: '识别英文发票的 INVOICE / 明细行，支持 canexs、精准、创时亚马逊卡派、创时卡派四种版式。'
   }
 ]
 </script>
