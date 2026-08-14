@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳。
 
 使用：
     python pdf转图片.py
@@ -482,6 +482,11 @@ CHUANGSHI_CLEARANCE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Descriptio
 # 创时附加费发票输出列：6 列无 Description(1)
 CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
                                       'Quantity', 'Unit Price', 'Amount GBP')
+
+# MAX萨凡纳（MAXPORTLINK）发票输出列：Ship to / Invoice details 第一行 按明细行重复，
+# Rate / Amount 保留原始货币符号
+MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
+                               'Description', 'Qty', 'Rate', 'Amount')
 
 
 def _compact_text(text):
@@ -1281,9 +1286,160 @@ def chuangshi_surcharge_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def _max_ship_to(lines, header_cy, anchor, label_line):
+    """Ship to 标签下方、同列右侧的内容行合并（跨多行地址）。"""
+    if anchor is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2
+             and ln['cy'] < header_cy - 2]
+    parts = []
+    for ln in below:
+        ws = [w['text'] for w in ln['items'] if w['cx'] > anchor['cx'] - 20]
+        parts.append(' '.join(ws).strip())
+    parts = [p for p in parts if p]
+    return '\n'.join(parts) or '未知'
+
+
+def _max_invoice_details_first(lines, header_cy, anchor, label_line):
+    """Invoice details 标签下方第一行的完整内容（整行，含标签）。"""
+    if anchor is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2
+             and ln['cy'] < header_cy - 2]
+    if not below:
+        return '未知'
+    nxt = min(below, key=lambda ln: ln['cy'])
+    return ' '.join(w['text'] for w in nxt['items']).strip() or '未知'
+
+
+def _max_table(lines, header_line):
+    """MAXPORTLINK 六列明细表 #|Product or service|Description|Qty|Rate|Amount。
+    价格行（Qty/Rate/Amount 含数字）为一行起始，其后 Description 续行并入（空格拼接）。
+    返回每行 [product, desc, qty, rate, amount]，Rate/Amount 保留货币符号原样。"""
+    def hdr(key):
+        for w in header_line['items']:
+            if _compact_text(w['text']) == key:
+                return w
+        return None
+
+    prod_hdr = hdr('PRODUCT')
+    desc_hdr = hdr('DESCRIPTION')
+    qty_hdr = hdr('QTY')
+    rate_hdr = hdr('RATE')
+    amt_hdr = hdr('AMOUNT')
+    if prod_hdr is None or desc_hdr is None or qty_hdr is None or rate_hdr is None or amt_hdr is None:
+        return []
+    bounds = [prod_hdr['cx'] - prod_hdr['w'] / 2,
+              desc_hdr['cx'] - desc_hdr['w'] / 2,
+              qty_hdr['cx'] - qty_hdr['w'] / 2,
+              rate_hdr['cx'] - rate_hdr['w'] / 2,
+              amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
+    header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
+    rows, cur = [], None
+    stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
+                  'REGISTRATION')
+    for ln in lines:
+        if ln['cy'] <= header_bottom + 2:
+            continue
+        comp = _compact_text(ln['text'])
+        if any(w in comp for w in stop_words):
+            break
+        cells = [''] * 5
+        for item in ln['items']:
+            ci = next((i for i in range(5)
+                       if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+            if ci is not None:
+                cells[ci] = (cells[ci] + ' ' + item['text']).strip()
+        product, desc, qty, rate, amt = cells
+        if _has_digit(qty) or _has_digit(rate) or _has_digit(amt):
+            cur = {'product': product, 'desc': [desc] if desc else [],
+                   'qty': qty, 'rate': rate, 'amt': amt}
+            rows.append(cur)
+        elif cur is not None and desc:
+            cur['desc'].append(desc)
+    result = []
+    for r in rows:
+        result.append([r['product'], ' '.join(r['desc']),
+                       r['qty'], r['rate'], r['amt']])
+    return result
+
+
+def extract_max_portlink_page(items):
+    """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / Invoice details 第一行 字段 + 五列表。
+    返回 ({ship_to, invoice_no}, [[product, desc, qty, rate, amount], ...])。"""
+    if not items:
+        return {}, []
+    lines = _group_detail_lines(items)
+    header_line = None
+    for ln in lines:
+        comp = _compact_text(ln['text'])
+        if ('PRODUCT' in comp and 'DESCRIPTION' in comp and 'QTY' in comp
+                and 'RATE' in comp and 'AMOUNT' in comp):
+            header_line = ln
+            break
+    if header_line is None:
+        return {}, []
+    header_cy = header_line['cy']
+    field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
+    fields = {}
+    anchor, label_line = _jz_label(field_lines, 'SHIPTO', 'SHIP')
+    fields['ship_to'] = _max_ship_to(field_lines, header_cy, anchor, label_line)
+    anchor, label_line = _jz_label(field_lines, 'INVOICEDETAILS', 'INVOICE')
+    fields['invoice_no'] = _max_invoice_details_first(field_lines, header_cy, anchor, label_line)
+    return fields, _max_table(lines, header_line)
+
+
+def extract_max_portlink_from_pdfs(pdf_paths):
+    """批量识别 MAX萨凡纳（MAXPORTLINK）发票，返回明细行和处理统计。续页继承上页字段值。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_max_portlink_page(items)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                last = merged
+                for r in rows:
+                    all_rows.append([merged.get('ship_to', '未知'),
+                                     merged.get('invoice_no', '未知')] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def max_portlink_mode(pdf_paths):
+    """MAX萨凡纳（MAXPORTLINK）发票：Ship to / Invoice no. / 明细行，
+    输出到 MAX萨凡纳发票-日期 文件夹。"""
+    print('识别 MAX萨凡纳（MAXPORTLINK）发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_max_portlink_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'MAX萨凡纳发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
+                       numeric_cols={4}, zero_pad_cols=set(),
+                       widths=[40, 24, 18, 42, 8, 12, 12])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -1294,6 +1450,8 @@ def detail_mode(pdf_paths, inv_type):
         chuangshi_clearance_mode(pdf_paths)
     elif inv_type == '6':
         chuangshi_surcharge_mode(pdf_paths)
+    elif inv_type == '7':
+        max_portlink_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1524,8 +1682,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7'):
                     break
                 print('请输入 1 或 2。')
 
