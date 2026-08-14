@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK。
 
 使用：
     python pdf转图片.py
@@ -488,6 +488,10 @@ CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Descriptio
 MAX_STYLE_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
                             '柜号', '邮编', 'Description',
                             'Qty', 'Rate', 'Amount')
+
+# JCK（JCK LOGISTICS）发票输出列：Container No. 按明细行重复，Rate 保留原始货币符号
+JCK_OUTPUT_HEADERS = ('Container No.', 'ITEM', 'STATE', 'ZIPCODE', 'W/H', 'MARKS NO.',
+                      'QTY', 'UNIT PRICE', 'CURRENCY', 'AMOUNT', 'REMARKS')
 
 
 def _compact_text(text):
@@ -1572,9 +1576,138 @@ def aa_mode(pdf_paths):
     _max_invoice_mode(pdf_paths, 'AA')
 
 
+def _extract_container_no(lines):
+    """Container No.: 同行右侧的内容。"""
+    ln = _find_line(lines, 'CONTAINERNO')
+    if ln is None:
+        return '未知'
+    anchor = next((x for x in ln['items']
+                   if _compact_text(x['text']).startswith('CONTAINER')), None)
+    if anchor is not None:
+        raw = _line_right_of(ln, anchor, drop=('NO', 'NO.', 'N', 'NO:'))
+        if raw:
+            return raw
+    return '未知'
+
+
+# JCK 表格各列表头锚点词（多词表头取第一个词）
+_JCK_KEYS = ('ITEM', 'STATE', 'ZIPCODE', 'WH', 'MARKS', 'QTY', 'UNIT',
+             'CURRENCY', 'AMOUNT', 'REMARKS')
+
+
+def _jck_table(lines, header_line):
+    """JCK 十列明细表 ITEM|STATE|ZIPCODE|W/H|MARKS NO.|QTY|UNIT PRICE|CURRENCY|AMOUNT|REMARKS。
+    按列中心中点分界归类；出现 QTY/UNIT PRICE/AMOUNT 含数字的行 = 新一行明细，
+    其后的无价格续行并入上一行 ITEM 列。返回每行 10 元素。"""
+    def hdr(key):
+        for w in header_line['items']:
+            if _compact_text(w['text']) == key:
+                return w
+        return None
+
+    anchors = {}
+    for key in _JCK_KEYS:
+        w = hdr(key)
+        if w is None:
+            return []
+        anchors[key] = w
+    centers = [anchors[k]['cx'] for k in _JCK_KEYS]
+    bounds = [float('-inf')] + [(centers[i] + centers[i + 1]) / 2
+                                for i in range(len(centers) - 1)] + [float('inf')]
+    header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
+    rows, cur = [], None
+    stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
+                  'REGISTRATION')
+    for ln in lines:
+        if ln['cy'] <= header_bottom + 2:
+            continue
+        comp = _compact_text(ln['text'])
+        if any(w in comp for w in stop_words):
+            break
+        cells = [''] * 10
+        for item in ln['items']:
+            ci = next((i for i in range(10)
+                       if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+            if ci is not None:
+                cells[ci] = (cells[ci] + ' ' + item['text']).strip()
+        # QTY=5, UNIT PRICE=6, AMOUNT=8 含数字 → 新一行
+        if _has_digit(cells[5]) or _has_digit(cells[6]) or _has_digit(cells[8]):
+            cur = cells[:]
+            rows.append(cur)
+        elif cur is not None and any(cells):
+            extra = ' '.join(c.strip() for c in cells if c)
+            cur[0] = (cur[0] + ' ' + extra).strip()
+    return rows
+
+
+def extract_jck_page(items):
+    """JCK 发票单页：Container No. 字段 + 十列明细表。
+    返回 ({container}, [[item, state, zip, wh, marks, qty, unit_price, currency, amount, remarks], ...])。"""
+    if not items:
+        return {}, []
+    lines = _group_detail_lines(items)
+    header_line = None
+    for ln in lines:
+        comp = _compact_text(ln['text'])
+        if ('ITEM' in comp and 'STATE' in comp and 'ZIPCODE' in comp
+                and 'MARKS' in comp and 'QTY' in comp and 'UNIT' in comp
+                and 'CURRENCY' in comp and 'AMOUNT' in comp and 'REMARKS' in comp):
+            header_line = ln
+            break
+    if header_line is None:
+        return {}, []
+    return {'container': _extract_container_no(lines)}, _jck_table(lines, header_line)
+
+
+def extract_jck_from_pdfs(pdf_paths):
+    """批量识别 JCK 发票，返回明细行和处理统计。续页继承上页 Container No.。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_jck_page(items)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v and v != '未知'})
+                last = merged
+                for r in rows:
+                    all_rows.append([merged.get('container', '未知')] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def jck_mode(pdf_paths):
+    """JCK 发票：Container No. + 十列明细，输出到 JCK发票-日期 文件夹。"""
+    print('识别 JCK 发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_jck_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'JCK发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=JCK_OUTPUT_HEADERS,
+                       numeric_cols={6, 7, 9}, zero_pad_cols=set(),
+                       widths=[18, 20, 8, 10, 10, 18, 8, 12, 10, 12, 16])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -1591,6 +1724,8 @@ def detail_mode(pdf_paths, inv_type):
         max_ny_mode(pdf_paths)
     elif inv_type == '9':
         aa_mode(pdf_paths)
+    elif inv_type == '10':
+        jck_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1821,8 +1956,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'):
                     break
                 print('请输入 1 或 2。')
 
