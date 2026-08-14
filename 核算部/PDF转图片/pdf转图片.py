@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA。
 
 使用：
     python pdf转图片.py
@@ -483,11 +483,11 @@ CHUANGSHI_CLEARANCE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Descriptio
 CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
                                       'Quantity', 'Unit Price', 'Amount GBP')
 
-# MAX萨凡纳（MAXPORTLINK）发票输出列：Ship to / Invoice details 第一行 按明细行重复，
+# MAX 系列（MAX萨凡纳 / MAX纽约 / AA）发票输出列：Ship to / Invoice details 第一行 按明细行重复，
 # 柜号、邮编为发票级字段填充全部行；柜号/邮编放在 Description 列之前；Rate / Amount 保留货币符号
-MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
-                               '柜号', '邮编', 'Description',
-                               'Qty', 'Rate', 'Amount')
+MAX_STYLE_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
+                            '柜号', '邮编', 'Description',
+                            'Qty', 'Rate', 'Amount')
 
 
 def _compact_text(text):
@@ -1403,11 +1403,30 @@ def _max_table(lines, header_line):
     amt_hdr = hdr('AMOUNT')
     if prod_hdr is None or desc_hdr is None or qty_hdr is None or rate_hdr is None or amt_hdr is None:
         return []
-    bounds = [prod_hdr['cx'] - prod_hdr['w'] / 2,
-              desc_hdr['cx'] - desc_hdr['w'] / 2,
-              qty_hdr['cx'] - qty_hdr['w'] / 2,
-              rate_hdr['cx'] - rate_hdr['w'] / 2,
-              amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
+    prod_left = prod_hdr['cx'] - prod_hdr['w'] / 2
+    desc_left = desc_hdr['cx'] - desc_hdr['w'] / 2
+    qty_left = qty_hdr['cx'] - qty_hdr['w'] / 2
+    # Qty/Rate/Amount 右对齐：按词右边缘分类，边界取相邻表头右边缘中点
+    # （长金额如 $384.0471673 中心会落到 Qty 区间，按中心分类会错列）
+    qty_right = qty_hdr['cx'] + qty_hdr['w'] / 2
+    rate_right = rate_hdr['cx'] + rate_hdr['w'] / 2
+    amt_right = amt_hdr['cx'] + amt_hdr['w'] / 2
+    right_bounds = [(qty_right + rate_right) / 2,
+                    (rate_right + amt_right) / 2, float('inf')]
+
+    def classify(item):
+        cx = item['cx']
+        if cx < prod_left:
+            return None  # # 列，忽略
+        if cx < qty_left:
+            return 0 if cx < desc_left else 1  # product / description
+        x1 = cx + item['w'] / 2
+        if x1 < right_bounds[0]:
+            return 2  # qty
+        if x1 < right_bounds[1]:
+            return 3  # rate
+        return 4  # amount
+
     header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
     rows, cur = [], None
     stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
@@ -1420,8 +1439,7 @@ def _max_table(lines, header_line):
             break
         cells = [''] * 5
         for item in ln['items']:
-            ci = next((i for i in range(5)
-                       if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+            ci = classify(item)
             if ci is not None:
                 cells[ci] = (cells[ci] + ' ' + item['text']).strip()
         product, desc, qty, rate, amt = cells
@@ -1513,6 +1531,11 @@ def extract_max_ny_from_pdfs(pdf_paths):
     return _extract_max_from_pdfs(pdf_paths)
 
 
+def extract_aa_from_pdfs(pdf_paths):
+    """批量识别 AA（TX-AA LOGISTICS）发票（同 MAX萨凡纳 布局）。"""
+    return _extract_max_from_pdfs(pdf_paths)
+
+
 def _max_invoice_mode(pdf_paths, name):
     """MAX 系列发票通用模式：输出到 {name}发票-日期 文件夹。"""
     print('识别 %s 发票明细（文字层优先，扫描件自动使用 OCR）…' % name)
@@ -1527,7 +1550,7 @@ def _max_invoice_mode(pdf_paths, name):
                           '%s发票-%s' % (name, datetime.datetime.now().strftime('%Y-%m-%d')))
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
-    write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
+    write_detail_excel(rows, output, headers=MAX_STYLE_OUTPUT_HEADERS,
                        numeric_cols={6}, zero_pad_cols=set(),
                        widths=[36, 22, 16, 16, 10, 36, 8, 12, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
@@ -1544,9 +1567,14 @@ def max_ny_mode(pdf_paths):
     _max_invoice_mode(pdf_paths, 'MAX纽约')
 
 
+def aa_mode(pdf_paths):
+    """AA（TX-AA LOGISTICS）发票：同 MAX萨凡纳 布局。"""
+    _max_invoice_mode(pdf_paths, 'AA')
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -1561,6 +1589,8 @@ def detail_mode(pdf_paths, inv_type):
         max_portlink_mode(pdf_paths)
     elif inv_type == '8':
         max_ny_mode(pdf_paths)
+    elif inv_type == '9':
+        aa_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1791,8 +1821,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9'):
                     break
                 print('请输入 1 或 2。')
 
