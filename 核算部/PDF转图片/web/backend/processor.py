@@ -126,7 +126,7 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
@@ -139,7 +139,9 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
         if not os.path.isfile(pdf):
             skipped += 1
             continue
-        if inv_type == '7':
+        if inv_type == '8':
+            rows, pg, sk = tool.extract_max_ny_from_pdfs([pdf])
+        elif inv_type == '7':
             rows, pg, sk = tool.extract_max_portlink_from_pdfs([pdf])
         elif inv_type == '6':
             rows, pg, sk = tool.extract_chuangshi_surcharge_from_pdfs([pdf])
@@ -161,7 +163,11 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if not all_rows:
         raise RuntimeError('没有识别到任何明细，未生成 Excel（共 %d 个文件，%d 页）' % (n, pages))
 
-    if inv_type == '7':
+    if inv_type == '8':
+        name, headers, numeric_cols, zero_pad_cols, widths = (
+            'MAX纽约发票明细表.xlsx', tool.MAX_PORTLINK_OUTPUT_HEADERS,
+            {6}, set(), [36, 22, 16, 16, 10, 36, 8, 12, 12])
+    elif inv_type == '7':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'MAX萨凡纳发票明细表.xlsx', tool.MAX_PORTLINK_OUTPUT_HEADERS,
             {6}, set(), [36, 22, 16, 16, 10, 36, 8, 12, 12])

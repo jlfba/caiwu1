@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约。
 
 使用：
     python pdf转图片.py
@@ -1471,8 +1471,8 @@ def extract_max_portlink_page(items):
     return fields, rows
 
 
-def extract_max_portlink_from_pdfs(pdf_paths):
-    """批量识别 MAX萨凡纳（MAXPORTLINK）发票，返回明细行和处理统计。
+def _extract_max_from_pdfs(pdf_paths):
+    """MAX 系列发票（MAX萨凡纳/MAX纽约同布局）通用批量识别。
     续页继承上页字段值；柜号/邮编为发票级字段，填充该发票全部行。"""
     all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
@@ -1503,11 +1503,20 @@ def extract_max_portlink_from_pdfs(pdf_paths):
     return all_rows, pages, skipped
 
 
-def max_portlink_mode(pdf_paths):
-    """MAX萨凡纳（MAXPORTLINK）发票：Ship to / 邮编 / Invoice no. / 柜号 / 明细行，
-    输出到 MAX萨凡纳发票-日期 文件夹。"""
-    print('识别 MAX萨凡纳（MAXPORTLINK）发票明细（文字层优先，扫描件自动使用 OCR）…')
-    rows, pages, skipped = extract_max_portlink_from_pdfs(pdf_paths)
+def extract_max_portlink_from_pdfs(pdf_paths):
+    """批量识别 MAX萨凡纳（MAXPORTLINK）发票，返回明细行和处理统计。"""
+    return _extract_max_from_pdfs(pdf_paths)
+
+
+def extract_max_ny_from_pdfs(pdf_paths):
+    """批量识别 MAX纽约（MAX GLOBAL LOGISTICS）发票（同 MAX萨凡纳 布局）。"""
+    return _extract_max_from_pdfs(pdf_paths)
+
+
+def _max_invoice_mode(pdf_paths, name):
+    """MAX 系列发票通用模式：输出到 {name}发票-日期 文件夹。"""
+    print('识别 %s 发票明细（文字层优先，扫描件自动使用 OCR）…' % name)
+    rows, pages, skipped = _extract_max_from_pdfs(pdf_paths)
     if skipped:
         print('有 %d 个文件找不到，已跳过。' % skipped)
         print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
@@ -1515,7 +1524,7 @@ def max_portlink_mode(pdf_paths):
         print('没有识别到任何明细，未生成 Excel。')
         return
     folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
-                          'MAX萨凡纳发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+                          '%s发票-%s' % (name, datetime.datetime.now().strftime('%Y-%m-%d')))
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
@@ -1525,9 +1534,19 @@ def max_portlink_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def max_portlink_mode(pdf_paths):
+    """MAX萨凡纳（MAXPORTLINK）发票：Ship to / 邮编 / Invoice no. / 柜号 / 明细行。"""
+    _max_invoice_mode(pdf_paths, 'MAX萨凡纳')
+
+
+def max_ny_mode(pdf_paths):
+    """MAX纽约（MAX GLOBAL LOGISTICS）发票：同 MAX萨凡纳 布局。"""
+    _max_invoice_mode(pdf_paths, 'MAX纽约')
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -1540,6 +1559,8 @@ def detail_mode(pdf_paths, inv_type):
         chuangshi_surcharge_mode(pdf_paths)
     elif inv_type == '7':
         max_portlink_mode(pdf_paths)
+    elif inv_type == '8':
+        max_ny_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1770,8 +1791,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8'):
                     break
                 print('请输入 1 或 2。')
 
