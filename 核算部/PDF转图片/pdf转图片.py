@@ -484,9 +484,9 @@ CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Descriptio
                                       'Quantity', 'Unit Price', 'Amount GBP')
 
 # MAX萨凡纳（MAXPORTLINK）发票输出列：Ship to / Invoice details 第一行 按明细行重复，
-# 邮编从 Ship to 末尾拆出、柜号从 Description 首词拆出；Rate / Amount 保留原始货币符号
-MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', '邮编', 'Invoice details 第一行',
-                               'Product or service', '柜号', 'Description',
+# 柜号、邮编为发票级字段填充全部行；柜号/邮编放在 Description 列之前；Rate / Amount 保留货币符号
+MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
+                               '柜号', '邮编', 'Description',
                                'Qty', 'Rate', 'Amount')
 
 
@@ -1388,7 +1388,7 @@ def _split_container(desc):
 def _max_table(lines, header_line):
     """MAXPORTLINK 六列明细表 #|Product or service|Description|Qty|Rate|Amount。
     价格行（Qty/Rate/Amount 含数字）为一行起始，其后 Description 续行并入（空格拼接）。
-    返回每行 [product, container, desc, qty, rate, amount]：柜号从 Description 首词拆出，
+    返回每行 [product, desc, qty, rate, amount]；柜号发票级由上层单独提取，
     Rate/Amount 保留货币符号原样。"""
     def hdr(key):
         for w in header_line['items']:
@@ -1433,16 +1433,15 @@ def _max_table(lines, header_line):
             cur['desc'].append(desc)
     result = []
     for r in rows:
-        desc = ' '.join(r['desc'])
-        _, container = _split_container(desc)
-        result.append([r['product'], container, desc,
+        result.append([r['product'], ' '.join(r['desc']),
                        r['qty'], r['rate'], r['amt']])
     return result
 
 
 def extract_max_portlink_page(items):
-    """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / 邮编 / Invoice details 第一行 字段 + 五列表。
-    返回 ({ship_to, postal, invoice_no}, [[product, container, desc, qty, rate, amount], ...])。"""
+    """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / 邮编 / Invoice details 第一行 / 柜号 字段 + 五列表。
+    返回 ({ship_to, postal, invoice_no, container}, [[product, desc, qty, rate, amount], ...])。
+    柜号为发票级：取本页明细 Description 首词（第一个非空）。"""
     if not items:
         return {}, []
     lines = _group_detail_lines(items)
@@ -1463,11 +1462,18 @@ def extract_max_portlink_page(items):
     fields['ship_to'], fields['postal'] = _split_postal(ship_to)
     anchor, label_line = _jz_label(field_lines, 'INVOICEDETAILS', 'INVOICE')
     fields['invoice_no'] = _max_invoice_details_first(field_lines, header_cy, anchor, label_line)
-    return fields, _max_table(lines, header_line)
+    rows = _max_table(lines, header_line)
+    for r in rows:
+        _, container = _split_container(r[1])
+        if container:
+            fields['container'] = container
+            break
+    return fields, rows
 
 
 def extract_max_portlink_from_pdfs(pdf_paths):
-    """批量识别 MAX萨凡纳（MAXPORTLINK）发票，返回明细行和处理统计。续页继承上页字段值。"""
+    """批量识别 MAX萨凡纳（MAXPORTLINK）发票，返回明细行和处理统计。
+    续页继承上页字段值；柜号/邮编为发票级字段，填充该发票全部行。"""
     all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
@@ -1482,12 +1488,16 @@ def extract_max_portlink_from_pdfs(pdf_paths):
                 items = _detail_page_items(pdf_path, page, page_no)
                 fields, rows = extract_max_portlink_page(items)
                 merged = dict(last)
-                merged.update({k: v for k, v in fields.items() if v != '未知'})
+                merged.update({k: v for k, v in fields.items() if v and v != '未知'})
                 last = merged
                 for r in rows:
                     all_rows.append([merged.get('ship_to', '未知'),
-                                     merged.get('postal', ''),
-                                     merged.get('invoice_no', '未知')] + r)
+                                     merged.get('invoice_no', '未知'),
+                                     r[0],                       # product
+                                     merged.get('container', ''),  # 柜号（发票级）
+                                     merged.get('postal', ''),     # 邮编（发票级）
+                                     r[1],                       # desc
+                                     r[2], r[3], r[4]])           # qty, rate, amt
         finally:
             doc.close()
     return all_rows, pages, skipped
@@ -1510,7 +1520,7 @@ def max_portlink_mode(pdf_paths):
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
                        numeric_cols={6}, zero_pad_cols=set(),
-                       widths=[36, 10, 22, 16, 16, 36, 8, 12, 12])
+                       widths=[36, 22, 16, 16, 10, 36, 8, 12, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
