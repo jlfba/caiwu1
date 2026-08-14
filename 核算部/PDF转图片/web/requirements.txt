@@ -1,0 +1,9 @@
+# 网页版运行依赖（Docker 镜像构建用）
+# 注：OCR 用 rapidocr-onnxruntime（wheel 内置 PP-OCRv4 模型，无需下载）
+fastapi==0.122.0
+uvicorn==0.38.0
+python-multipart==0.0.20
+openpyxl==3.1.5
+PyMuPDF==1.26.5
+Pillow==11.3.0
+rapidocr-onnxruntime==1.4.4
