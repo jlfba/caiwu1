@@ -484,9 +484,10 @@ CHUANGSHI_SURCHARGE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Descriptio
                                       'Quantity', 'Unit Price', 'Amount GBP')
 
 # MAX萨凡纳（MAXPORTLINK）发票输出列：Ship to / Invoice details 第一行 按明细行重复，
-# Rate / Amount 保留原始货币符号
-MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or service',
-                               'Description', 'Qty', 'Rate', 'Amount')
+# 邮编从 Ship to 末尾拆出、柜号从 Description 首词拆出；Rate / Amount 保留原始货币符号
+MAX_PORTLINK_OUTPUT_HEADERS = ('Ship to', '邮编', 'Invoice details 第一行',
+                               'Product or service', '柜号', 'Description',
+                               'Qty', 'Rate', 'Amount')
 
 
 def _compact_text(text):
@@ -795,7 +796,25 @@ def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, width
         pad_lens[i] = max(lens) if lens else 0
     numeric_set = numeric_cols | zero_pad_cols
     for row in rows:
-        ws.append([to_number(v) if i in numeric_set else v for i, v in enumerate(row)])
+        ws.append([None if v == _MERGE_UP
+                   else (to_number(v) if i in numeric_set else v)
+                   for i, v in enumerate(row)])
+    # 收集纵向合并区：_MERGE_UP 标记的单元格与其上方有真实值的单元格合并
+    # （如创时附加费 DPD 市区费段，拆行后金额只保留在费用头行，向下合并整段）
+    merge_regions = []
+    for col_idx in range(len(headers)):
+        top = None
+        for r, row in enumerate(rows, start=2):
+            v = row[col_idx] if col_idx < len(row) else None
+            if v == _MERGE_UP:
+                if top is None:
+                    top = r - 1
+                bottom = r
+            elif top is not None:
+                merge_regions.append((col_idx, top, bottom))
+                top = None
+        if top is not None:
+            merge_regions.append((col_idx, top, bottom))
     # 文本列：显式设文本格式，值若被转成数字也还原为字符串（保住前导 0）
     for i in text_cols:
         for cell in ws[get_column_letter(i + 1)][1:]:
@@ -815,6 +834,11 @@ def write_detail_excel(rows, output_path, headers=None, numeric_cols=None, width
     for row in ws.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(horizontal='right', vertical='top', wrap_text=True)
+    # 应用纵向合并（标记行与其上方真实值所在单元格）
+    for col_idx, top, bottom in merge_regions:
+        if bottom > top:
+            ws.merge_cells(start_row=top, start_column=col_idx + 1,
+                           end_row=bottom, end_column=col_idx + 1)
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions
     wb.save(output_path)
@@ -1214,10 +1238,40 @@ def extract_chuangshi_clearance_from_pdfs(pdf_paths):
     return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
 
 
+# 创时附加费：DPD 市区费段的运单号拆成独立行后，金额列用该标记表示"与上方有值的单元格合并"
+_MERGE_UP = '__MERGE_AMOUNT__'
+
+
+def _split_dpd_city_fee(rows):
+    """把 创时附加费 里 DPD 市区费 段的运单号从 Description 拆成独立行。
+
+    发票上该段是一个费用行（DPD 市区费 + 数量 + 单价 + 金额）下面挂一长串
+    34 开头运单号，当前全被合并进 Description 一格。这里拆成：
+    费用头行（保留数量/单价/金额）+ 每运单号一行；明细行的数量/单价/金额三列
+    放 _MERGE_UP 标记，由 write_detail_excel 写 Excel 时三列分别纵向合并。
+    其余费用段保持原样。行结构 [invoice, reference, desc, qty, unit, amt]。
+    """
+    out = []
+    for row in rows:
+        desc = row[2] or ''
+        if desc.startswith('DPD 市区费') and '\n' in desc:
+            lines = desc.split('\n')
+            out.append([row[0], row[1], lines[0].strip(), row[3], row[4], row[5]])
+            for t in lines[1:]:
+                t = t.strip()
+                if t:
+                    out.append([row[0], row[1], t, _MERGE_UP, _MERGE_UP, _MERGE_UP])
+        else:
+            out.append(row)
+    return out
+
+
 def extract_chuangshi_surcharge_from_pdfs(pdf_paths):
     """批量识别创时附加费发票（多行 34 开头单号明细，支持跨页续行）。
+    DPD 市区费段拆成独立运单号行、金额列纵向合并（由 write_detail_excel 处理标记）。
     输出行 [invoice, reference, desc, qty, unit, amt]。"""
-    return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
+    rows, pages, skipped = _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
+    return _split_dpd_city_fee(rows), pages, skipped
 
 
 def chuangshi_car_mode(pdf_paths):
@@ -1312,10 +1366,30 @@ def _max_invoice_details_first(lines, header_cy, anchor, label_line):
     return ' '.join(w['text'] for w in nxt['items']).strip() or '未知'
 
 
+def _split_postal(ship_to):
+    """提取 Ship to 末尾的数字型邮编（不改变 ship_to 原内容）。返回 (ship_to, 邮编)。
+    末尾词不含数字（如国家/州缩写）时邮编为空。"""
+    if not ship_to or ship_to == '未知':
+        return ship_to, ''
+    last = ship_to.split('\n')[-1].strip()
+    parts = last.split()
+    if not parts or not any(ch.isdigit() for ch in parts[-1]):
+        return ship_to, ''
+    return ship_to, parts[-1]
+
+
+def _split_container(desc):
+    """提取 Description 首词（柜号，第一个空格前，不改变 desc 原内容）。返回 (desc, 柜号)。"""
+    if not desc:
+        return desc, ''
+    return desc, desc.split(' ', 1)[0]
+
+
 def _max_table(lines, header_line):
     """MAXPORTLINK 六列明细表 #|Product or service|Description|Qty|Rate|Amount。
     价格行（Qty/Rate/Amount 含数字）为一行起始，其后 Description 续行并入（空格拼接）。
-    返回每行 [product, desc, qty, rate, amount]，Rate/Amount 保留货币符号原样。"""
+    返回每行 [product, container, desc, qty, rate, amount]：柜号从 Description 首词拆出，
+    Rate/Amount 保留货币符号原样。"""
     def hdr(key):
         for w in header_line['items']:
             if _compact_text(w['text']) == key:
@@ -1359,14 +1433,16 @@ def _max_table(lines, header_line):
             cur['desc'].append(desc)
     result = []
     for r in rows:
-        result.append([r['product'], ' '.join(r['desc']),
+        desc = ' '.join(r['desc'])
+        _, container = _split_container(desc)
+        result.append([r['product'], container, desc,
                        r['qty'], r['rate'], r['amt']])
     return result
 
 
 def extract_max_portlink_page(items):
-    """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / Invoice details 第一行 字段 + 五列表。
-    返回 ({ship_to, invoice_no}, [[product, desc, qty, rate, amount], ...])。"""
+    """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / 邮编 / Invoice details 第一行 字段 + 五列表。
+    返回 ({ship_to, postal, invoice_no}, [[product, container, desc, qty, rate, amount], ...])。"""
     if not items:
         return {}, []
     lines = _group_detail_lines(items)
@@ -1383,7 +1459,8 @@ def extract_max_portlink_page(items):
     field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
     fields = {}
     anchor, label_line = _jz_label(field_lines, 'SHIPTO', 'SHIP')
-    fields['ship_to'] = _max_ship_to(field_lines, header_cy, anchor, label_line)
+    ship_to = _max_ship_to(field_lines, header_cy, anchor, label_line)
+    fields['ship_to'], fields['postal'] = _split_postal(ship_to)
     anchor, label_line = _jz_label(field_lines, 'INVOICEDETAILS', 'INVOICE')
     fields['invoice_no'] = _max_invoice_details_first(field_lines, header_cy, anchor, label_line)
     return fields, _max_table(lines, header_line)
@@ -1409,6 +1486,7 @@ def extract_max_portlink_from_pdfs(pdf_paths):
                 last = merged
                 for r in rows:
                     all_rows.append([merged.get('ship_to', '未知'),
+                                     merged.get('postal', ''),
                                      merged.get('invoice_no', '未知')] + r)
         finally:
             doc.close()
@@ -1416,7 +1494,7 @@ def extract_max_portlink_from_pdfs(pdf_paths):
 
 
 def max_portlink_mode(pdf_paths):
-    """MAX萨凡纳（MAXPORTLINK）发票：Ship to / Invoice no. / 明细行，
+    """MAX萨凡纳（MAXPORTLINK）发票：Ship to / 邮编 / Invoice no. / 柜号 / 明细行，
     输出到 MAX萨凡纳发票-日期 文件夹。"""
     print('识别 MAX萨凡纳（MAXPORTLINK）发票明细（文字层优先，扫描件自动使用 OCR）…')
     rows, pages, skipped = extract_max_portlink_from_pdfs(pdf_paths)
@@ -1431,8 +1509,8 @@ def max_portlink_mode(pdf_paths):
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
-                       numeric_cols={4}, zero_pad_cols=set(),
-                       widths=[40, 24, 18, 42, 8, 12, 12])
+                       numeric_cols={7}, zero_pad_cols=set(),
+                       widths=[36, 10, 22, 16, 16, 36, 8, 12, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
