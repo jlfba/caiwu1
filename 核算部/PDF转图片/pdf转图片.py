@@ -1509,7 +1509,7 @@ def max_portlink_mode(pdf_paths):
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MAX_PORTLINK_OUTPUT_HEADERS,
-                       numeric_cols={7}, zero_pad_cols=set(),
+                       numeric_cols={6}, zero_pad_cols=set(),
                        widths=[36, 10, 22, 16, 16, 36, 8, 12, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)

@@ -164,7 +164,7 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if inv_type == '7':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'MAX萨凡纳发票明细表.xlsx', tool.MAX_PORTLINK_OUTPUT_HEADERS,
-            {4}, set(), [40, 24, 18, 42, 8, 12, 12])
+            {6}, set(), [36, 10, 22, 16, 16, 36, 8, 12, 12])
     elif inv_type == '6':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             '创时附加费发票明细表.xlsx', tool.CHUANGSHI_SURCHARGE_OUTPUT_HEADERS,
