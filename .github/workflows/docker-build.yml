@@ -15,6 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # buildx 会话密钥（x-docker-expose-session-sharedkey）不接受非 ASCII 的上下文路径，
+      # 这里把需要的文件复制到 ASCII 路径 build-context/ 再构建（中文文件名在上下文内不受影响）
+      - name: Prepare ASCII build context
+        run: |
+          mkdir -p build-context
+          cp -r 核算部/PDF转图片/web build-context/web
+          cp 核算部/PDF转图片/pdf转图片.py build-context/
+          cp 核算部/PDF转图片/Dockerfile build-context/Dockerfile
+          rm -rf build-context/web/.git
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -28,8 +38,8 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: 核算部/PDF转图片
-          file: 核算部/PDF转图片/Dockerfile
+          context: build-context
+          file: build-context/Dockerfile
           push: true
           tags: |
             ghcr.io/jlfba/caiwu1:latest
