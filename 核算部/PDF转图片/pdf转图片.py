@@ -1941,6 +1941,34 @@ def _find_header_band_keys(items, labels):
             if t == key:
                 candidates.append((label, it))
                 break
+    # 多词表头（如 DINO 的 Product or service）在 PDF 文字层中常被拆成多个 word，
+    # 需要按同一视觉行的连续词拼回一个表头锚点，否则 Product 列会被并到 Date 列。
+    multi_labels = [(label, key) for label, key in keys.items() if ' ' in label]
+    if multi_labels:
+        for line in _group_detail_lines(items):
+            line_items = line['items']
+            for label, key in multi_labels:
+                for start in range(len(line_items)):
+                    merged = ''
+                    matched = []
+                    for it in line_items[start:]:
+                        merged += _compact_text(it['text'])
+                        matched.append(it)
+                        if merged == key:
+                            left = min(x['cx'] - x['w'] / 2 for x in matched)
+                            right = max(x['cx'] + x['w'] / 2 for x in matched)
+                            candidates.append((label, {
+                                'text': label,
+                                'cx': (left + right) / 2,
+                                'cy': sum(x['cy'] for x in matched) / len(matched),
+                                'w': right - left,
+                                'h': max(x.get('h', 0) for x in matched),
+                            }))
+                            break
+                        if not key.startswith(merged):
+                            break
+                    if merged == key:
+                        break
     if not candidates:
         return None
     heights = [x['h'] for x in items if x.get('h', 0) > 0]
@@ -1969,11 +1997,10 @@ def _find_header_band_keys(items, labels):
 
 def _dino_table_from_found(lines, found, data_from_top=False):
     """基于已识别的 DINO 表头锚点解析明细。返回每行 [date, product, desc, qty, rate, amt, tax]。"""
-    ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'])
-    centers = [it['cx'] for _, it in ordered]
+    ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'] - kv[1]['w'] / 2)
+    lefts = [it['cx'] - it['w'] / 2 for _, it in ordered]
     label_col = {label: idx for idx, label in enumerate(DINO_TABLE_HEADERS)}
-    bounds = [float('-inf')] + [(centers[i] + centers[i + 1]) / 2
-                                for i in range(len(centers) - 1)] + [float('inf')]
+    bounds = [float('-inf')] + lefts[1:] + [float('inf')]
     col_index = [label_col[lab] for lab, _ in ordered]
     header_bottom = max(it['cy'] + it['h'] / 2 for _, it in ordered)
     if data_from_top:
