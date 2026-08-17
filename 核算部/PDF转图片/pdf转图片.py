@@ -493,8 +493,8 @@ MAX_STYLE_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or 
 JCK_OUTPUT_HEADERS = ('Container No.', 'ITEM', 'STATE', 'ZIPCODE', 'W/H', 'MARKS NO.',
                       'QTY', 'UNIT PRICE', 'CURRENCY', 'AMOUNT', 'REMARKS')
 
-# MKK 发票输出列：编号/柜号/主单号为发票级字段，按明细行重复
-MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号',
+# MKK 发票输出列：编号/柜号/主单号/Bill To 为发票级字段，按明细行重复
+MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号', 'Bill To',
                       'DESCRIPTION', 'QUANTITY', 'RATE TYPE', 'AMOUNT')
 
 
@@ -1768,6 +1768,22 @@ def _mkk_label_below(lines, header_cy, line_key, word_key):
     return ' '.join(w['text'] for w in vals).strip() or '未知'
 
 
+def _mkk_bill_to(lines, header_cy):
+    """Bill To 下方、表头之前的地址内容，按行合并到同一个单元格。"""
+    bill_line = _find_line(lines, 'BILLTO')
+    if bill_line is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > bill_line['cy'] + 2 and ln['cy'] < header_cy - 2]
+    parts = []
+    for ln in below:
+        # 只取左侧 Bill To 区域（避开右侧 Invoice/Container 等字段）
+        ws = [w['text'] for w in ln['items'] if w['cx'] < 260]
+        text = ' '.join(ws).strip()
+        if text:
+            parts.append(text)
+    return '\n'.join(parts) or '未知'
+
+
 def _mkk_table(lines, header_line):
     """MKK 四列明细表 DESCRIPTION|QUANTITY|RATE TYPE|AMOUNT。
     价格行（QUANTITY/AMOUNT 含数字）为一行起始，其后 Description 续行并入。
@@ -1818,8 +1834,8 @@ def _mkk_table(lines, header_line):
 
 
 def extract_mkk_page(items):
-    """MKK 发票单页：编号/柜号/主单号 字段 + 四列明细。
-    返回 ({invoice_no, container, master_bl}, [[desc, qty, rate, amt], ...])。"""
+    """MKK 发票单页：编号/柜号/主单号/Bill To 字段 + 四列明细。
+    返回 ({invoice_no, container, master_bl, bill_to}, [[desc, qty, rate, amt], ...])。"""
     if not items:
         return {}, []
     lines = _group_detail_lines(items)
@@ -1838,6 +1854,7 @@ def extract_mkk_page(items):
     fields['invoice_no'] = _mkk_label_below(field_lines, header_cy, 'INVOICE#', 'INVOICE')
     fields['container'] = _mkk_label_right(field_lines, 'CONTAINER#', 'CONTAINER')
     fields['master_bl'] = _mkk_label_right(field_lines, 'MASTERBL#', 'MASTER')
+    fields['bill_to'] = _mkk_bill_to(field_lines, header_cy)
     return fields, _mkk_table(lines, header_line)
 
 
@@ -1860,7 +1877,8 @@ def extract_mkk_from_pdfs(pdf_paths):
             for r in rows:
                 all_rows.append([fields.get('invoice_no', '未知'),
                                  fields.get('container', '未知'),
-                                 fields.get('master_bl', '未知')] + r)
+                                 fields.get('master_bl', '未知'),
+                                 fields.get('bill_to', '未知')] + r)
         finally:
             doc.close()
     return all_rows, pages, skipped
@@ -1881,8 +1899,8 @@ def mkk_mode(pdf_paths):
     os.makedirs(folder, exist_ok=True)
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MKK_OUTPUT_HEADERS,
-                       numeric_cols={4, 6}, zero_pad_cols=set(),
-                       widths=[16, 18, 20, 32, 10, 10, 12])
+                       numeric_cols={5, 7}, zero_pad_cols=set(),
+                       widths=[16, 18, 20, 34, 32, 10, 10, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
