@@ -14,7 +14,6 @@ const types = [
   { id: '9', label: 'AA', hint: 'TX-AA LOGISTICS · 同 MAX萨凡纳 布局' },
   { id: '10', label: 'JCK', hint: 'JCK LOGISTICS · Container No. / 十列明细' },
   { id: '11', label: 'MKK', hint: '编号 / 柜号 / 主单号 / Bill To · 四列费用明细' },
-  { id: '12', label: 'DINO', hint: '发票号 / Product or service / Description 多行合并' },
   { id: '12', label: 'DINO', hint: '发票号 / Product or service / Description 多行合并' }
 ]
 </script>

@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK；11 MKK；12 DINO。
 
 使用：
     python pdf转图片.py
@@ -1967,7 +1967,7 @@ def _find_header_band_keys(items, labels):
     return found
 
 
-def _dino_table_from_found(lines, found):
+def _dino_table_from_found(lines, found, data_from_top=False):
     """基于已识别的 DINO 表头锚点解析明细。返回每行 [date, product, desc, qty, rate, amt, tax]。"""
     ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'])
     centers = [it['cx'] for _, it in ordered]
@@ -1976,7 +1976,10 @@ def _dino_table_from_found(lines, found):
                                 for i in range(len(centers) - 1)] + [float('inf')]
     col_index = [label_col[lab] for lab, _ in ordered]
     header_bottom = max(it['cy'] + it['h'] / 2 for _, it in ordered)
-    data_lines = [ln for ln in lines if ln['cy'] > header_bottom + 2]
+    if data_from_top:
+        data_lines = lines
+    else:
+        data_lines = [ln for ln in lines if ln['cy'] > header_bottom + 2]
     rows = []
     stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'NOTE', 'REGISTRATION')
     for line in data_lines:
@@ -2041,7 +2044,7 @@ def extract_dino_from_pdfs(pdf_paths):
                     found = page_found
                 elif found is not None:
                     lines = _group_detail_lines(items)
-                    rows = _dino_table_from_found(lines, found)
+                    rows = _dino_table_from_found(lines, found, data_from_top=True)
                 for r in rows:
                     all_rows.append([last_invoice] + r)
         finally:
@@ -2073,7 +2076,7 @@ def dino_mode(pdf_paths):
 
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK | '12' DINO。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -2094,6 +2097,8 @@ def detail_mode(pdf_paths, inv_type):
         jck_mode(pdf_paths)
     elif inv_type == '11':
         mkk_mode(pdf_paths)
+    elif inv_type == '12':
+        dino_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -2324,8 +2329,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK | 11 MKK：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK | 11 MKK | 12 DINO：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'):
                     break
                 print('请输入 1 或 2。')
 
