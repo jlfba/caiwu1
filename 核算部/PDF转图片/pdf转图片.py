@@ -1842,7 +1842,8 @@ def extract_mkk_page(items):
 
 
 def extract_mkk_from_pdfs(pdf_paths):
-    """批量识别 MKK 发票，返回明细行和处理统计。续页继承上页字段值。"""
+    """批量识别 MKK 发票，返回明细行和处理统计。
+    这类发票明细固定在第一页，只读取第一页以显著提速。"""
     all_rows, pages, skipped = [], 0, 0
     for pdf_path in pdf_paths:
         if not os.path.isfile(pdf_path):
@@ -1850,19 +1851,16 @@ def extract_mkk_from_pdfs(pdf_paths):
             skipped += 1
             continue
         doc = fitz.open(pdf_path)
-        last = {}
         try:
-            for page_no, page in enumerate(doc, 1):
-                pages += 1
-                items = _detail_page_items(pdf_path, page, page_no)
-                fields, rows = extract_mkk_page(items)
-                merged = dict(last)
-                merged.update({k: v for k, v in fields.items() if v and v != '未知'})
-                last = merged
-                for r in rows:
-                    all_rows.append([merged.get('invoice_no', '未知'),
-                                     merged.get('container', '未知'),
-                                     merged.get('master_bl', '未知')] + r)
+            if doc.page_count <= 0:
+                continue
+            pages += 1
+            items = _detail_page_items(pdf_path, doc[0], 1)
+            fields, rows = extract_mkk_page(items)
+            for r in rows:
+                all_rows.append([fields.get('invoice_no', '未知'),
+                                 fields.get('container', '未知'),
+                                 fields.get('master_bl', '未知')] + r)
         finally:
             doc.close()
     return all_rows, pages, skipped
