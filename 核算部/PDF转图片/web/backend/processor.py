@@ -126,7 +126,7 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
@@ -139,7 +139,9 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
         if not os.path.isfile(pdf):
             skipped += 1
             continue
-        if inv_type == '10':
+        if inv_type == '11':
+            rows, pg, sk = tool.extract_mkk_from_pdfs([pdf])
+        elif inv_type == '10':
             rows, pg, sk = tool.extract_jck_from_pdfs([pdf])
         elif inv_type == '9':
             rows, pg, sk = tool.extract_aa_from_pdfs([pdf])
@@ -167,7 +169,11 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if not all_rows:
         raise RuntimeError('没有识别到任何明细，未生成 Excel（共 %d 个文件，%d 页）' % (n, pages))
 
-    if inv_type == '10':
+    if inv_type == '11':
+        name, headers, numeric_cols, zero_pad_cols, widths = (
+            'MKK发票明细表.xlsx', tool.MKK_OUTPUT_HEADERS,
+            {4, 6}, set(), [16, 18, 20, 32, 10, 10, 12])
+    elif inv_type == '10':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'JCK发票明细表.xlsx', tool.JCK_OUTPUT_HEADERS,
             {6, 7, 9}, set(), [18, 20, 8, 10, 10, 18, 8, 12, 10, 12, 16])

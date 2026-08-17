@@ -493,6 +493,10 @@ MAX_STYLE_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or 
 JCK_OUTPUT_HEADERS = ('Container No.', 'ITEM', 'STATE', 'ZIPCODE', 'W/H', 'MARKS NO.',
                       'QTY', 'UNIT PRICE', 'CURRENCY', 'AMOUNT', 'REMARKS')
 
+# MKK 发票输出列：编号/柜号/主单号为发票级字段，按明细行重复
+MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号',
+                      'DESCRIPTION', 'QUANTITY', 'RATE TYPE', 'AMOUNT')
+
 
 def _compact_text(text):
     """统一 OCR/原生文字中的空格和标点，便于匹配英文标签。"""
@@ -1705,9 +1709,189 @@ def jck_mode(pdf_paths):
     print('Excel 已保存：%s' % output)
 
 
+def _mkk_label(lines, keyword):
+    """定位 MKK 带 # 的字段标签行，避开顶部 Invoice 标题。"""
+    candidates = []
+    key = keyword.upper()
+    for ln in lines:
+        if key not in _compact_text(ln['text']):
+            continue
+        if not any('#' in w['text'] for w in ln['items']):
+            continue
+        anchor = next((w for w in ln['items']
+                       if key in _compact_text(w['text'])), None)
+        if anchor is not None:
+            candidates.append((ln, anchor))
+    if not candidates:
+        return None, None
+    ln, anchor = min(candidates, key=lambda p: p[0]['cy'])
+    return anchor, ln
+
+
+def _mkk_label_right(lines, line_key, word_key):
+    """标签行中，标签词与右侧值之间通常有较大空隙，取最大空隙后的内容。"""
+    anchor, label_line = _mkk_label(lines, word_key)
+    if anchor is None:
+        return '未知'
+    words = sorted(label_line['items'], key=lambda w: w['cx'])
+    hash_i = next((i for i, w in enumerate(words)
+                   if '#' in w['text']), None)
+    if hash_i is not None and hash_i + 1 < len(words):
+        return ' '.join(w['text'] for w in words[hash_i + 1:]).strip() or '未知'
+    if len(words) < 2:
+        return '未知'
+    best_i, best_gap = 0, -1.0
+    for i in range(len(words) - 1):
+        gap = (words[i + 1]['cx'] - words[i + 1]['w'] / 2) - (words[i]['cx'] + words[i]['w'] / 2)
+        if gap > best_gap:
+            best_gap, best_i = gap, i
+    if best_gap < 8:
+        return '未知'
+    vals = [w['text'] for w in words[best_i + 1:]]
+    return ' '.join(vals).strip() or '未知'
+
+
+def _mkk_label_below(lines, header_cy, line_key, word_key):
+    """标签下方最近一行的同列值（标签在上、值在下）。"""
+    anchor, label_line = _mkk_label(lines, word_key)
+    if anchor is None:
+        return '未知'
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2
+             and ln['cy'] < header_cy - 2]
+    if not below:
+        return '未知'
+    nxt = min(below, key=lambda ln: ln['cy'])
+    vals = [w for w in nxt['items'] if abs(w['cx'] - anchor['cx']) <= 50]
+    if not vals:
+        return '未知'
+    vals.sort(key=lambda w: w['cx'])
+    return ' '.join(w['text'] for w in vals).strip() or '未知'
+
+
+def _mkk_table(lines, header_line):
+    """MKK 四列明细表 DESCRIPTION|QUANTITY|RATE TYPE|AMOUNT。
+    价格行（QUANTITY/AMOUNT 含数字）为一行起始，其后 Description 续行并入。
+    返回每行 [desc, qty, rate, amt]。"""
+    def hdr(key):
+        for w in header_line['items']:
+            if _compact_text(w['text']) == key:
+                return w
+        return None
+
+    qty_hdr = hdr('QUANTITY')
+    rate_hdr = hdr('RATE')
+    amt_hdr = hdr('AMOUNT')
+    if qty_hdr is None or rate_hdr is None or amt_hdr is None:
+        return []
+    # Description 数据列从页面左缘开始（表头 DESCRIPTION 偏右），下界取 0
+    bounds = [0.0,
+              qty_hdr['cx'] - qty_hdr['w'] / 2,
+              rate_hdr['cx'] - rate_hdr['w'] / 2,
+              amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
+    header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
+    rows, cur = [], None
+    stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
+                  'REGISTRATION')
+    for ln in lines:
+        if ln['cy'] <= header_bottom + 2:
+            continue
+        comp = _compact_text(ln['text'])
+        if any(w in comp for w in stop_words):
+            break
+        cells = [''] * 4
+        for item in ln['items']:
+            ci = next((i for i in range(4)
+                       if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+            if ci is not None:
+                cells[ci] = (cells[ci] + ' ' + item['text']).strip()
+        desc, qty, rate, amt = cells
+        if _has_digit(qty) or _has_digit(rate) or _has_digit(amt):
+            cur = {'desc': [desc] if desc else [], 'qty': qty,
+                   'rate': rate, 'amt': amt}
+            rows.append(cur)
+        elif cur is not None and desc:
+            cur['desc'].append(desc)
+    result = []
+    for r in rows:
+        result.append([' '.join(r['desc']), r['qty'], r['rate'], r['amt']])
+    return result
+
+
+def extract_mkk_page(items):
+    """MKK 发票单页：编号/柜号/主单号 字段 + 四列明细。
+    返回 ({invoice_no, container, master_bl}, [[desc, qty, rate, amt], ...])。"""
+    if not items:
+        return {}, []
+    lines = _group_detail_lines(items)
+    header_line = None
+    for ln in lines:
+        comp = _compact_text(ln['text'])
+        if ('DESCRIPTION' in comp and 'QUANTITY' in comp
+                and 'RATE' in comp and 'AMOUNT' in comp):
+            header_line = ln
+            break
+    if header_line is None:
+        return {}, []
+    header_cy = header_line['cy']
+    field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
+    fields = {}
+    fields['invoice_no'] = _mkk_label_below(field_lines, header_cy, 'INVOICE#', 'INVOICE')
+    fields['container'] = _mkk_label_right(field_lines, 'CONTAINER#', 'CONTAINER')
+    fields['master_bl'] = _mkk_label_right(field_lines, 'MASTERBL#', 'MASTER')
+    return fields, _mkk_table(lines, header_line)
+
+
+def extract_mkk_from_pdfs(pdf_paths):
+    """批量识别 MKK 发票，返回明细行和处理统计。续页继承上页字段值。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows = extract_mkk_page(items)
+                merged = dict(last)
+                merged.update({k: v for k, v in fields.items() if v and v != '未知'})
+                last = merged
+                for r in rows:
+                    all_rows.append([merged.get('invoice_no', '未知'),
+                                     merged.get('container', '未知'),
+                                     merged.get('master_bl', '未知')] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def mkk_mode(pdf_paths):
+    """MKK 发票：编号/柜号/主单号 + 四列明细，输出到 MKK发票-日期 文件夹。"""
+    print('识别 MKK 发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_mkk_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'MKK发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=MKK_OUTPUT_HEADERS,
+                       numeric_cols={4, 6}, zero_pad_cols=set(),
+                       widths=[16, 18, 20, 32, 10, 10, 12])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -1726,6 +1910,8 @@ def detail_mode(pdf_paths, inv_type):
         aa_mode(pdf_paths)
     elif inv_type == '10':
         jck_mode(pdf_paths)
+    elif inv_type == '11':
+        mkk_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
 
@@ -1956,8 +2142,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK | 11 MKK：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'):
                     break
                 print('请输入 1 或 2。')
 

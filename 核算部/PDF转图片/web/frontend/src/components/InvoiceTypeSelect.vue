@@ -12,7 +12,8 @@ const types = [
   { id: '7', label: 'MAX萨凡纳', hint: 'MAXPORTLINK · Ship to / Invoice details / 柜号 / 邮编' },
   { id: '8', label: 'MAX纽约', hint: 'MAX GLOBAL LOGISTICS · 同 MAX萨凡纳 布局' },
   { id: '9', label: 'AA', hint: 'TX-AA LOGISTICS · 同 MAX萨凡纳 布局' },
-  { id: '10', label: 'JCK', hint: 'JCK LOGISTICS · Container No. / 十列明细' }
+  { id: '10', label: 'JCK', hint: 'JCK LOGISTICS · Container No. / 十列明细' },
+  { id: '11', label: 'MKK', hint: '编号 / 柜号 / 主单号 · 四列费用明细' }
 ]
 </script>
 

@@ -242,7 +242,7 @@ onUnmounted(stopPolling)
       </span>
       <div class="step-body">
         <h2 class="step-title">选择发票类型</h2>
-        <p class="step-sub">十种版式，选错会识别不到明细</p>
+        <p class="step-sub">十一种版式，选错会识别不到明细</p>
         <InvoiceTypeSelect v-model="invType" :disabled="submitting" />
       </div>
     </section>
