@@ -497,6 +497,11 @@ JCK_OUTPUT_HEADERS = ('Container No.', 'ITEM', 'STATE', 'ZIPCODE', 'W/H', 'MARKS
 MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号', 'Bill To',
                       'DESCRIPTION', 'QUANTITY', 'RATE TYPE', 'AMOUNT')
 
+# DINO 发票输出列：发票号按明细行重复，Description 多行合并到同一单元格，
+# Product or service / Rate / Amount / Tax 保持原文本（Rate/Amount 保留 $）
+DINO_OUTPUT_HEADERS = ('发票号', 'Date', 'Product or service', 'Description',
+                       'Qty', 'Rate', 'Amount', 'Tax')
+
 
 def _compact_text(text):
     """统一 OCR/原生文字中的空格和标点，便于匹配英文标签。"""
@@ -1901,6 +1906,167 @@ def mkk_mode(pdf_paths):
     write_detail_excel(rows, output, headers=MKK_OUTPUT_HEADERS,
                        numeric_cols={5, 7}, zero_pad_cols=set(),
                        widths=[16, 18, 20, 34, 32, 10, 10, 12])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
+
+
+def _extract_invoice_no_after_label(lines, compact_key='INVOICENO'):
+    """发票号：包含标签的同一行里，取标签后面的值（如 Invoice no.: D12478）。"""
+    ln = _find_line(lines, compact_key)
+    if ln is None:
+        return '未知'
+    text = ln['text']
+    m = re.search(r'[:#]\s*([A-Za-z0-9][A-Za-z0-9\-]*)', text, flags=re.I)
+    if m:
+        return m.group(1)
+    anchor = next((x for x in ln['items'] if 'INVOICE' in _compact_text(x['text'])), None)
+    if anchor is not None:
+        raw = _line_right_of(ln, anchor, drop=('NO', 'NO.', 'N', 'NO:'))
+        if raw:
+            return raw
+    return '未知'
+
+
+DINO_HEADERS = ('DATE', 'PRODUCT OR SERVICE', 'DESCRIPTION', 'QTY', 'RATE', 'AMOUNT', 'TAX')
+DINO_TABLE_HEADERS = ('#',) + DINO_HEADERS
+
+
+def _find_header_band_keys(items, labels):
+    """按指定表头 labels 找到同一横带内的表头锚点。返回 {label: item}。"""
+    keys = {label: _compact_text(label) for label in labels}
+    candidates = []
+    for it in items:
+        t = _compact_text(it['text'])
+        for label, key in keys.items():
+            if t == key:
+                candidates.append((label, it))
+                break
+    if not candidates:
+        return None
+    heights = [x['h'] for x in items if x.get('h', 0) > 0]
+    tol = max(3.0, (sum(heights) / len(heights) if heights else 10) * 0.7)
+    bands = []
+    for label, it in candidates:
+        placed = None
+        for b in bands:
+            if abs(it['cy'] - b['cy']) <= tol:
+                placed = b
+                break
+        if placed is None:
+            placed = {'cy': it['cy'], 'items': []}
+            bands.append(placed)
+        placed['items'].append((label, it))
+        placed['cy'] = sum(x[1]['cy'] for x in placed['items']) / len(placed['items'])
+    best = max(bands, key=lambda b: len({lab for lab, _ in b['items']}))
+    found = {}
+    for label, it in best['items']:
+        if label not in found or it['cx'] < found[label]['cx']:
+            found[label] = it
+    if len(found) < 5:
+        return None
+    return found
+
+
+def _dino_table_from_found(lines, found):
+    """基于已识别的 DINO 表头锚点解析明细。返回每行 [date, product, desc, qty, rate, amt, tax]。"""
+    ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'])
+    centers = [it['cx'] for _, it in ordered]
+    label_col = {label: idx for idx, label in enumerate(DINO_TABLE_HEADERS)}
+    bounds = [float('-inf')] + [(centers[i] + centers[i + 1]) / 2
+                                for i in range(len(centers) - 1)] + [float('inf')]
+    col_index = [label_col[lab] for lab, _ in ordered]
+    header_bottom = max(it['cy'] + it['h'] / 2 for _, it in ordered)
+    data_lines = [ln for ln in lines if ln['cy'] > header_bottom + 2]
+    rows = []
+    stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'NOTE', 'REGISTRATION')
+    for line in data_lines:
+        if any(word in _compact_text(line['text']) for word in stop_words):
+            break
+        cells = [''] * len(DINO_TABLE_HEADERS)
+        for item in line['items']:
+            col = next((ci for ci in range(len(bounds) - 1)
+                        if bounds[ci] <= item['cx'] < bounds[ci + 1]), None)
+            if col is not None:
+                cells[col_index[col]] = (cells[col_index[col]] + ' ' + item['text']).strip()
+        _, date, product, desc, qty, rate, amt, tax = cells
+        if _has_digit(qty) or _has_digit(rate) or _has_digit(amt) or (not rows and any((date, product, desc, qty, rate, amt, tax))):
+            rows.append([date, product, desc, qty, rate, amt, tax])
+        elif rows and any((date, product, desc, qty, rate, amt, tax)):
+            vals = [date, product, desc, qty, rate, amt, tax]
+            for i, value in enumerate(vals):
+                if value:
+                    rows[-1][i] = (rows[-1][i] + ' ' + value).strip()
+    return [r for r in rows if any(r)]
+
+
+def _dino_table(lines, items):
+    """DINO 七列表：Date|Product or service|Description|Qty|Rate|Amount|Tax。
+    视觉上最左有 # 序号列，解析时忽略；出现 Qty/Rate/Amount 的行 = 新明细；
+    其余行并入上一行的 Product/Description/Date。返回 (rows, found)。"""
+    found = _find_header_band_keys(items, DINO_TABLE_HEADERS)
+    if found is None:
+        return [], None
+    return _dino_table_from_found(lines, found), found
+
+
+def extract_dino_page(items):
+    """DINO 发票单页：发票号 + 七列明细。返回 ({invoice_no}, rows, found)。"""
+    if not items:
+        return {}, [], None
+    lines = _group_detail_lines(items)
+    fields = {'invoice_no': _extract_invoice_no_after_label(lines, 'INVOICENO')}
+    rows, found = _dino_table(lines, items)
+    return fields, rows, found
+
+
+def extract_dino_from_pdfs(pdf_paths):
+    """批量识别 DINO 发票，返回明细行和处理统计。续页继承发票号与第一页表头列边界。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last_invoice = '未知'
+        found = None
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows, page_found = extract_dino_page(items)
+                if fields.get('invoice_no') and fields['invoice_no'] != '未知':
+                    last_invoice = fields['invoice_no']
+                if page_found is not None:
+                    found = page_found
+                elif found is not None:
+                    lines = _group_detail_lines(items)
+                    rows = _dino_table_from_found(lines, found)
+                for r in rows:
+                    all_rows.append([last_invoice] + r)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def dino_mode(pdf_paths):
+    """DINO 发票：发票号 + Date/Product or service/Description/Qty/Rate/Amount/Tax。
+    输出到 DINO发票-日期 文件夹。"""
+    print('识别 DINO 发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_dino_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'DINO发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=DINO_OUTPUT_HEADERS,
+                       numeric_cols={4}, zero_pad_cols=set(),
+                       widths=[16, 16, 22, 52, 10, 12, 14, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
