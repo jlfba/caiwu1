@@ -178,7 +178,7 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     elif inv_type == '11':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'MKK发票明细表.xlsx', tool.MKK_OUTPUT_HEADERS,
-            {5, 7}, set(), [16, 18, 20, 34, 32, 10, 10, 12])
+            {5, 7}, set(), [16, 18, 20, 40, 32, 10, 10, 12])
     elif inv_type == '10':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'JCK发票明细表.xlsx', tool.JCK_OUTPUT_HEADERS,

@@ -493,8 +493,8 @@ MAX_STYLE_OUTPUT_HEADERS = ('Ship to', 'Invoice details 第一行', 'Product or 
 JCK_OUTPUT_HEADERS = ('Container No.', 'ITEM', 'STATE', 'ZIPCODE', 'W/H', 'MARKS NO.',
                       'QTY', 'UNIT PRICE', 'CURRENCY', 'AMOUNT', 'REMARKS')
 
-# MKK 发票输出列：编号/柜号/主单号/Bill To 为发票级字段，按明细行重复
-MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号', 'Bill To',
+# MKK 发票输出列：编号/柜号/主单号/地址为发票级字段，按明细行重复
+MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号', '地址',
                       'DESCRIPTION', 'QUANTITY', 'RATE TYPE', 'AMOUNT')
 
 # DINO 发票输出列：发票号按明细行重复，Description 多行合并到同一单元格，
@@ -1773,26 +1773,10 @@ def _mkk_label_below(lines, header_cy, line_key, word_key):
     return ' '.join(w['text'] for w in vals).strip() or '未知'
 
 
-def _mkk_bill_to(lines, header_cy):
-    """Bill To 下方、表头之前的地址内容，按行合并到同一个单元格。"""
-    bill_line = _find_line(lines, 'BILLTO')
-    if bill_line is None:
-        return '未知'
-    below = [ln for ln in lines if ln['cy'] > bill_line['cy'] + 2 and ln['cy'] < header_cy - 2]
-    parts = []
-    for ln in below:
-        # 只取左侧 Bill To 区域（避开右侧 Invoice/Container 等字段）
-        ws = [w['text'] for w in ln['items'] if w['cx'] < 260]
-        text = ' '.join(ws).strip()
-        if text:
-            parts.append(text)
-    return '\n'.join(parts) or '未知'
-
-
 def _mkk_table(lines, header_line):
     """MKK 四列明细表 DESCRIPTION|QUANTITY|RATE TYPE|AMOUNT。
-    价格行（QUANTITY/AMOUNT 含数字）为一行起始，其后 Description 续行并入。
-    返回每行 [desc, qty, rate, amt]。"""
+    DESCRIPTION 表头下首个价格行之前的内容作为地址，其后的价格行及续行作为费用明细。
+    返回 {'address': 地址文本, 'rows': [[desc, qty, rate, amt], ...]}。"""
     def hdr(key):
         for w in header_line['items']:
             if _compact_text(w['text']) == key:
@@ -1803,16 +1787,19 @@ def _mkk_table(lines, header_line):
     rate_hdr = hdr('RATE')
     amt_hdr = hdr('AMOUNT')
     if qty_hdr is None or rate_hdr is None or amt_hdr is None:
-        return []
+        return {'address': '未知', 'rows': []}
     # Description 数据列从页面左缘开始（表头 DESCRIPTION 偏右），下界取 0
     bounds = [0.0,
               qty_hdr['cx'] - qty_hdr['w'] / 2,
               rate_hdr['cx'] - rate_hdr['w'] / 2,
               amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
     header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
-    rows, cur = [], None
+    address_parts, rows, cur = [], [], None
+    charge_started = False
     stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
                   'REGISTRATION')
+    ignored_prefixes = ('INVOICE', 'DATE', 'CONTAINER', 'CHASSIS', 'CHAS',
+                        'MASTER', 'BILLTO')
     for ln in lines:
         if ln['cy'] <= header_bottom + 2:
             continue
@@ -1826,21 +1813,26 @@ def _mkk_table(lines, header_line):
             if ci is not None:
                 cells[ci] = (cells[ci] + ' ' + item['text']).strip()
         desc, qty, rate, amt = cells
-        if _has_digit(qty) or _has_digit(rate) or _has_digit(amt):
+        is_charge = _has_digit(qty) or _has_digit(rate) or _has_digit(amt)
+        if is_charge:
+            charge_started = True
             cur = {'desc': [desc] if desc else [], 'qty': qty,
                    'rate': rate, 'amt': amt}
             rows.append(cur)
+        elif not charge_started:
+            if desc and not any(comp.startswith(prefix) for prefix in ignored_prefixes):
+                address_parts.append(desc)
         elif cur is not None and desc:
             cur['desc'].append(desc)
     result = []
     for r in rows:
         result.append([' '.join(r['desc']), r['qty'], r['rate'], r['amt']])
-    return result
+    return {'address': '\n'.join(address_parts) or '未知', 'rows': result}
 
 
 def extract_mkk_page(items):
-    """MKK 发票单页：编号/柜号/主单号/Bill To 字段 + 四列明细。
-    返回 ({invoice_no, container, master_bl, bill_to}, [[desc, qty, rate, amt], ...])。"""
+    """MKK 发票单页：编号/柜号/主单号/地址字段 + 四列明细。
+    返回 ({invoice_no, container, master_bl, address}, [[desc, qty, rate, amt], ...])。"""
     if not items:
         return {}, []
     lines = _group_detail_lines(items)
@@ -1859,8 +1851,9 @@ def extract_mkk_page(items):
     fields['invoice_no'] = _mkk_label_below(field_lines, header_cy, 'INVOICE#', 'INVOICE')
     fields['container'] = _mkk_label_right(field_lines, 'CONTAINER#', 'CONTAINER')
     fields['master_bl'] = _mkk_label_right(field_lines, 'MASTERBL#', 'MASTER')
-    fields['bill_to'] = _mkk_bill_to(field_lines, header_cy)
-    return fields, _mkk_table(lines, header_line)
+    table = _mkk_table(lines, header_line)
+    fields['address'] = table['address']
+    return fields, table['rows']
 
 
 def extract_mkk_from_pdfs(pdf_paths):
@@ -1883,14 +1876,14 @@ def extract_mkk_from_pdfs(pdf_paths):
                 all_rows.append([fields.get('invoice_no', '未知'),
                                  fields.get('container', '未知'),
                                  fields.get('master_bl', '未知'),
-                                 fields.get('bill_to', '未知')] + r)
+                                 fields.get('address', '未知')] + r)
         finally:
             doc.close()
     return all_rows, pages, skipped
 
 
 def mkk_mode(pdf_paths):
-    """MKK 发票：编号/柜号/主单号 + 四列明细，输出到 MKK发票-日期 文件夹。"""
+    """MKK 发票：编号/柜号/主单号/地址 + 四列明细，输出到 MKK发票-日期 文件夹。"""
     print('识别 MKK 发票明细（文字层优先，扫描件自动使用 OCR）…')
     rows, pages, skipped = extract_mkk_from_pdfs(pdf_paths)
     if skipped:
@@ -1905,7 +1898,7 @@ def mkk_mode(pdf_paths):
     output = _next_output_path(folder, '发票明细表.xlsx')
     write_detail_excel(rows, output, headers=MKK_OUTPUT_HEADERS,
                        numeric_cols={5, 7}, zero_pad_cols=set(),
-                       widths=[16, 18, 20, 34, 32, 10, 10, 12])
+                       widths=[16, 18, 20, 40, 32, 10, 10, 12])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
 
