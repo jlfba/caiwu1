@@ -207,17 +207,18 @@ onUnmounted(stopPolling)
         </svg>
       </span>
       <span class="brand-text">
-        <span class="brand-name">财务内部在线工具</span>
-        <span class="brand-sub">发票识别 · 明细转表 · 在线导出</span>
+        <span class="brand-name">财务内部工具</span>
+        <span class="brand-sub">发票识别 · 明细转表</span>
       </span>
     </div>
-    <span class="masthead-tag" v-if="status === 'idle'">网页版</span>
   </header>
 
   <main class="workspace">
-    <div class="rail" aria-hidden="true"></div>
+    <div class="workflow-grid">
+      <div class="workflow-column workflow-left">
+        <div class="rail" aria-hidden="true"></div>
 
-    <!-- 步骤 1：选择功能 -->
+        <!-- 步骤 1：选择功能 -->
     <section class="step">
       <span class="step-dot" :class="{ done: mode, cur: currentStep === 1 }">
         <svg v-if="mode" viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -246,9 +247,11 @@ onUnmounted(stopPolling)
         <InvoiceTypeSelect v-model="invType" :disabled="submitting" />
       </div>
     </section>
+      </div>
 
-    <!-- 步骤 3/2：上传 PDF -->
-    <section class="step">
+      <div class="workflow-column workflow-right">
+        <!-- 步骤 3/2：上传 PDF -->
+        <section class="step">
       <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '2' ? 3 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
@@ -396,11 +399,9 @@ onUnmounted(stopPolling)
         />
       </div>
     </section>
+      </div>
+    </div>
   </main>
-
-  <footer class="colophon">
-    内部工具 · 文件仅在本次任务内处理，完成后清理
-  </footer>
 </template>
 
 <style scoped>
@@ -455,7 +456,74 @@ onUnmounted(stopPolling)
 
 .workspace {
   position: relative;
+  padding-left: 0;
+}
+
+.workflow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(28px, 5vw, 72px);
+  align-items: start;
+}
+
+.workflow-column {
+  min-width: 0;
+}
+
+.workflow-left {
+  position: relative;
   padding-left: 52px;
+}
+
+.workflow-right {
+  position: sticky;
+  top: 24px;
+  height: min(760px, calc(100vh - 160px));
+  min-height: 0;
+  max-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 24px 24px 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface) 94%, var(--primary-soft));
+  box-shadow: var(--shadow-md);
+  scrollbar-width: thin;
+}
+
+.workflow-right > .step:first-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.workflow-right > .step:first-child::-webkit-scrollbar {
+  display: none;
+}
+
+.workflow-right > .step:last-child {
+  flex: 0 0 auto;
+}
+
+.workflow-right :deep(.file-list) {
+  max-height: clamp(180px, 30vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.workflow-right .step:last-child {
+  padding-bottom: 0;
+}
+
+@supports not (background: color-mix(in srgb, white, black)) {
+  .workflow-right {
+    background: var(--surface);
+  }
 }
 
 .rail {
@@ -850,18 +918,82 @@ onUnmounted(stopPolling)
   letter-spacing: 0.3px;
 }
 
-@media (max-width: 640px) {
-  .masthead {
-    margin-bottom: 32px;
+@media (max-width: 960px) {
+  .workflow-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
-  .workspace {
+  .workflow-left {
     padding-left: 46px;
   }
-  .step-dot {
-    left: -46px;
+  .workflow-right {
+    position: relative;
+    top: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    display: block;
+    overflow: visible;
+    margin-top: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
-  .step {
+  .workflow-right > .step:first-child {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .workflow-right > .step:last-child {
+    flex: none;
+  }
+  .workflow-right .step {
     padding-bottom: 36px;
   }
+  .workflow-right .step:first-child {
+    padding-top: 36px;
+    border-top: 1px solid var(--border);
+  }
+  .workflow-right .step-dot {
+    display: none;
+  }
+  .workflow-right .step-body {
+    animation-delay: 0.16s;
+  }
+  .workflow-right .rail {
+    display: none;
+  }
+  .workflow-left .step {
+    padding-bottom: 36px;
+  }
+  .workflow-left .step:last-child {
+    padding-bottom: 0;
+  }
+  .workflow-left .rail {
+    bottom: 0;
+  }
+  .workflow-right .run-area {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .workflow-right .lo-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 </style>
