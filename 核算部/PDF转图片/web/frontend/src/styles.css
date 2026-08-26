@@ -56,9 +56,38 @@ input {
 }
 
 #app {
-  max-width: 1180px;
+  width: 100%;
+  max-width: none;
   margin: 0 auto;
-  padding: 40px 28px 80px;
+  padding: clamp(28px, 4vh, 48px) clamp(20px, 4vw, 72px) 80px;
+}
+
+@media (hover: hover) {
+  .mode-tile,
+  .type-option,
+  .dropzone,
+  .dz-icon,
+  .tpl-drop,
+  .seg-btn,
+  .sheet-btn,
+  .btn-make,
+  .file-row,
+  .file-remove,
+  .clear-all,
+  .tpl-remove,
+  .btn {
+    transition: none !important;
+  }
+
+  .mode-tile:hover:not(:disabled),
+  .type-option:hover:not(:disabled),
+  .btn-make:hover:not(:disabled),
+  .dropzone.dragging,
+  .dropzone:hover .dz-icon,
+  .dropzone.dragging .dz-icon,
+  .btn:active {
+    transform: none !important;
+  }
 }
 
 ::selection {
