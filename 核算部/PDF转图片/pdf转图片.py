@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK；11 MKK；12 DINO。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK；11 MKK；12 DINO；13 EYNEX。
 
 使用：
     python pdf转图片.py
@@ -501,6 +501,11 @@ MKK_OUTPUT_HEADERS = ('编号', '柜号', '主单号', '地址',
 # Product or service / Rate / Amount / Tax 保持原文本（Rate/Amount 保留 $）
 DINO_OUTPUT_HEADERS = ('发票号', 'Date', 'Product or service', 'Description',
                        'Qty', 'Rate', 'Amount', 'Tax')
+
+# EYNEX 发票输出列：发票号/柜号按明细行重复，Activity/Amount 使用中文列名
+EYNEX_HEADERS = ('DATE', 'ACTIVITY', 'DESCRIPTION', 'QTY', 'RATE', 'AMOUNT')
+EYNEX_OUTPUT_HEADERS = ('发票号', '柜号', 'DATE', '费用', 'DESCRIPTION',
+                        'QTY', 'RATE', '金额')
 
 
 def _compact_text(text):
@@ -2096,7 +2101,7 @@ def dino_mode(pdf_paths):
 
 def detail_mode(pdf_paths, inv_type):
     """模式 2：识别发票明细并导出 Excel。
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK | '12' DINO。"""
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK | '12' DINO | '13' EYNEX。"""
     if inv_type == '2':
         jingzhun_mode(pdf_paths)
     elif inv_type == '3':
@@ -2119,8 +2124,170 @@ def detail_mode(pdf_paths, inv_type):
         mkk_mode(pdf_paths)
     elif inv_type == '12':
         dino_mode(pdf_paths)
+    elif inv_type == '13':
+        eynex_mode(pdf_paths)
     else:
         canexs_mode(pdf_paths)
+
+
+def _extract_eynex_invoice_no(lines):
+    """提取 EYNEX 顶部 Invoice 值，兼容号码被拆到下一视觉行的版式。"""
+    candidates = []
+    for ln in lines:
+        for item in ln['items']:
+            if _compact_text(item['text']).startswith('INVOICE'):
+                candidates.append((ln, item))
+    if not candidates:
+        return '未知'
+    line, anchor = min(candidates, key=lambda pair: (pair[0]['cy'], pair[1]['cx']))
+    raw = _line_right_of(line, anchor, drop=('NO', 'NO.', 'N', 'NO:'))
+    raw = re.sub(r'\s+', '', raw)
+    if raw and not raw.endswith('-'):
+        return raw
+
+    # 号码折行时只在 Invoice 锚点附近取值，避免把同一视觉行的公司地址拼进来。
+    left_edge = anchor['cx'] - anchor['w'] / 2 - 50
+    right_edge = anchor['cx'] + anchor['w'] / 2 + 50
+    nearby = [ln for ln in lines if ln['cy'] > line['cy'] + 2
+              and ln['cy'] <= line['cy'] + max(60, anchor.get('h', 12) * 4)]
+    for nxt in sorted(nearby, key=lambda ln: ln['cy']):
+        value_items = [item for item in nxt['items']
+                       if left_edge <= item['cx'] <= right_edge]
+        value = re.sub(r'\s+', '', ' '.join(item['text'] for item in value_items))
+        if value and len(value) >= 3 \
+                and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9\-]*', value):
+            raw += value
+            break
+    return raw or '未知'
+
+
+def _extract_eynex_container(lines):
+    """提取 CONTAINER NO. 标签正下方的柜号。"""
+    label_line = _find_line(lines, 'CONTAINERNO')
+    if label_line is None:
+        return '未知'
+    anchor = next((item for item in label_line['items']
+                   if _compact_text(item['text']).startswith('CONTAINER')), None)
+    if anchor is None:
+        return '未知'
+    raw = _line_right_of(label_line, anchor, drop=('NO', 'NO.', 'N', 'NO:'))
+    if raw:
+        return raw
+    left_edge = anchor['cx'] - anchor['w'] / 2 - 20
+    right_edge = anchor['cx'] + anchor['w'] / 2 + 20
+    below = [ln for ln in lines if ln['cy'] > label_line['cy'] + 2]
+    for nxt in sorted(below, key=lambda ln: ln['cy']):
+        values = [item['text'] for item in nxt['items']
+                  if left_edge <= item['cx'] <= right_edge]
+        if values:
+            return ' '.join(values).strip()
+    return '未知'
+
+
+def _eynex_table_from_found(lines, found, data_from_top=False):
+    """按 EYNEX 六列表头坐标提取明细，DESCRIPTION 换行并入对应费用行。"""
+    ordered = sorted(found.items(), key=lambda kv: kv[1]['cx'] - kv[1]['w'] / 2)
+    lefts = [item['cx'] - item['w'] / 2 for _, item in ordered]
+    label_col = {label: idx for idx, label in enumerate(EYNEX_HEADERS)}
+    bounds = [float('-inf')] + lefts[1:] + [float('inf')]
+    col_index = [label_col[label] for label, _ in ordered]
+    header_bottom = max(item['cy'] + item['h'] / 2 for _, item in ordered)
+    data_lines = lines if data_from_top else [
+        line for line in lines if line['cy'] > header_bottom + 2]
+    rows = []
+    stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK',
+                  'APPRECIATE', 'LOOKFORWARD')
+    for line in data_lines:
+        compact = _compact_text(line['text'])
+        if any(word in compact for word in stop_words):
+            break
+        cells = [''] * len(EYNEX_HEADERS)
+        for item in line['items']:
+            col = next((idx for idx in range(len(bounds) - 1)
+                        if bounds[idx] <= item['cx'] < bounds[idx + 1]), None)
+            if col is not None:
+                target = col_index[col]
+                cells[target] = (cells[target] + ' ' + item['text']).strip()
+
+        # 页脚可能落在 DATE 列区域，只保留包含费用/描述/金额数据的行。
+        if not any(cells[1:]):
+            continue
+        has_amount = any(_has_digit(cells[idx]) for idx in (3, 4, 5))
+        if has_amount or not rows:
+            rows.append(cells)
+        elif rows:
+            for idx, value in enumerate(cells):
+                if value:
+                    rows[-1][idx] = (rows[-1][idx] + ' ' + value).strip()
+    return [row for row in rows if any(row[1:])]
+
+
+def extract_eynex_page(items):
+    """EYNEX 单页：提取发票号、柜号和 DATE/ACTIVITY/DESCRIPTION 六列表。"""
+    if not items:
+        return {}, [], None
+    lines = _group_detail_lines(items)
+    fields = {
+        'invoice_no': _extract_eynex_invoice_no(lines),
+        'container': _extract_eynex_container(lines),
+    }
+    found = _find_header_band_keys(items, EYNEX_HEADERS)
+    if found is None:
+        return fields, [], None
+    return fields, _eynex_table_from_found(lines, found), found
+
+
+def extract_eynex_from_pdfs(pdf_paths):
+    """批量识别 EYNEX 发票，续页继承发票号、柜号和首个表头坐标。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last_invoice = last_container = '未知'
+        found = None
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows, page_found = extract_eynex_page(items)
+                if fields.get('invoice_no') and fields['invoice_no'] != '未知':
+                    last_invoice = fields['invoice_no']
+                if fields.get('container') and fields['container'] != '未知':
+                    last_container = fields['container']
+                if page_found is not None:
+                    found = page_found
+                elif found is not None:
+                    lines = _group_detail_lines(items)
+                    rows = _eynex_table_from_found(lines, found, data_from_top=True)
+                for row in rows:
+                    all_rows.append([last_invoice, last_container] + row)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
+
+
+def eynex_mode(pdf_paths):
+    """EYNEX 发票：发票号/柜号 + 六列费用明细，输出到 EYNEX发票-日期 文件夹。"""
+    print('识别 EYNEX 发票明细（文字层优先，扫描件自动使用 OCR）…')
+    rows, pages, skipped = extract_eynex_from_pdfs(pdf_paths)
+    if skipped:
+        print('有 %d 个文件找不到，已跳过。' % skipped)
+        print('提示：请在资源管理器选中文件按 Ctrl+C 复制，再输入 c（这样才带完整路径）；或直接把文件拖入窗口。')
+    if not rows:
+        print('没有识别到任何明细，未生成 Excel。')
+        return
+    folder = os.path.join(os.path.dirname(os.path.abspath(pdf_paths[0])),
+                          'EYNEX发票-%s' % datetime.datetime.now().strftime('%Y-%m-%d'))
+    os.makedirs(folder, exist_ok=True)
+    output = _next_output_path(folder, '发票明细表.xlsx')
+    write_detail_excel(rows, output, headers=EYNEX_OUTPUT_HEADERS,
+                       numeric_cols={5, 6, 7}, zero_pad_cols=set(),
+                       widths=[18, 18, 16, 34, 30, 10, 12, 14])
+    print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
+    print('Excel 已保存：%s' % output)
 
 
 # 图片固定 10cm x 15cm。openpyxl 图片锚定单元格左上角、尺寸不受单元格约束，
@@ -2349,8 +2516,8 @@ def main():
         inv_type = None
         if top_mode == '2':
             while True:
-                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK | 11 MKK | 12 DINO：').strip()
-                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'):
+                inv_type = _ask('请选择发票类型：1 canexs | 2 精准 | 3 创时亚马逊卡派 | 4 创时卡派 | 5 创时清关费 | 6 创时附加费 | 7 MAX萨凡纳 | 8 MAX纽约 | 9 AA | 10 JCK | 11 MKK | 12 DINO | 13 EYNEX：').strip()
+                if inv_type in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'):
                     break
                 print('请输入 1 或 2。')
 
