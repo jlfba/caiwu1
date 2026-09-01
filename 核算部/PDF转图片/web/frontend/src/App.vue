@@ -292,10 +292,11 @@ onUnmounted(() => {
         <template v-else>{{ mode === '2' ? 3 : 2 }}</template>
       </span>
       <div class="step-body">
-        <h2 class="step-title">上传 PDF 文件</h2>
-        <p class="step-sub">支持多选，一次拖入全部发票</p>
+        <div class="upload-pane">
+          <h2 class="step-title">上传 PDF 文件</h2>
+          <p class="step-sub">支持多选，一次拖入全部发票</p>
 
-        <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
               <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
@@ -312,7 +313,10 @@ onUnmounted(() => {
               @click="removeFile(i)"
             >✕</button>
           </div>
-        </UploadArea>
+          </UploadArea>
+        </div>
+
+        <div class="action-pane">
 
         <div v-if="mode === '1'" class="template-section">
           <div class="ts-head">
@@ -381,20 +385,10 @@ onUnmounted(() => {
             <template v-else>横向：图片沿行向右排，字段标在图片下方</template>
           </p>
         </div>
-      </div>
-    </section>
 
-    <!-- 步骤 4/3：制作 -->
-    <section class="step">
-      <span class="step-dot" :class="{ cur: currentStep >= 3 }">
-        <svg v-if="status === 'done'" viewBox="0 0 16 16" width="14" height="14" fill="none">
-          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <template v-else>{{ mode === '2' ? 4 : 3 }}</template>
-      </span>
-      <div class="step-body">
-        <h2 class="step-title">制作</h2>
-        <p class="step-sub">后端处理完成后，表格会直接从浏览器下载</p>
+          <div class="make-section">
+            <h2 class="step-title">制作</h2>
+            <p class="step-sub">后端处理完成后，表格会直接从浏览器下载</p>
 
         <div class="run-area">
           <button
@@ -423,7 +417,7 @@ onUnmounted(() => {
           :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
         />
 
-        <ResultPanel
+            <ResultPanel
           v-if="status === 'done' || status === 'error'"
           :status="status"
           :task-id="taskId"
@@ -431,7 +425,9 @@ onUnmounted(() => {
           :error="error"
           :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
           @reset="reset"
-        />
+            />
+          </div>
+        </div>
       </div>
     </section>
       </div>
@@ -527,10 +523,67 @@ onUnmounted(() => {
   scrollbar-width: thin;
 }
 
+.workflow-right > .step {
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.workflow-right > .step > .step-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(24px, 3vw, 44px);
+  height: 100%;
+  min-height: 0;
+}
+
+.upload-pane,
+.action-pane {
+  min-width: 0;
+}
+
+.upload-pane {
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.action-pane {
+  overflow-y: auto;
+  padding: 0 4px 8px 0;
+  scrollbar-width: thin;
+}
+
+.upload-pane > :deep(.dropzone-wrap) {
+  margin-top: 20px;
+}
+
+.action-pane .template-section {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.make-section {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.action-pane > .make-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.make-section > :deep(.progress-panel),
+.make-section > :deep(.result-panel) {
+  margin-top: 20px;
+}
+
 .workflow-right > .step:first-child {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -540,7 +593,7 @@ onUnmounted(() => {
 }
 
 .workflow-right > .step:last-child {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
 }
 
 .workflow-right :deep(.file-list) {
@@ -979,6 +1032,20 @@ onUnmounted(() => {
   .workflow-right > .step:first-child {
     overflow: visible;
     padding-right: 0;
+  }
+  .workflow-right > .step > .step-body {
+    display: block;
+    height: auto;
+  }
+  .upload-pane,
+  .action-pane {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .action-pane {
+    margin-top: 28px;
+    padding-top: 24px;
+    border-top: 1px dashed var(--border-strong);
   }
   .workflow-right > .step:last-child {
     flex: none;
