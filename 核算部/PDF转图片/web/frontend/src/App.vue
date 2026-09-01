@@ -25,8 +25,11 @@ const total = ref(0)
 const message = ref('')
 const filename = ref('')
 const error = ref('')
+const elapsedSeconds = ref(0)
 
 let pollTimer = null
+let elapsedTimer = null
+let elapsedStartedAt = 0
 
 const steps = computed(() => {
   const list = [
@@ -126,9 +129,30 @@ function stopPolling() {
   }
 }
 
+function stopElapsedTimer(captureFinal = true) {
+  if (captureFinal && elapsedStartedAt) {
+    elapsedSeconds.value = Math.floor((Date.now() - elapsedStartedAt) / 1000)
+  }
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+  elapsedStartedAt = 0
+}
+
+function startElapsedTimer() {
+  stopElapsedTimer()
+  elapsedStartedAt = Date.now()
+  elapsedSeconds.value = 0
+  elapsedTimer = setInterval(() => {
+    elapsedSeconds.value = Math.floor((Date.now() - elapsedStartedAt) / 1000)
+  }, 1000)
+}
+
 async function submit() {
   if (!canSubmit.value) return
   stopPolling()
+  startElapsedTimer()
   status.value = 'processing'
   current.value = 0
   total.value = 0
@@ -151,6 +175,7 @@ async function submit() {
   } catch (e) {
     status.value = 'error'
     error.value = e.message
+    stopElapsedTimer()
   }
 }
 
@@ -163,6 +188,7 @@ async function poll() {
     status.value = 'error'
     error.value = e.message
     stopPolling()
+    stopElapsedTimer()
     return
   }
   current.value = data.current || 0
@@ -173,15 +199,18 @@ async function poll() {
     filename.value = data.filename || ''
     status.value = 'done'
     stopPolling()
+    stopElapsedTimer()
   } else if (data.status === 'error') {
     error.value = data.error || data.message || '处理失败'
     status.value = 'error'
     stopPolling()
+    stopElapsedTimer()
   }
 }
 
 function reset() {
   stopPolling()
+  stopElapsedTimer(false)
   status.value = 'idle'
   taskId.value = ''
   current.value = 0
@@ -189,11 +218,15 @@ function reset() {
   message.value = ''
   filename.value = ''
   error.value = ''
+  elapsedSeconds.value = 0
   files.value = []
   clearTemplate()
 }
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  stopElapsedTimer()
+})
 </script>
 
 <template>
@@ -387,6 +420,7 @@ onUnmounted(stopPolling)
           :current="current"
           :total="total"
           :message="message"
+          :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
         />
 
         <ResultPanel
@@ -395,6 +429,7 @@ onUnmounted(stopPolling)
           :task-id="taskId"
           :filename="filename"
           :error="error"
+          :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
           @reset="reset"
         />
       </div>

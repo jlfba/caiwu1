@@ -5,7 +5,8 @@ const props = defineProps({
   status: { type: String, required: true },
   current: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
-  message: { type: String, default: '' }
+  message: { type: String, default: '' },
+  elapsedSeconds: { type: Number, default: -1 }
 })
 
 const percent = computed(() => {
@@ -13,12 +14,25 @@ const percent = computed(() => {
   if (!props.total) return 0
   return Math.min(100, Math.round((props.current / props.total) * 100))
 })
+
+const elapsedText = computed(() => {
+  const seconds = Math.max(0, props.elapsedSeconds)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  const parts = [minutes, rest].map((value) => String(value).padStart(2, '0'))
+  if (hours) parts.unshift(String(hours))
+  return parts.join(':')
+})
 </script>
 
 <template>
   <div class="progress-panel">
     <div class="pp-head">
-      <span class="pp-label">处理进度</span>
+      <span class="pp-title">
+        <span class="pp-label">处理进度</span>
+        <span v-if="elapsedSeconds >= 0" class="pp-elapsed">耗时 {{ elapsedText }}</span>
+      </span>
       <span class="pp-percent">{{ percent }}<i>%</i></span>
     </div>
     <div class="track" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
@@ -59,6 +73,22 @@ const percent = computed(() => {
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.3px;
+}
+
+.pp-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pp-elapsed {
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .pp-percent {

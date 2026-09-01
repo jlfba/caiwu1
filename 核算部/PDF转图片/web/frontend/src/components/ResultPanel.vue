@@ -1,13 +1,25 @@
 <script setup>
+import { computed } from 'vue'
 import { downloadUrl } from '../api'
 
-defineProps({
+const props = defineProps({
   taskId: { type: String, default: '' },
   filename: { type: String, default: '' },
   error: { type: String, default: '' },
-  status: { type: String, required: true }
+  status: { type: String, required: true },
+  elapsedSeconds: { type: Number, default: -1 }
 })
 defineEmits(['reset'])
+
+const elapsedText = computed(() => {
+  const seconds = Math.max(0, props.elapsedSeconds)
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  const parts = [minutes, rest].map((value) => String(value).padStart(2, '0'))
+  if (hours) parts.unshift(String(hours))
+  return parts.join(':')
+})
 </script>
 
 <template>
@@ -21,6 +33,7 @@ defineEmits(['reset'])
     <div class="rp-text">
       <h3 class="rp-title">处理完成</h3>
       <p class="rp-sub" :title="filename">{{ filename || '表格已生成' }}</p>
+      <p v-if="elapsedSeconds >= 0" class="rp-elapsed">总耗时 {{ elapsedText }}</p>
     </div>
     <div class="rp-actions">
       <a class="btn primary" :href="downloadUrl(taskId)" :download="filename">
@@ -44,6 +57,7 @@ defineEmits(['reset'])
     <div class="rp-text">
       <h3 class="rp-title">处理失败</h3>
       <p class="rp-sub">{{ error }}</p>
+      <p v-if="elapsedSeconds >= 0" class="rp-elapsed">耗时 {{ elapsedText }}</p>
     </div>
     <div class="rp-actions">
       <button class="btn ghost" type="button" @click="$emit('reset')">返回重试</button>
@@ -107,6 +121,15 @@ defineEmits(['reset'])
   font-size: 12.5px;
   color: var(--text-soft);
   word-break: break-all;
+}
+
+.rp-elapsed {
+  margin: 5px 0 0;
+  font-family: var(--font-num);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-soft);
+  font-variant-numeric: tabular-nums;
 }
 
 .rp-actions {
