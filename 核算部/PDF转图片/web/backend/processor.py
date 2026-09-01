@@ -66,12 +66,20 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
             pass
     total_units = max(total_pages * 2, 1)
 
-    # ---- 渲染 PDF 为 PNG ----
+    # ---- 读取文字层 + 渲染 PDF 为 PNG ----
     images = []
+    native_fields = []
     seq = 0
     pages_done = 0
     for pdf in pdf_paths:
         try:
+            try:
+                pdf_fields = tool.extract_invoice_fields_from_pdf(pdf)
+            except Exception as e:
+                pdf_fields = []
+                report(pages_done, total_units,
+                       '文字层读取失败，将使用 OCR：%s（%s）'
+                       % (os.path.basename(pdf), e))
             imgs, seq = tool.pdf_to_images(
                 pdf, img_dir, start_index=seq,
                 progress_cb=lambda st, done, tot: report(
@@ -79,6 +87,9 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
                     '正在渲染第 %d/%d 页…' % (pages_done + done, total_pages)))
             pages_done += len(imgs)
             images.extend(imgs)
+            native_fields.extend(pdf_fields[:len(imgs)])
+            if len(pdf_fields) < len(imgs):
+                native_fields.extend([None] * (len(imgs) - len(pdf_fields)))
         except Exception as e:
             report(pages_done, total_units,
                    '渲染失败，已跳过：%s（%s）' % (os.path.basename(pdf), e))
@@ -86,22 +97,28 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
     if not images:
         raise RuntimeError('没有成功转换的图片')
 
-    # ---- OCR 识别四字段并重命名 ----
-    # 并行 OCR：RapidOCR 线程安全（实测可共用单例并发推理），
-    # 多线程并行处理多张图片，在 CPU 核数有限的服务器上显著降低总耗时。
+    # ---- OCR 识别五字段（开票日期/号码/购买方/销售方/金额）并重命名 ----
+    # 文字层完整时直接使用；仅缺字段的页面执行 OCR。
+    # 4 核 CPU 限制为 2 个并行任务，避免多个 ONNX 推理会话抢占线程。
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    tool.get_ocr()  # 预热单例，避免多线程首次初始化竞争
-    max_workers = max(1, min(4, (os.cpu_count() or 2) // 2))
     renamed = [None] * len(images)
     done = 0
+    needs_ocr = any(not fields or not tool._invoice_fields_complete(fields)
+                    for fields in native_fields)
+    if needs_ocr:
+        tool.get_ocr()  # 仅实际需要 OCR 时加载模型
+    max_workers = max(1, min(2, (os.cpu_count() or 2) // 2))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        future_map = {pool.submit(tool.extract_invoice_fields, img): i
+        future_map = {pool.submit(tool.extract_invoice_fields, img, native_fields[i]): i
                       for i, img in enumerate(images)}
         for fut in as_completed(future_map):
             i = future_map[fut]
             fields = fut.result()
             renamed[i] = tool.rename_with_fields(images[i], fields)
             done += 1
+            print('  收款组识别 %d/%d：%s，%.2fs'
+                  % (done, len(images), fields.get('_method', 'unknown'),
+                     fields.get('_elapsed', 0)))
             report(total_pages + done, total_units,
                    '正在识别发票字段 %d/%d 张…' % (done, len(images)))
     images = renamed

@@ -32,7 +32,7 @@ cd web/frontend && npm run dev   # 打开 http://127.0.0.1:5173
 
 | 功能模式 | 干什么 | 下载 |
 |---|---|---|
-| **收款组** | PDF 逐页转图片，OCR 识别发票号码/购买方/销售方/金额并重命名 | `发票图片表.xlsx`（含图片） |
+| **收款组** | PDF 逐页转图片，OCR 识别开票日期/发票号码/购买方/销售方/金额并重命名 | `发票图片表.xlsx`（含图片） |
 | **付款组 - canexs** | 识别 INVOICE / TRACKING NO. / 明细行 | `canexs发票明细表.xlsx` |
 | **付款组 - 精准** | Accuracy Customs Brokers 清关发票 | `精准发票明细表.xlsx` |
 

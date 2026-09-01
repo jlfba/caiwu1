@@ -99,10 +99,13 @@ function remove() {
 }
 
 .tpl-drop {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  padding: 12px 18px;
+  width: 100%;
+  min-height: 92px;
+  padding: 20px 24px;
   border: 1.5px dashed var(--border-strong);
   border-radius: var(--radius-s);
   background: var(--surface);
@@ -134,6 +137,20 @@ function remove() {
 .tpl-hint {
   font-size: 12px;
   color: var(--text-faint);
+}
+
+@media (max-width: 520px) {
+  .tpl-drop {
+    min-height: 104px;
+    padding: 20px 16px;
+    flex-wrap: wrap;
+    align-content: center;
+  }
+
+  .tpl-hint {
+    flex-basis: 100%;
+    text-align: center;
+  }
 }
 
 .tpl-chip {
