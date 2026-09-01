@@ -5,9 +5,9 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
 功能（顶层选择）：
 1. 功能：PDF 转图片 + 发票识别
    - 支持一次拖入多个 PDF（用 " " 分隔），逐页渲染为 PNG。
-   - 用 OCR（RapidOCR，PP-OCRv4 模型）识别每页发票的四个字段：
-     发票号码（右上角）、购买方名称、销售方名称、金额（小写）。
-   - 图片按 发票号码_购买方_销售方_金额.png 重新命名。
+   - 用 OCR（RapidOCR，PP-OCRv4 模型）识别每页发票的五个字段：
+     开票日期、发票号码（右上角）、购买方名称、销售方名称、金额（小写）。
+   - 图片按 开票日期_发票号码_购买方_销售方_金额.png 重新命名。
    - 再选择：1 直接保存到文件夹；2 拖入 Excel 表格，选工作表、起始单元格、方向后批量插入。
    - 插表：图片固定 10cm x 15cm，横向/纵向两种字段排版。
 2. 发票明细识别并转 Excel（v2.0.0 新增）
@@ -38,13 +38,13 @@ except ImportError:
     OPENPYXL_OK = False
 
 # 渲染分辨率（DPI）：150 → 120，OCR 检测模型耗时随图片面积下降（约快 1.2 倍）
-# 发票四字段（号码/名称/金额）字号较大，120 DPI 仍可清晰识别；若个别发票小字识别失败可调回 150
+# 发票五字段（日期/号码/名称/金额）字号较大，120 DPI 仍可清晰识别；若个别发票小字识别失败可调回 150
 RENDER_DPI = 120
 
 CELL_RE = re.compile(r'^([A-Za-z]+)(\d+)$')
 
 # 字段名称顺序
-FIELD_LABELS = ('发票号码', '购买方', '销售方', '金额')
+FIELD_LABELS = ('开票日期', '发票号码', '购买方', '销售方', '金额')
 
 
 # ---------------------------------------------------------------------------
@@ -370,20 +370,54 @@ def _merge_vertical_headers(items, axis_tol=25.0, gap_tol=48.0):
     return merged
 
 
+def _normalize_invoice_date(value):
+    """把常见中文发票日期格式统一为 YYYY-MM-DD，非法日期返回“未知”。"""
+    m = re.search(r'(20\d{2})\s*[年./\-]\s*(\d{1,2})\s*[月./\-]\s*(\d{1,2})\s*日?',
+                  value or '')
+    if not m:
+        return '未知'
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)),
+                             int(m.group(3))).isoformat()
+    except ValueError:
+        return '未知'
+
+
 def extract_invoice_fields(image_path):
-    """识别发票四字段，返回 dict：no/buyer/seller/amount。失败字段用 '未知'。
+    """识别发票五字段，返回 dict：date/no/buyer/seller/amount。失败字段用 '未知'。
     适配两种布局：
     - 上下布局（标题在上、名称在下，同一 x 列）
     - 左右分栏（"购买方信息/销售方信息"为竖排标题，名称在标题附近按 x 区分）
     """
-    fields = {'no': '未知', 'buyer': '未知', 'seller': '未知', 'amount': '未知'}
+    fields = {'date': '未知', 'no': '未知', 'buyer': '未知',
+              'seller': '未知', 'amount': '未知'}
     try:
         items = ocr_lines(image_path)
     except Exception as e:
         print('    OCR 失败：%s' % e)
         return fields
 
-    # 1. 发票号码（右上角，含"发票号码"）
+    # 1. 开票日期（兼容 2026年08月06日 / 2026-08-06 / 2026/08/06）
+    for i, it in enumerate(items):
+        if re.search(r'开票日期|开票日[期朗]', it['text']):
+            fields['date'] = _normalize_invoice_date(it['text'])
+            if fields['date'] == '未知':
+                # OCR 可能把标签和值拆成相邻文本块，优先检查同行右侧，其次检查下一条。
+                candidates = [other for other in items
+                              if other is not it
+                              and other['cx'] >= it['cx']
+                              and abs(other['cy'] - it['cy']) <= max(it['h'], other['h'])]
+                candidates.sort(key=lambda other: (abs(other['cy'] - it['cy']),
+                                                   other['cx'] - it['cx']))
+                if i + 1 < len(items):
+                    candidates.append(items[i + 1])
+                for candidate in candidates:
+                    fields['date'] = _normalize_invoice_date(candidate['text'])
+                    if fields['date'] != '未知':
+                        break
+            break
+
+    # 2. 发票号码（右上角，含"发票号码"）
     for it in items:
         if '发票号码' in it['text']:
             m = re.search(r'[：:]\s*([0-9A-Za-z\-]+)', it['text'])
@@ -391,7 +425,7 @@ def extract_invoice_fields(image_path):
                 fields['no'] = m.group(1)
             break
 
-    # 2. 购买方 / 销售方 名称
+    # 3. 购买方 / 销售方 名称
     # 找所有"名称："条目
     name_items = [it for it in items if re.search(r'名称\s*[：:]', it['text'])]
 
@@ -421,7 +455,7 @@ def extract_invoice_fields(image_path):
     fields['buyer'] = find_name('购买方')
     fields['seller'] = find_name('销售方')
 
-    # 3. 金额（小写）
+    # 4. 金额（小写）
     for it in items:
         if '小写' in it['text']:
             # 兼容 OCR 可能输出的中文全角逗号（，）与英文半角逗号（,）
@@ -434,12 +468,13 @@ def extract_invoice_fields(image_path):
 
 
 # ---------------------------------------------------------------------------
-# 图片重命名（发票号_购买方_销售方_金额）
+# 图片重命名（开票日期_发票号_购买方_销售方_金额）
 # ---------------------------------------------------------------------------
 def rename_with_fields(img_path, fields):
-    """按四字段重命名图片，返回新路径。若重名则追加序号。"""
-    name = '%s_%s_%s_%s.png' % (fields['no'], fields['buyer'],
-                                fields['seller'], fields['amount'])
+    """按五字段重命名图片，返回新路径。若重名则追加序号。"""
+    name = '%s_%s_%s_%s_%s.png' % (fields.get('date', '未知'), fields['no'],
+                                   fields['buyer'], fields['seller'],
+                                   fields['amount'])
     new_path = os.path.join(os.path.dirname(img_path), sanitize(name))
     if os.path.abspath(new_path) == os.path.abspath(img_path):
         return new_path
@@ -2339,24 +2374,36 @@ def images_into_excel(xlsx_path, images, sheet_name=None,
         img.height = IMG_H_PX
         ws.add_image(img, cell)
 
-        # 从文件名解析四字段（发票号_购买方_销售方_金额）
+        # 从文件名解析五字段（开票日期_发票号_购买方_销售方_金额）
         base = os.path.splitext(os.path.basename(img_file))[0]
         parts = base.split('_')
         # 去掉开头的全局序号
         if parts and re.match(r'^\d{4}$', parts[0]):
             parts = parts[1:]
         labels = FIELD_LABELS
-        # 文件名拆分后：第1个=发票号，第2=购买方，第3=销售方，剩余拼接=金额
-        no = parts[0] if len(parts) > 0 else '未知'
-        buyer = parts[1] if len(parts) > 1 else '未知'
-        seller = parts[2] if len(parts) > 2 else '未知'
-        amount = '_'.join(parts[3:]) if len(parts) > 3 else '未知'
+        # 文件名拆分后：第1个=开票日期，第2=发票号，第3=购买方，
+        # 第4=销售方，剩余拼接=金额。兼容旧版四字段文件名。
+        is_new_format = (len(parts) >= 5
+                         and (parts[0] == '未知'
+                              or _normalize_invoice_date(parts[0]) != '未知'))
+        if is_new_format:
+            invoice_date = parts[0]
+            no = parts[1]
+            buyer = parts[2]
+            seller = parts[3]
+            amount = '_'.join(parts[4:])
+        else:
+            invoice_date = '未知'
+            no = parts[0] if len(parts) > 0 else '未知'
+            buyer = parts[1] if len(parts) > 1 else '未知'
+            seller = parts[2] if len(parts) > 2 else '未知'
+            amount = '_'.join(parts[3:]) if len(parts) > 3 else '未知'
         # 去掉文件重名时追加的 (2) 序号
         amount = re.sub(r'\(\d+\)$', '', amount)
-        vals = [no, buyer, seller, amount]
+        vals = [invoice_date, no, buyer, seller, amount]
 
         if direction == 'h':
-            # 横向：图片沿行向右，字段放图片下方（同一列、往下四行）
+            # 横向：图片沿行向右，字段放图片下方（同一列、往下五行）
             text_col = col
             text_row = row + 1
             for label, val in zip(labels, vals):
@@ -2370,7 +2417,7 @@ def images_into_excel(xlsx_path, images, sheet_name=None,
             ws.column_dimensions[col_letter].width = COL_WIDTH
             ws.row_dimensions[row].height = ROW_HEIGHT
         else:
-            # 纵向：图片沿列向下，字段放图片右侧（同一行、往右四列）
+            # 纵向：图片沿列向下，字段放图片右侧（同一行、往右五列）
             text_col = col + 1
             text_row = row
             for label, val in zip(labels, vals):
