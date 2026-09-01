@@ -1,7 +1,7 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
-defineProps({
+const props = defineProps({
   disabled: Boolean,
   count: { type: Number, default: 0 }
 })
@@ -9,6 +9,14 @@ const emit = defineEmits(['add', 'remove', 'clear'])
 
 const fileInput = ref(null)
 const dragging = ref(false)
+const expanded = ref(false)
+
+watch(
+  () => props.count,
+  (count, previousCount) => {
+    if (!count || count > previousCount) expanded.value = false
+  }
+)
 
 function openPicker() {
   if (!fileInput.value) return
@@ -73,8 +81,24 @@ function onDragLeave() {
       <p class="dz-hint">支持多选 · 仅接受 .pdf</p>
     </div>
 
-    <div v-if="$slots.default" class="file-list">
-      <slot />
+    <div v-if="$slots.default && count" class="file-list-shell">
+      <div class="file-list-head">
+        <span class="file-count">已选 {{ count }} 个 PDF</span>
+        <button
+          class="file-list-toggle"
+          type="button"
+          :aria-expanded="expanded"
+          @click="expanded = !expanded"
+        >
+          {{ expanded ? '收起列表' : '展开列表' }}
+          <svg class="toggle-icon" :class="{ expanded }" viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+      <div v-show="expanded" class="file-list">
+        <slot />
+      </div>
       <button v-if="count" class="clear-all" type="button" @click="emit('clear')">
         清空全部
       </button>
@@ -150,26 +174,107 @@ function onDragLeave() {
   color: var(--text-faint);
 }
 
+.file-list-shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.file-list-head {
+  min-height: 52px;
+  padding: 4px 104px 4px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.file-count {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .file-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: clamp(180px, 30vh, 300px);
+  padding: 10px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.file-list-toggle,
+.clear-all {
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.file-list-toggle {
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: background 0.15s var(--ease-out);
+}
+
+.file-list-toggle:hover {
+  background: var(--primary-soft);
+}
+
+.toggle-icon {
+  transition: transform 0.2s var(--ease-out);
+}
+
+.toggle-icon.expanded {
+  transform: rotate(180deg);
 }
 
 .clear-all {
-  align-self: flex-end;
-  border: none;
-  background: transparent;
+  position: absolute;
+  top: 4px;
+  right: 8px;
   color: var(--text-faint);
   font-size: 12.5px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  cursor: pointer;
+  padding: 0 10px;
   transition: color 0.15s var(--ease-out), background 0.15s var(--ease-out);
 }
 
 .clear-all:hover {
   color: var(--danger);
   background: var(--danger-soft);
+}
+
+.file-list-toggle:focus-visible,
+.clear-all:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+@media (max-width: 560px) {
+  .file-list-head {
+    min-height: 96px;
+    padding: 8px 10px 52px;
+  }
+
+  .file-list-toggle {
+    position: absolute;
+    bottom: 4px;
+    left: 8px;
+  }
+
+  .clear-all {
+    top: auto;
+    bottom: 4px;
+  }
 }
 </style>
