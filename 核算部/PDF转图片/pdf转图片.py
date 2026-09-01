@@ -27,6 +27,7 @@ import os
 import sys
 import re
 import datetime
+import time
 
 import fitz  # PyMuPDF
 
@@ -383,87 +384,207 @@ def _normalize_invoice_date(value):
         return '未知'
 
 
-def extract_invoice_fields(image_path):
-    """识别发票五字段，返回 dict：date/no/buyer/seller/amount。失败字段用 '未知'。
+INVOICE_FIELD_KEYS = ('date', 'no', 'buyer', 'seller', 'amount')
+
+
+def _blank_invoice_fields():
+    return {key: '未知' for key in INVOICE_FIELD_KEYS}
+
+
+def _invoice_fields_complete(fields):
+    return all(fields.get(key, '未知') != '未知' for key in INVOICE_FIELD_KEYS)
+
+
+def _merge_invoice_fields(base, extra):
+    """只用有效的新值补齐未知字段，避免低质量兜底覆盖已识别结果。"""
+    merged = _blank_invoice_fields()
+    for key in INVOICE_FIELD_KEYS:
+        old = (base or {}).get(key, '未知')
+        new = (extra or {}).get(key, '未知')
+        merged[key] = old if old != '未知' else new
+    return merged
+
+
+def _extract_invoice_fields_from_items(items, initial_fields=None):
+    """从 OCR 或 PDF 文字层坐标条目中解析收款组五字段。"""
+    fields = _merge_invoice_fields(initial_fields, {})
+    if not items:
+        return fields
+
+    ordered = sorted(items, key=lambda item: (item['cy'], item['cx']))
+
+    # 1. 开票日期（兼容 2026年08月06日 / 2026-08-06 / 2026/08/06）
+    if fields['date'] == '未知':
+        for i, it in enumerate(ordered):
+            if re.search(r'开票日期|开票日[期朗]', it['text']):
+                fields['date'] = _normalize_invoice_date(it['text'])
+                if fields['date'] == '未知':
+                    candidates = [other for other in ordered
+                                  if other is not it
+                                  and other['cx'] >= it['cx']
+                                  and abs(other['cy'] - it['cy'])
+                                  <= max(it.get('h', 0), other.get('h', 0), 8)]
+                    candidates.sort(key=lambda other: (abs(other['cy'] - it['cy']),
+                                                       other['cx'] - it['cx']))
+                    if i + 1 < len(ordered):
+                        candidates.append(ordered[i + 1])
+                    for candidate in candidates:
+                        fields['date'] = _normalize_invoice_date(candidate['text'])
+                        if fields['date'] != '未知':
+                            break
+                break
+
+    # 2. 发票号码
+    if fields['no'] == '未知':
+        for i, it in enumerate(ordered):
+            if '发票号码' in it['text']:
+                m = re.search(r'发票号码\s*[：:]?\s*([0-9A-Za-z\-]{6,})', it['text'])
+                if m:
+                    fields['no'] = m.group(1)
+                elif i + 1 < len(ordered):
+                    m = re.search(r'([0-9A-Za-z\-]{6,})', ordered[i + 1]['text'])
+                    if m:
+                        fields['no'] = m.group(1)
+                break
+
+    # 3. 购买方 / 销售方名称
+    name_items = [it for it in ordered if re.search(r'名称\s*[：:]', it['text'])]
+
+    def find_name(header_kw):
+        headers = [it for it in ordered if header_kw in it['text']]
+        if not headers:
+            headers = [c for c in _merge_vertical_headers(ordered)
+                       if header_kw in c['text']]
+        if not headers or not name_items:
+            return '未知'
+        header = min(headers, key=lambda it: it.get('aspect', 99))
+        best = min(name_items, key=lambda it: abs(it['cx'] - header['cx'])
+                   + abs(it['cy'] - header['cy']))
+        m = re.search(r'名称\s*[：:]\s*(.+)', best['text'])
+        return m.group(1).strip() if m and m.group(1).strip() else '未知'
+
+    if fields['buyer'] == '未知':
+        fields['buyer'] = find_name('购买方')
+    if fields['seller'] == '未知':
+        fields['seller'] = find_name('销售方')
+
+    # 原生文字层常把“名称：”和值拆成多个 span；按视觉行合并后再解析。
+    if fields['buyer'] == '未知' or fields['seller'] == '未知':
+        lines = _group_detail_lines(ordered)
+        names = []
+        for line in lines:
+            m = re.search(r'名称\s*[：:]\s*(.+)', line['text'])
+            if m and m.group(1).strip():
+                names.append((line['cy'], m.group(1).strip()))
+        names.sort()
+        if fields['buyer'] == '未知' and names:
+            fields['buyer'] = names[0][1]
+        if fields['seller'] == '未知' and len(names) > 1:
+            fields['seller'] = names[-1][1]
+
+    # 4. 金额（小写）
+    if fields['amount'] == '未知':
+        for i, it in enumerate(ordered):
+            if '小写' in it['text']:
+                texts = [it['text']]
+                if i + 1 < len(ordered):
+                    texts.append(ordered[i + 1]['text'])
+                m = re.search(r'(?:[¥￥]\s*)?([\d,，]+\.\d{1,2})', ' '.join(texts))
+                if m:
+                    fields['amount'] = m.group(1).replace(',', '').replace('，', '')
+                break
+
+    return fields
+
+
+def extract_invoice_fields_from_pdf(pdf_path):
+    """逐页读取 PDF 原生文字层，返回收款组字段初始值列表。"""
+    results = []
+    doc = fitz.open(pdf_path)
+    try:
+        for page in doc:
+            items = pdf_native_items(pdf_path, page)
+            fields = _extract_invoice_fields_from_items(items)
+            fields['_method'] = 'native' if _invoice_fields_complete(fields) else 'native-partial'
+            results.append(fields)
+    finally:
+        doc.close()
+    return results
+
+
+def _ocr_invoice_regions(image_path, fields):
+    """仅针对少量缺失字段 OCR 对应区域，返回补充字段。"""
+    from PIL import Image
+    import numpy as np
+
+    missing = {key for key in INVOICE_FIELD_KEYS if fields.get(key, '未知') == '未知'}
+    if not missing:
+        return _blank_invoice_fields()
+
+    image = Image.open(image_path).convert('RGB')
+    width, height = image.size
+    regions = []
+    if missing & {'date', 'no'}:
+        regions.append((int(width * 0.38), 0, width, int(height * 0.34)))
+    if missing & {'buyer', 'seller'}:
+        regions.append((0, int(height * 0.18), width, int(height * 0.78)))
+    if 'amount' in missing:
+        regions.append((0, int(height * 0.52), width, height))
+
+    combined = _blank_invoice_fields()
+    for box in regions:
+        crop = np.asarray(image.crop(box))
+        result, _ = get_ocr()(crop)
+        items = []
+        for entry in result or []:
+            points, text, _score = entry
+            xs = [float(point[0]) + box[0] for point in points]
+            ys = [float(point[1]) + box[1] for point in points]
+            x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
+            text = text.strip()
+            if text:
+                items.append({'text': text, 'cx': (x1 + x2) / 2,
+                              'cy': (y1 + y2) / 2, 'w': x2 - x1, 'h': y2 - y1,
+                              'aspect': (x2 - x1) / (y2 - y1) if y2 > y1 else 99})
+        combined = _merge_invoice_fields(
+            combined, _extract_invoice_fields_from_items(items, fields))
+    return combined
+
+
+def extract_invoice_fields(image_path, initial_fields=None):
+    """快速识别五字段：文字层结果 → 局部 OCR → 整页 OCR 兜底。
+
+    返回 dict：date/no/buyer/seller/amount，失败字段用“未知”。
     适配两种布局：
     - 上下布局（标题在上、名称在下，同一 x 列）
     - 左右分栏（"购买方信息/销售方信息"为竖排标题，名称在标题附近按 x 区分）
     """
-    fields = {'date': '未知', 'no': '未知', 'buyer': '未知',
-              'seller': '未知', 'amount': '未知'}
-    try:
-        items = ocr_lines(image_path)
-    except Exception as e:
-        print('    OCR 失败：%s' % e)
+    started = time.perf_counter()
+    fields = _merge_invoice_fields(initial_fields, {})
+    if _invoice_fields_complete(fields):
+        fields['_method'] = 'native'
+        fields['_elapsed'] = time.perf_counter() - started
         return fields
 
-    # 1. 开票日期（兼容 2026年08月06日 / 2026-08-06 / 2026/08/06）
-    for i, it in enumerate(items):
-        if re.search(r'开票日期|开票日[期朗]', it['text']):
-            fields['date'] = _normalize_invoice_date(it['text'])
-            if fields['date'] == '未知':
-                # OCR 可能把标签和值拆成相邻文本块，优先检查同行右侧，其次检查下一条。
-                candidates = [other for other in items
-                              if other is not it
-                              and other['cx'] >= it['cx']
-                              and abs(other['cy'] - it['cy']) <= max(it['h'], other['h'])]
-                candidates.sort(key=lambda other: (abs(other['cy'] - it['cy']),
-                                                   other['cx'] - it['cx']))
-                if i + 1 < len(items):
-                    candidates.append(items[i + 1])
-                for candidate in candidates:
-                    fields['date'] = _normalize_invoice_date(candidate['text'])
-                    if fields['date'] != '未知':
-                        break
-            break
-
-    # 2. 发票号码（右上角，含"发票号码"）
-    for it in items:
-        if '发票号码' in it['text']:
-            m = re.search(r'[：:]\s*([0-9A-Za-z\-]+)', it['text'])
-            if m:
-                fields['no'] = m.group(1)
-            break
-
-    # 3. 购买方 / 销售方 名称
-    # 找所有"名称："条目
-    name_items = [it for it in items if re.search(r'名称\s*[：:]', it['text'])]
-
-    def find_name(header_kw):
-        # 找标题条目（含关键词，优先竖排 aspect<1）
-        headers = [it for it in items if header_kw in it['text']]
-        if not headers:
-            # 竖排标题被 OCR 拆行时（如 购买方信息 → 购/买方信），同列片段拼回后重试
-            headers = [c for c in _merge_vertical_headers(items)
-                       if header_kw in c['text']]
-        if not headers:
-            return '未知'
-        header = min(headers, key=lambda it: it['aspect'])  # 最竖的那条
-        if not name_items:
-            return '未知'
-        # 取与标题水平距离最近且垂直距离合理的"名称："条目
-        def score(it):
-            dx = abs(it['cx'] - header['cx'])
-            dy = abs(it['cy'] - header['cy'])
-            return dx + dy
-        best = min(name_items, key=score)
-        m = re.search(r'名称\s*[：:]\s*(.+)', best['text'])
-        if m and m.group(1).strip():
-            return m.group(1).strip()
-        return '未知'
-
-    fields['buyer'] = find_name('购买方')
-    fields['seller'] = find_name('销售方')
-
-    # 4. 金额（小写）
-    for it in items:
-        if '小写' in it['text']:
-            # 兼容 OCR 可能输出的中文全角逗号（，）与英文半角逗号（,）
-            m = re.search(r'(?:¥\s*)?([\d,，]+\.\d{1,2})', it['text'])
-            if m:
-                fields['amount'] = m.group(1).replace(',', '').replace('，', '')
-            break
-
+    try:
+        missing_count = sum(fields[key] == '未知' for key in INVOICE_FIELD_KEYS)
+        used_region = False
+        used_full = False
+        if missing_count <= 2:
+            fields = _merge_invoice_fields(fields, _ocr_invoice_regions(image_path, fields))
+            used_region = True
+        if not _invoice_fields_complete(fields):
+            fields = _extract_invoice_fields_from_items(ocr_lines(image_path), fields)
+            used_full = True
+    except Exception as e:
+        print('    OCR 失败：%s' % e)
+    if used_full:
+        fields['_method'] = 'native+full-ocr' if initial_fields else 'full-ocr'
+    elif used_region:
+        fields['_method'] = 'native+region-ocr'
+    else:
+        fields['_method'] = 'native-partial'
+    fields['_elapsed'] = time.perf_counter() - started
     return fields
 
 
