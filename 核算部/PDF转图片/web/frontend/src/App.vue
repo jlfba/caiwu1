@@ -314,11 +314,8 @@ onUnmounted(() => {
             >✕</button>
           </div>
           </UploadArea>
-        </div>
 
-        <div class="action-pane">
-
-        <div v-if="mode === '1'" class="template-section">
+          <div v-if="mode === '1'" class="template-section">
           <div class="ts-head">
             <span class="ts-label">插入已有表格（可选）</span>
             <span class="ts-tip">不传模板则自动生成新表格</span>
@@ -343,7 +340,10 @@ onUnmounted(() => {
             </div>
           </div>
           <p v-if="sheetError" class="lo-error">{{ sheetError }}</p>
+          </div>
         </div>
+
+        <div class="action-pane">
 
         <div v-if="mode === '1'" class="layout-options">
           <div class="ts-head">
