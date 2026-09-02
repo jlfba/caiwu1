@@ -34,13 +34,13 @@ let elapsedStartedAt = 0
 const steps = computed(() => {
   const list = [
     { key: 'mode', no: 1, label: '选择功能' },
-    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '2' },
+    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '3' },
     { key: 'upload', no: 3, label: '上传 PDF' },
     { key: 'run', no: 4, label: '制作' }
   ]
   // 收款组少一步发票类型
-  if (mode.value !== '2') list[2].no = 2
-  if (mode.value !== '2') list[3].no = 3
+  if (mode.value !== '3') list[2].no = 2
+  if (mode.value !== '3') list[3].no = 3
   let stepNo = 0
   for (const s of list) {
     if (s.visible) s.cur = ++stepNo
@@ -50,7 +50,7 @@ const steps = computed(() => {
 
 const currentStep = computed(() => {
   if (!mode.value) return 1
-  if (mode.value === '2') return 2
+  if (mode.value === '3') return 2
   return 3
 })
 
@@ -72,7 +72,7 @@ watch(mode, (val, old) => {
   }
 })
 watch(invType, (val, old) => {
-  if (val !== old && !submitting.value) files.value = []
+  if (val !== old && mode.value === '3' && !submitting.value) files.value = []
 })
 
 function formatSize(bytes) {
@@ -267,7 +267,7 @@ onUnmounted(() => {
     </section>
 
     <!-- 步骤 2：选择发票类型（付款组） -->
-    <section v-if="mode === '2'" class="step">
+    <section v-if="mode === '3'" class="step">
       <span class="step-dot" :class="{ done: false, cur: currentStep === 2 }">
         <svg v-if="currentStep > 2" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
@@ -285,11 +285,11 @@ onUnmounted(() => {
       <div class="workflow-column workflow-right">
         <!-- 步骤 3/2：上传 PDF -->
         <section class="step">
-      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '2' ? 3 : 2) }">
+      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <template v-else>{{ mode === '2' ? 3 : 2 }}</template>
+        <template v-else>{{ mode === '3' ? 3 : 2 }}</template>
       </span>
       <div class="step-body">
         <div class="upload-pane">
@@ -414,7 +414,7 @@ onUnmounted(() => {
           :current="current"
           :total="total"
           :message="message"
-          :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
+          :elapsed-seconds="mode !== '3' ? elapsedSeconds : -1"
         />
 
             <ResultPanel
@@ -423,7 +423,7 @@ onUnmounted(() => {
           :task-id="taskId"
           :filename="filename"
           :error="error"
-          :elapsed-seconds="mode === '1' ? elapsedSeconds : -1"
+          :elapsed-seconds="mode !== '3' ? elapsedSeconds : -1"
           @reset="reset"
             />
           </div>

@@ -1,16 +1,22 @@
 <script setup>
-defineProps({ modelValue: String })
+defineProps({ modelValue: String, disabled: Boolean })
 defineEmits(['update:modelValue'])
 
 const modes = [
   {
     id: '1',
     title: '收款组',
-    sub: 'PDF 转图片 + 发票识别',
+    sub: '模式 1：PDF 转图片 + 发票识别',
     desc: '逐页渲染为图片，识别开票日期、发票号码、购买方、销售方、金额并重命名，输出含图 Excel。'
   },
   {
     id: '2',
+    title: '收款组',
+    sub: '模式 2：发票信息转 Excel',
+    desc: '提取开票日期、销售方名称、金额、发票号码、购买方信息，生成简洁的发票信息表。'
+  },
+  {
+    id: '3',
     title: '付款组',
     sub: '发票明细识别转 Excel',
     desc: '识别英文发票的 INVOICE / 明细行，支持 canexs、精准、创时亚马逊卡派、创时卡派、创时清关费、创时附加费、MAX萨凡纳、MAX纽约、AA、JCK、MKK、DINO、EYNEX 十三种版式。'

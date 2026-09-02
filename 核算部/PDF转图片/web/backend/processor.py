@@ -140,6 +140,74 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
     return out
 
 
+def process_receipt_mode2(pdf_paths, out_dir, progress=None):
+    """收款组模式 2：识别发票五字段并生成简洁 Excel。"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    def report(cur, tot, msg):
+        if progress:
+            progress(cur, tot, msg)
+
+    total = max(len(pdf_paths), 1)
+    rows = []
+    image_dir = os.path.join(out_dir, 'receipt_images')
+    os.makedirs(image_dir, exist_ok=True)
+    image_seq = 0
+
+    for index, pdf in enumerate(pdf_paths, 1):
+        if not os.path.isfile(pdf):
+            report(index, total, '跳过不存在的文件：%s' % os.path.basename(pdf))
+            continue
+        try:
+            fields_list = tool.extract_invoice_fields_from_pdf(pdf)
+            # 原生文字层完整时直接使用；缺字段时渲染页面并走现有 OCR 兜底。
+            native_missing = any(not tool._invoice_fields_complete(f) for f in fields_list)
+            if native_missing:
+                images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
+                merged = []
+                for page_index, image in enumerate(images):
+                    initial = fields_list[page_index] if page_index < len(fields_list) else None
+                    merged.append(tool.extract_invoice_fields(image, initial))
+                fields_list = merged
+            for fields in fields_list:
+                rows.append([fields.get('date', '未知'),
+                             fields.get('seller', '未知'),
+                             fields.get('amount', '未知'),
+                             fields.get('no', '未知'),
+                             fields.get('buyer', '未知')])
+        except Exception as exc:
+            print('收款组模式 2 识别失败：%s：%s' % (os.path.basename(pdf), exc))
+        report(index, total, '正在识别第 %d/%d 个文件：%s' %
+               (index, total, os.path.basename(pdf)))
+
+    if not rows:
+        raise RuntimeError('没有识别到任何发票信息，未生成 Excel')
+
+    output = os.path.join(out_dir, '收款组发票信息.xlsx')
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '发票信息'
+    headers = ('开票日期', '销售方名称', '金额', '发票号码', '购买方信息')
+    ws.append(list(headers))
+    for row in rows:
+        ws.append(row)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    widths = (16, 34, 16, 24, 34)
+    for index, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    wb.save(output)
+    report(total, total, '正在生成 Excel')
+    return output
+
+
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 
