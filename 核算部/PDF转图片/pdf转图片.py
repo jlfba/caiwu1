@@ -2458,7 +2458,7 @@ TEXT_COL_WIDTH = 40                     # 字段列宽（放得下公司名称�
 
 
 def images_into_excel(xlsx_path, images, sheet_name=None,
-                      start_cell='A1', direction='v'):
+                      start_cell='A1', direction='v', include_date=True):
     """
     把图片插入指定工作表，每张图占一个单元格（15cm x 10cm，宽:高≈1.5），字段放在图片旁。
     direction：'v' 纵向（图片沿列向下，字段放图片右侧）；'h' 横向（图片沿行向右，字段放图片下方）。
@@ -2501,7 +2501,7 @@ def images_into_excel(xlsx_path, images, sheet_name=None,
         # 去掉开头的全局序号
         if parts and re.match(r'^\d{4}$', parts[0]):
             parts = parts[1:]
-        labels = FIELD_LABELS
+        labels = FIELD_LABELS if include_date else FIELD_LABELS[1:]
         # 文件名拆分后：第1个=开票日期，第2=发票号，第3=购买方，
         # 第4=销售方，剩余拼接=金额。兼容旧版四字段文件名。
         is_new_format = (len(parts) >= 5
@@ -2522,6 +2522,8 @@ def images_into_excel(xlsx_path, images, sheet_name=None,
         # 去掉文件重名时追加的 (2) 序号
         amount = re.sub(r'\(\d+\)$', '', amount)
         vals = [invoice_date, no, buyer, seller, amount]
+        if not include_date:
+            vals = vals[1:]
 
         if direction == 'h':
             # 横向：图片沿行向右，字段放图片下方（同一列、往下五行）

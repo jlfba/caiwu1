@@ -130,13 +130,15 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
         out = os.path.join(out_dir, os.path.basename(template_path))
         shutil.copy2(template_path, out)
         tool.images_into_excel(out, images, sheet_name=sheet_name or None,
-                               start_cell=start_cell.upper(), direction=layout)
+                               start_cell=start_cell.upper(), direction=layout,
+                               include_date=False)
     else:
         # 未传模板：自动新建表格
         out = os.path.join(out_dir, '发票图片表.xlsx')
         _blank_workbook(out)
         tool.images_into_excel(out, images,
-                               start_cell=start_cell.upper(), direction=layout)
+                               start_cell=start_cell.upper(), direction=layout,
+                               include_date=False)
     return out
 
 
