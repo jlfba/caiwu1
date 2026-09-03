@@ -653,10 +653,9 @@ DETAIL_OUTPUT_HEADERS = ('发票号', 'TRACKING NO.', 'DATE', 'DESCRIPTION',
 JINGZHUN_OUTPUT_HEADERS = ('发票号', 'Master B/L No', 'Containers',
                            'Description', 'Amount')
 
-# 创时亚马逊卡派发票输出列：Invoice Number / Reference 按明细行重复，
-# Description 列内容拆成两列——带 // 的行放 Description，其余行放 Description(1)
+# 创时亚马逊卡派发票输出列：Invoice Number / Reference 按明细行重复
 CHUANGSHI_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
-                            'Description(1)', 'Quantity', 'Unit Price', 'Amount GBP')
+                            'Quantity', 'Price', 'Amount')
 
 # 创时卡派发票输出列：不带 Description(1)，只有一个 Description 列
 CHUANGSHI_CAR_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
@@ -1326,7 +1325,8 @@ def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
     return result, head_desc
 
 
-def extract_chuangshi_page(items, desc_parser=_desc_amazon):
+def extract_chuangshi_page(items, desc_parser=_desc_amazon,
+                           invoice_x=(385, 480), reference_x=(480, 580)):
     """创时亚马逊卡派/创时卡派/创时清关费等发票单页：字段 + 四列明细行。
     返回 ({invoice_no, reference}, rows, head_desc)：
       rows: 每行 [desc, desc1, qty, unit, amt]；
@@ -1347,9 +1347,11 @@ def extract_chuangshi_page(items, desc_parser=_desc_amazon):
     field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
     fields = {}
     anchor, label_line = _jz_label(field_lines, 'INVOICENUMBER', 'INVOICE')
-    fields['invoice_no'] = _chuangshi_field_value(field_lines, header_cy, 385, 480, label_line)
+    fields['invoice_no'] = _chuangshi_field_value(
+        field_lines, header_cy, invoice_x[0], invoice_x[1], label_line)
     anchor, label_line = _jz_label(field_lines, 'REFERENCE', 'REFERENCE')
-    fields['reference'] = _chuangshi_field_value(field_lines, header_cy, 480, 580, label_line)
+    fields['reference'] = _chuangshi_field_value(
+        field_lines, header_cy, reference_x[0], reference_x[1], label_line)
     rows, head_desc = _chuangshi_table(lines, header_line, desc_parser)
     return fields, rows, head_desc
 
@@ -1407,7 +1409,8 @@ def _desc_simple(desc_lines):
     return '\n'.join(desc_lines), ''
 
 
-def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1):
+def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1,
+                             invoice_x=(385, 480), reference_x=(480, 580)):
     """创时系列发票通用批量识别。
 
     drop_desc1=True：输出 6 列（无 Description(1)）；否则 7 列。
@@ -1426,7 +1429,8 @@ def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1):
             for page_no, page in enumerate(doc, 1):
                 pages += 1
                 items = _detail_page_items(pdf_path, page, page_no)
-                fields, rows, head_desc = extract_chuangshi_page(items, desc_parser)
+                fields, rows, head_desc = extract_chuangshi_page(
+                    items, desc_parser, invoice_x=invoice_x, reference_x=reference_x)
                 merged = dict(last)
                 merged.update({k: v for k, v in fields.items() if v != '未知'})
                 last = merged
@@ -1448,8 +1452,10 @@ def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1):
 
 
 def extract_chuangshi_from_pdfs(pdf_paths):
-    """批量识别创时亚马逊卡派发票（// 行与其余行分两列）。"""
-    return _extract_chuangshi_batch(pdf_paths, _desc_amazon, drop_desc1=False)
+    """批量识别创时亚马逊卡派发票，Description 合并为单列。"""
+    return _extract_chuangshi_batch(
+        pdf_paths, _desc_simple, drop_desc1=True,
+        invoice_x=(105, 200), reference_x=(205, 380))
 
 
 def extract_chuangshi_car_from_pdfs(pdf_paths):
