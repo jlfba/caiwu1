@@ -15,6 +15,22 @@ const percent = computed(() => {
   return Math.min(100, Math.round((props.current / props.total) * 100))
 })
 
+const reportStages = [
+  '加载工作簿',
+  '复制所选工作表',
+  '筛选无应收明细',
+  '生成无应收明细透视表',
+  '保存处理结果'
+]
+
+const isReportFlow = computed(() => props.total === reportStages.length)
+
+function stageState(index) {
+  if (props.current > index + 1) return 'done'
+  if (props.current === index + 1) return 'active'
+  return 'pending'
+}
+
 const elapsedText = computed(() => {
   const seconds = Math.max(0, props.elapsedSeconds)
   const hours = Math.floor(seconds / 3600)
@@ -39,6 +55,14 @@ const elapsedText = computed(() => {
       <div class="bar" :style="{ width: percent + '%' }"></div>
     </div>
     <p class="pp-msg">{{ message }}</p>
+    <ol v-if="isReportFlow" class="pp-stages" aria-label="报表处理流程">
+      <li v-for="(stage, index) in reportStages" :key="stage" :class="`stage-${stageState(index)}`">
+        <span class="stage-dot" aria-hidden="true">{{ stageState(index) === 'done' ? '✓' : index + 1 }}</span>
+        <span>{{ stage }}</span>
+        <span v-if="stageState(index) === 'active'" class="stage-now">进行中</span>
+        <span v-else-if="stageState(index) === 'done'" class="stage-now">已完成</span>
+      </li>
+    </ol>
   </div>
 </template>
 
@@ -126,5 +150,64 @@ const elapsedText = computed(() => {
   margin: 12px 0 0;
   font-size: 12.5px;
   color: var(--text-soft);
+}
+
+.pp-stages {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.pp-stages li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 28px;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.stage-dot {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-faint);
+  font-family: var(--font-num);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.stage-active {
+  color: var(--primary-ink) !important;
+  font-weight: 700;
+}
+
+.stage-active .stage-dot {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.stage-done {
+  color: var(--text-soft) !important;
+}
+
+.stage-done .stage-dot {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+
+.stage-now {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
 }
 </style>
