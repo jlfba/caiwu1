@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 
 const props = defineProps({
   status: { type: String, required: true },
@@ -9,6 +9,19 @@ const props = defineProps({
   elapsedSeconds: { type: Number, default: -1 },
   logs: { type: Array, default: () => [] }
 })
+
+const terminalBody = ref(null)
+
+watch(
+  () => props.logs.length,
+  async () => {
+    await nextTick()
+    if (terminalBody.value) {
+      terminalBody.value.scrollTop = terminalBody.value.scrollHeight
+    }
+  },
+  { immediate: true }
+)
 
 const percent = computed(() => {
   if (props.status === 'done') return 100
@@ -66,7 +79,7 @@ const elapsedText = computed(() => {
     </ol>
     <div v-if="isReportFlow" class="pp-terminal" aria-label="处理日志">
       <div class="pp-terminal-head"><span>处理日志</span><span>{{ logs.length }} 条</span></div>
-      <div class="pp-terminal-body">
+      <div ref="terminalBody" class="pp-terminal-body">
         <p v-for="(line, index) in logs" :key="`${index}-${line}`">{{ line }}</p>
         <p v-if="!logs.length" class="pp-terminal-empty">等待后端日志…</p>
       </div>
