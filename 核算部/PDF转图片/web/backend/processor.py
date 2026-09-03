@@ -16,6 +16,21 @@ if _BASE_DIR not in sys.path:
 import pdf转图片 as tool  # noqa: E402
 
 
+def _normalize_chuangshi_car_rows(rows):
+    """Normalize current and legacy Chuangshi-car rows to six columns."""
+    normalized = []
+    for row in rows:
+        if len(row) >= 7:
+            # Legacy format: invoice, reference, description, description(1),
+            # quantity, unit price, amount.
+            normalized.append([row[0], row[1], '\n'.join(
+                value for value in (row[2], row[3]) if value),
+                row[4], row[5], row[6]])
+        elif len(row) >= 6:
+            normalized.append(list(row[:6]))
+    return normalized
+
+
 def sanitize_filename(name):
     """清洗上传文件名，返回安全的保存名（仅文件名，不含路径）。"""
     name = os.path.basename(name or '')
@@ -265,6 +280,8 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
             rows, pg, sk = tool.extract_detail_from_pdfs([pdf])
         pages += pg
         skipped += sk
+        if inv_type == '4':
+            rows = _normalize_chuangshi_car_rows(rows)
         all_rows.extend(rows)
         report(i, n, '正在识别第 %d/%d 个文件：%s' % (i, n, os.path.basename(pdf)))
 

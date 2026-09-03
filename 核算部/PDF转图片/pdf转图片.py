@@ -1226,6 +1226,26 @@ def _chuangshi_field_value(lines, header_cy, x_min, x_max, label_line=None):
     return ' '.join(word['text'] for word in words).strip() or '未知'
 
 
+def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
+    """Extract a labeled header value from the next visual line in a column."""
+    for line in lines:
+        if label_key not in _compact_text(line['text']):
+            continue
+        value_lines = [candidate for candidate in lines
+                       if candidate['cy'] > line['cy'] + 2
+                       and candidate['cy'] < header_cy - 2]
+        if not value_lines:
+            continue
+        value_line = min(value_lines, key=lambda candidate: candidate['cy'])
+        words = [word for word in value_line['items']
+                 if x_min <= word['cx'] < x_max]
+        words.sort(key=lambda word: word['cx'])
+        value = ' '.join(word['text'] for word in words).strip()
+        if value:
+            return value
+    return '未知'
+
+
 def _desc_amazon(desc_lines):
     """创时亚马逊卡派：带 // 的行放 Description 列，其余行放 Description(1) 列。"""
     slash = [d for d in desc_lines if '//' in d]
@@ -1346,12 +1366,10 @@ def extract_chuangshi_page(items, desc_parser=_desc_amazon,
     header_cy = header_line['cy']
     field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
     fields = {}
-    anchor, label_line = _jz_label(field_lines, 'INVOICENUMBER', 'INVOICE')
-    fields['invoice_no'] = _chuangshi_field_value(
-        field_lines, header_cy, invoice_x[0], invoice_x[1], label_line)
-    anchor, label_line = _jz_label(field_lines, 'REFERENCE', 'REFERENCE')
-    fields['reference'] = _chuangshi_field_value(
-        field_lines, header_cy, reference_x[0], reference_x[1], label_line)
+    fields['invoice_no'] = _chuangshi_labeled_value(
+        field_lines, header_cy, 'INVOICENUMBER', invoice_x[0], invoice_x[1])
+    fields['reference'] = _chuangshi_labeled_value(
+        field_lines, header_cy, 'REFERENCE', reference_x[0], reference_x[1])
     rows, head_desc = _chuangshi_table(lines, header_line, desc_parser)
     return fields, rows, head_desc
 
