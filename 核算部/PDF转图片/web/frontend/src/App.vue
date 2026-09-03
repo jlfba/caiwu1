@@ -656,7 +656,7 @@ onUnmounted(() => {
 
 .workflow-right.report-active {
   height: auto;
-  min-height: 760px;
+  min-height: 0;
   max-height: none;
   overflow-y: auto;
 }
@@ -801,8 +801,8 @@ onUnmounted(() => {
 }
 
 .report-progress-wide > :deep(.progress-panel) {
-  height: min(620px, calc(100vh - 220px));
-  min-height: 420px;
+  height: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -1308,8 +1308,8 @@ onUnmounted(() => {
     border-top: 1px dashed var(--border-strong);
   }
   .report-progress-wide > :deep(.progress-panel) {
-    height: min(620px, calc(100vh - 220px));
-    min-height: 420px;
+    height: auto;
+    min-height: 0;
   }
   .report-progress-wide > :deep(.pp-terminal-body) {
     min-height: 0;
