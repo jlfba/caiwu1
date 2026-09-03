@@ -316,7 +316,7 @@ onUnmounted(() => {
   </header>
 
   <main class="workspace">
-    <div class="workflow-grid" :class="{ 'report-mode': mode === '4' }">
+    <div class="workflow-grid">
       <div class="workflow-column workflow-left">
         <div class="rail" aria-hidden="true"></div>
 
@@ -529,6 +529,8 @@ onUnmounted(() => {
                 </button>
                 <p class="run-hint">{{ reportSheet ? `已选择：${reportSheet}` : '请先上传并选择工作表' }}</p>
               </div>
+            </div>
+            <div v-if="submitting || status === 'done' || status === 'error'" class="report-progress-wide">
               <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
@@ -599,26 +601,6 @@ onUnmounted(() => {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: clamp(28px, 5vw, 72px);
   align-items: start;
-}
-
-.workflow-grid.report-mode {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 28px;
-}
-
-.workflow-grid.report-mode .workflow-left,
-.workflow-grid.report-mode .workflow-right {
-  width: 100%;
-  max-width: none;
-}
-
-.workflow-grid.report-mode .workflow-right {
-  position: relative;
-  top: auto;
-  height: auto;
-  min-height: 760px;
-  max-height: none;
-  overflow: visible;
 }
 
 .workflow-column {
@@ -711,9 +693,9 @@ onUnmounted(() => {
 
 .report-placeholder > .step-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 28px;
-  height: auto;
+  height: 100%;
 }
 
 .report-pane,
@@ -725,24 +707,17 @@ onUnmounted(() => {
 }
 
 .report-action-pane {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 28px;
-  align-items: start;
+  min-width: 0;
 }
 
-.report-action-pane > .step-title,
-.report-action-pane > .step-sub,
-.report-action-pane > .run-area {
-  grid-column: 1;
-}
-
-.report-action-pane > :deep(.progress-panel),
-.report-action-pane > :deep(.result-panel) {
-  grid-column: 1;
-  grid-row: auto;
+.report-progress-wide {
+  grid-column: 1 / -1;
   width: 100%;
+  min-width: 0;
 }
+
+.report-progress-wide > :deep(.progress-panel),
+.report-progress-wide > :deep(.result-panel) { width: 100%; }
 
 .report-upload {
   margin-top: 20px;
@@ -779,23 +754,23 @@ onUnmounted(() => {
   gap: 12px;
 }
 
-.report-action-pane > :deep(.progress-panel),
-.report-action-pane > :deep(.result-panel) {
+.report-progress-wide > :deep(.progress-panel),
+.report-progress-wide > :deep(.result-panel) {
   margin-top: 20px;
 }
 
-.report-action-pane > :deep(.progress-panel) {
+.report-progress-wide > :deep(.progress-panel) {
   min-height: 560px;
   display: flex;
   flex-direction: column;
 }
 
-.report-action-pane > :deep(.pp-terminal) {
+.report-progress-wide > :deep(.pp-terminal) {
   flex: 1 1 auto;
   min-height: 170px;
 }
 
-.report-action-pane > :deep(.pp-terminal-body) {
+.report-progress-wide > :deep(.pp-terminal-body) {
   max-height: none;
   min-height: 360px;
 }
@@ -1276,10 +1251,10 @@ onUnmounted(() => {
     padding-top: 24px;
     border-top: 1px dashed var(--border-strong);
   }
-  .report-action-pane > :deep(.progress-panel) {
+  .report-progress-wide > :deep(.progress-panel) {
     min-height: 0;
   }
-  .report-action-pane > :deep(.pp-terminal-body) {
+  .report-progress-wide > :deep(.pp-terminal-body) {
     min-height: 220px;
     max-height: 300px;
   }
