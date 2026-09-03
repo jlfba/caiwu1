@@ -657,9 +657,9 @@ JINGZHUN_OUTPUT_HEADERS = ('发票号', 'Master B/L No', 'Containers',
 CHUANGSHI_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
                             'Quantity', 'Price', 'Amount')
 
-# 创时卡派发票输出列：不带 Description(1)，只有一个 Description 列
+# 创时卡派发票输出列：Invoice Number / Reference 按明细行重复
 CHUANGSHI_CAR_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
-                                'Quantity', 'Unit Price', 'Amount GBP')
+                                'Quantity', 'Price', 'Amount')
 
 # 创时清关费发票输出列：同创时卡派，6 列无 Description(1)
 CHUANGSHI_CLEARANCE_OUTPUT_HEADERS = ('Invoice Number', 'Reference', 'Description',
@@ -1459,9 +1459,10 @@ def extract_chuangshi_from_pdfs(pdf_paths):
 
 
 def extract_chuangshi_car_from_pdfs(pdf_paths):
-    """批量识别创时卡派发票（Description 为 // 链 + 货物明细行格式）。
-    输出行 [invoice, reference, desc, qty, unit, amt]，不带 Description(1) 列。"""
-    return _extract_chuangshi_batch(pdf_paths, _desc_car, drop_desc1=True)
+    """批量识别创时卡派发票，Description 合并为单列。"""
+    return _extract_chuangshi_batch(
+        pdf_paths, _desc_car, drop_desc1=True,
+        invoice_x=(105, 205), reference_x=(210, 445))
 
 
 def extract_chuangshi_clearance_from_pdfs(pdf_paths):
