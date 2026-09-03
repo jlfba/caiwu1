@@ -230,8 +230,8 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
         detail = wb.copy_worksheet(source); detail.title = '无应收明细'
         # 第 1 步即执行价格筛选：只保留“应收单价”小于 1 的数据。
         source_rows = list(detail.iter_rows(min_row=2, values_only=True))
-        kept = [list(v) for v in source_rows if bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) < 1]
-        removed = [list(v) for v in source_rows if not (bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) < 1)]
+        kept = [list(v) for v in source_rows if bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) <= 1]
+        removed = [list(v) for v in source_rows if not (bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) <= 1)]
         if detail.max_row > 1: detail.delete_rows(2, detail.max_row - 1)
         for values in kept: detail.append(values)
         log = wb.create_sheet('临时删除_步骤1'); log.append(list(source.iter_rows(min_row=1, max_row=1, values_only=True))[0]); [log.append(v) for v in removed]
@@ -322,7 +322,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
         values = list(row); original.append(values); row_count += 1
         keep = True
         if step >= 1:
-            if step == 1: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) < 1
+            if step == 1: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
             elif step == 2: keep = not any(word in _text(values[idx['客户简称']-1]) for word in EXCLUDED_CUSTOMERS)
             elif step == 3: keep = '华南KA' not in _text(values[idx['业务员']-1])
             elif step == 4: keep = not (re.match(r'^J[0-9A-Za-z-]*', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]))
