@@ -8,8 +8,9 @@
 """
 import os
 import sys
-import tempfile
-import uuid
+import zipfile
+from io import BytesIO
+from xml.etree import ElementTree
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -34,21 +35,19 @@ async def read_worksheets(template: UploadFile = File(...)):
         return JSONResponse({'detail': '仅支持 .xlsx / .xlsm 表格：%s' % template.filename},
                             status_code=400)
     data = await template.read()
-    tmp = os.path.join(tempfile.gettempdir(), 'ws_%s.xlsx' % uuid.uuid4().hex[:8])
-    with open(tmp, 'wb') as f:
-        f.write(data)
     try:
-        from openpyxl import load_workbook
-        wb = load_workbook(tmp, read_only=True)
-        sheets = wb.sheetnames
-        wb.close()
+        # 只读取 workbook.xml 的目录，不加载整个工作簿，避免大表上传后长时间卡住。
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            workbook_xml = archive.read('xl/workbook.xml')
+        root = ElementTree.fromstring(workbook_xml)
+        sheets = [node.attrib.get('name', '') for node in root
+                  if node.tag.rsplit('}', 1)[-1] == 'sheets'
+                  for node in node
+                  if node.tag.rsplit('}', 1)[-1] == 'sheet' and node.attrib.get('name')]
+        if not sheets:
+            raise ValueError('工作簿中没有可用的工作表')
     except Exception as e:
         return JSONResponse({'detail': '无法读取表格：%s' % e}, status_code=400)
-    finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
     return {'sheets': sheets}
 
 

@@ -22,6 +22,7 @@ const reportFile = ref(null)
 const reportSheets = ref([])
 const reportSheet = ref('')
 const reportError = ref('')
+const reportLoading = ref(false)
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -84,6 +85,7 @@ function clearReportFile() {
   reportSheets.value = []
   reportSheet.value = ''
   reportError.value = ''
+  reportLoading.value = false
 }
 
 async function onReportSelected(file) {
@@ -91,11 +93,14 @@ async function onReportSelected(file) {
   reportSheets.value = []
   reportSheet.value = ''
   reportError.value = ''
+  reportLoading.value = true
   try {
     reportSheets.value = await getWorksheets(file)
     reportSheet.value = reportSheets.value[0] || ''
   } catch (e) {
     reportError.value = e.message
+  } finally {
+    reportLoading.value = false
   }
 }
 
@@ -488,7 +493,8 @@ onUnmounted(() => {
               <div class="report-upload">
                 <ReportUpload :disabled="submitting" @selected="onReportSelected" @cleared="clearReportFile" />
               </div>
-              <p v-if="reportError" class="lo-error">{{ reportError }}</p>
+              <p v-if="reportLoading" class="report-loading" role="status">正在读取工作表，请稍候…</p>
+              <p v-if="reportError" class="lo-error" role="alert">{{ reportError }}</p>
               <div v-if="reportSheets.length" class="report-sheet-pick">
                 <span class="ts-label">选择需要处理的工作表</span>
                 <div class="sheet-btns" role="radiogroup" aria-label="选择报表工作表">
@@ -500,7 +506,7 @@ onUnmounted(() => {
               <h2 class="step-title">生成无应收明细</h2>
               <p class="step-sub">确认工作表后开始筛选，并生成无应收明细及透视表</p>
               <div class="run-area">
-                <button class="btn-make" type="button" :disabled="!reportFile || !reportSheet || submitting" @click="submitReport">
+                <button class="btn-make" type="button" :disabled="!reportFile || !reportSheet || reportLoading || submitting" @click="submitReport">
                   <span v-if="submitting" class="spinner" aria-hidden="true"></span>
                   <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
                 </button>
@@ -683,6 +689,12 @@ onUnmounted(() => {
 
 .report-upload {
   margin-top: 20px;
+}
+
+.report-loading {
+  margin: 12px 0 0;
+  color: var(--primary-ink);
+  font-size: 13px;
 }
 
 .report-sheet-pick {
