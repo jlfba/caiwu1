@@ -1209,6 +1209,24 @@ def _jz_reference(lines, header_cy, anchor, label_line):
     return '\n'.join(parts) or '未知'
 
 
+def _chuangshi_field_value(lines, header_cy, x_min, x_max, label_line=None):
+    """Read one Chuangshi header value from its own PDF column."""
+    candidates = []
+    label_cy = label_line['cy'] if label_line else -float('inf')
+    for line in lines:
+        if line['cy'] <= label_cy + 2 or line['cy'] >= header_cy - 2:
+            continue
+        for word in line['items']:
+            if word['cx'] >= x_min and word['cx'] < x_max:
+                candidates.append((line['cy'], word))
+    if not candidates:
+        return '未知'
+    value_y = min(y for y, _ in candidates)
+    words = [word for y, word in candidates if abs(y - value_y) <= 3]
+    words.sort(key=lambda word: word['cx'])
+    return ' '.join(word['text'] for word in words).strip() or '未知'
+
+
 def _desc_amazon(desc_lines):
     """创时亚马逊卡派：带 // 的行放 Description 列，其余行放 Description(1) 列。"""
     slash = [d for d in desc_lines if '//' in d]
@@ -1264,7 +1282,10 @@ def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
         return None
 
     desc_hdr, qty_hdr = hdr('DESCRIPTION'), hdr('QUANTITY')
-    unit_hdr, amt_hdr = hdr('UNIT'), hdr('AMOUNT')
+    # Different Chuangshi invoice templates label the unit-price column as
+    # either UNIT (legacy templates) or PRICE (customs-clearance template).
+    # Use the actual header anchor so column boundaries follow PDF coordinates.
+    unit_hdr, amt_hdr = hdr('UNIT') or hdr('PRICE'), hdr('AMOUNT')
     if desc_hdr is None or qty_hdr is None or unit_hdr is None or amt_hdr is None:
         return [], []
     bounds = [desc_hdr['cx'] - desc_hdr['w'] / 2,
@@ -1326,9 +1347,9 @@ def extract_chuangshi_page(items, desc_parser=_desc_amazon):
     field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
     fields = {}
     anchor, label_line = _jz_label(field_lines, 'INVOICENUMBER', 'INVOICE')
-    fields['invoice_no'] = _jz_value(field_lines, header_cy, anchor, label_line)
+    fields['invoice_no'] = _chuangshi_field_value(field_lines, header_cy, 385, 480, label_line)
     anchor, label_line = _jz_label(field_lines, 'REFERENCE', 'REFERENCE')
-    fields['reference'] = _jz_reference(field_lines, header_cy, anchor, label_line)
+    fields['reference'] = _chuangshi_field_value(field_lines, header_cy, 480, 580, label_line)
     rows, head_desc = _chuangshi_table(lines, header_line, desc_parser)
     return fields, rows, head_desc
 
