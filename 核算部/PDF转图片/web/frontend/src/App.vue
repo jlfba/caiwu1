@@ -316,7 +316,7 @@ onUnmounted(() => {
   </header>
 
   <main class="workspace">
-    <div class="workflow-grid">
+    <div class="workflow-grid" :class="{ 'report-mode': mode === '4' }">
       <div class="workflow-column workflow-left">
         <div class="rail" aria-hidden="true"></div>
 
@@ -599,6 +599,26 @@ onUnmounted(() => {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: clamp(28px, 5vw, 72px);
   align-items: start;
+}
+
+.workflow-grid.report-mode {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+}
+
+.workflow-grid.report-mode .workflow-left,
+.workflow-grid.report-mode .workflow-right {
+  width: 100%;
+  max-width: none;
+}
+
+.workflow-grid.report-mode .workflow-right {
+  position: relative;
+  top: auto;
+  height: auto;
+  min-height: 760px;
+  max-height: none;
+  overflow: visible;
 }
 
 .workflow-column {
