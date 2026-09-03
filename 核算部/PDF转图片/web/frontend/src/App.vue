@@ -801,8 +801,8 @@ onUnmounted(() => {
 }
 
 .report-progress-wide > :deep(.progress-panel) {
-  height: 720px;
-  min-height: 720px;
+  height: min(620px, calc(100vh - 220px));
+  min-height: 420px;
   display: flex;
   flex-direction: column;
 }
@@ -1308,8 +1308,8 @@ onUnmounted(() => {
     border-top: 1px dashed var(--border-strong);
   }
   .report-progress-wide > :deep(.progress-panel) {
-    height: 560px;
-    min-height: 560px;
+    height: min(620px, calc(100vh - 220px));
+    min-height: 420px;
   }
   .report-progress-wide > :deep(.pp-terminal-body) {
     min-height: 0;
