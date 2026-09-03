@@ -479,6 +479,25 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     if fields['seller'] == '未知':
         fields['seller'] = find_name('销售方')
 
+    # 清理 OCR 把左右两栏拼在同一个名称值中的情况。
+    # 例如购买方值可能是“浙江公司 销 名称：宇乡寒野餐馆”，
+    # 购买方只保留销售方标签之前的内容。
+    def clean_party_values():
+        buyer = str(fields.get('buyer', '未知') or '未知').strip()
+        seller = str(fields.get('seller', '未知') or '未知').strip()
+        seller_mark = r'(?:销|销售方)\s*名称\s*[：:]?'
+        buyer_mark = r'(?:购|购买方)\s*名称\s*[：:]?'
+        if re.search(seller_mark, buyer):
+            buyer = re.split(seller_mark, buyer, maxsplit=1)[0].strip()
+        if re.search(buyer_mark, seller):
+            seller = re.split(buyer_mark, seller, maxsplit=1)[-1].strip()
+        buyer = re.sub(r'^' + buyer_mark, '', buyer).strip()
+        seller = re.sub(r'^' + seller_mark, '', seller).strip()
+        fields['buyer'] = buyer or '未知'
+        fields['seller'] = seller or '未知'
+
+    clean_party_values()
+
     # 原生文字层常把“名称：”和值拆成多个 span；按视觉行合并后再解析。
     if fields['buyer'] == '未知' or fields['seller'] == '未知':
         lines = _group_detail_lines(ordered)
@@ -492,6 +511,7 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
             fields['buyer'] = names[0][1]
         if fields['seller'] == '未知' and len(names) > 1:
             fields['seller'] = names[-1][1]
+        clean_party_values()
 
     # 4. 金额（小写）
     if fields['amount'] == '未知':
