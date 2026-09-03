@@ -6,7 +6,8 @@ const props = defineProps({
   current: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   message: { type: String, default: '' },
-  elapsedSeconds: { type: Number, default: -1 }
+  elapsedSeconds: { type: Number, default: -1 },
+  logs: { type: Array, default: () => [] }
 })
 
 const percent = computed(() => {
@@ -63,6 +64,13 @@ const elapsedText = computed(() => {
         <span v-else-if="stageState(index) === 'done'" class="stage-now">已完成</span>
       </li>
     </ol>
+    <div v-if="isReportFlow" class="pp-terminal" aria-label="处理日志">
+      <div class="pp-terminal-head"><span>处理日志</span><span>{{ logs.length }} 条</span></div>
+      <div class="pp-terminal-body">
+        <p v-for="(line, index) in logs" :key="`${index}-${line}`">{{ line }}</p>
+        <p v-if="!logs.length" class="pp-terminal-empty">等待后端日志…</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -210,4 +218,22 @@ const elapsedText = computed(() => {
   font-size: 11px;
   font-weight: 600;
 }
+
+.pp-terminal {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid #263842;
+  border-radius: 10px;
+  background: #101a20;
+  color: #c8e2df;
+  font-family: var(--font-num), Consolas, monospace;
+}
+.pp-terminal-head {
+  display: flex; justify-content: space-between; padding: 9px 12px;
+  border-bottom: 1px solid #263842; color: #8bcfc6; font-size: 11px; font-weight: 700;
+}
+.pp-terminal-body { max-height: 150px; overflow-y: auto; padding: 10px 12px; scrollbar-width: thin; }
+.pp-terminal-body p { margin: 0 0 6px; color: #c8e2df; font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pp-terminal-body p::before { content: '> '; color: #5bd0bd; }
+.pp-terminal-empty { color: #78919a !important; }
 </style>

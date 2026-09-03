@@ -110,6 +110,7 @@ def task_status(task_id: str):
         'message': t['message'],
         'filename': t['filename'],
         'error': t['error'],
+        'logs': t.get('logs', []),
     }
 
 

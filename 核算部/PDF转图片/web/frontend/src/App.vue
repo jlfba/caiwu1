@@ -31,6 +31,7 @@ const total = ref(0)
 const message = ref('')
 const filename = ref('')
 const error = ref('')
+const logs = ref([])
 const elapsedSeconds = ref(0)
 
 let pollTimer = null
@@ -113,7 +114,9 @@ async function submitReport() {
   total.value = 5
   message.value = '正在上传表格…'
   error.value = ''
+  logs.value = []
   filename.value = ''
+  logs.value = []
   try {
     const data = await createReportTask(reportFile.value, reportSheet.value)
     taskId.value = data.task_id
@@ -248,6 +251,7 @@ async function poll() {
   current.value = data.current || 0
   total.value = data.total || 0
   message.value = data.message || ''
+  logs.value = data.logs || []
 
   if (data.status === 'done') {
     filename.value = data.filename || ''
@@ -272,6 +276,7 @@ function reset() {
   message.value = ''
   filename.value = ''
   error.value = ''
+  logs.value = []
   elapsedSeconds.value = 0
   files.value = []
   clearTemplate()
@@ -512,7 +517,7 @@ onUnmounted(() => {
                 </button>
                 <p class="run-hint">{{ reportSheet ? `已选择：${reportSheet}` : '请先上传并选择工作表' }}</p>
               </div>
-              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :elapsed-seconds="elapsedSeconds" />
+              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
           </div>

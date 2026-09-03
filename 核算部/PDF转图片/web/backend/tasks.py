@@ -66,6 +66,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
         'message': '等待处理…',
         'filename': '',
         'error': '',
+        'logs': [],
         'created': time.time(),
     }
     with _LOCK:
@@ -90,7 +91,7 @@ def create_report_task(filename, data, sheet_name):
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
         'status': 'pending', 'current': 0, 'total': 5,
-        'message': '等待处理…', 'filename': '', 'error': '',
+        'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(),
     }
     with _LOCK:
@@ -124,11 +125,13 @@ def _worker():
             continue
         task['status'] = 'processing'
         task['message'] = '开始处理…'
+        task['logs'].append('[开始] 已接收处理任务')
 
         def progress(cur, tot, msg):
             task['current'] = cur
             task['total'] = tot
             task['message'] = msg
+            task['logs'].append('[%02d/%02d] %s' % (cur, tot, msg))
 
         try:
             if mode == '4':
@@ -150,10 +153,12 @@ def _worker():
             task['total'] = task['total'] or 1
             task['current'] = task['total']
             task['message'] = '处理完成'
+            task['logs'].append('[完成] 输出文件已生成：%s' % task['filename'])
         except Exception as e:
             task['status'] = 'error'
             task['error'] = str(e)
             task['message'] = '处理失败：%s' % e
+            task['logs'].append('[失败] %s' % e)
 
 
 def cleanup_old_tmp(older_than=24 * 3600):
