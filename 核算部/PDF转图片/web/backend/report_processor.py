@@ -226,9 +226,10 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
                 org = _text(row[headers['客户所属机构']-1]); tracking = _text(row[headers['运单号']-1]); cat = _text(row[-1])
                 if org and tracking: groups[org][cat] += 1
             pivot = wb.create_sheet('无应收明细透视表'); cats = [x for x in ('无应收','金额异常','') if any(g[x] for g in groups.values())]
-            pivot.append(['客户所属机构'] + [('空白' if not x else x) for x in cats] + ['合计'])
+            pivot.append(['客户所属机构'] + [('空白' if not x else x) for x in cats] + ['合计', '总票数', '占比'])
             for org in sorted(groups):
-                nums=[groups[org][x] for x in cats]; pivot.append([org]+nums+[sum(nums)])
+                nums=[groups[org][x] for x in cats]; total=sum(nums); denominator=source_totals.get(org, 0)
+                pivot.append([org]+nums+[total, denominator, total / denominator if denominator else 0])
             report(1, 1, '步骤 6/7：已生成透视表')
         elif step == 7:
             for name in list(wb.sheetnames):
