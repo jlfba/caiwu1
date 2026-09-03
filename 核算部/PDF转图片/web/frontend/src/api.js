@@ -39,8 +39,18 @@ async function getWorksheets(file) {
   return data.sheets
 }
 
+async function createReportTask(file, sheetName) {
+  const fd = new FormData()
+  fd.append('file', file, file.name)
+  fd.append('sheet_name', sheetName)
+  const res = await fetch('/api/report-tasks', { method: 'POST', body: fd })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || '创建报表任务失败')
+  return data
+}
+
 function downloadUrl(taskId) {
   return `/api/tasks/${taskId}/download`
 }
 
-export { createTask, getTask, getWorksheets, downloadUrl }
+export { createTask, createReportTask, getTask, getWorksheets, downloadUrl }

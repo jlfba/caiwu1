@@ -60,8 +60,8 @@ async def create_task(files: list[UploadFile] = File(...),
                       start_cell: str = Form('A1'),
                       template: UploadFile = File(None),
                       sheet_name: str = Form('')):
-    if mode not in ('1', '2', '3'):
-        return JSONResponse({'detail': 'mode 无效，应为 1、2 或 3'}, status_code=400)
+    if mode not in ('1', '2', '3', '4'):
+        return JSONResponse({'detail': 'mode 无效，应为 1、2、3 或 4'}, status_code=400)
     if mode == '3' and inv_type not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'):
         return JSONResponse({'detail': 'inv_type 无效，应为 1-13'}, status_code=400)
     if layout not in ('v', 'h'):
@@ -85,6 +85,18 @@ async def create_task(files: list[UploadFile] = File(...),
     task_id = tasks.create_task(pdfs, mode, inv_type, layout, start_cell,
                                 template=tpl, sheet_name=sheet_name.strip())
     return {'task_id': task_id, 'files': len(pdfs)}
+
+
+@app.post('/api/report-tasks')
+async def create_report_task(file: UploadFile = File(...),
+                             sheet_name: str = Form(...)):
+    filename = file.filename or 'report.xlsx'
+    if not filename.lower().endswith(('.xlsx', '.xlsm')):
+        return JSONResponse({'detail': '报表组仅支持 .xlsx / .xlsm 文件'}, status_code=400)
+    if not sheet_name.strip():
+        return JSONResponse({'detail': '请选择要处理的工作表'}, status_code=400)
+    task_id = tasks.create_report_task(filename, await file.read(), sheet_name.strip())
+    return {'task_id': task_id}
 
 
 @app.get('/api/tasks/{task_id}')

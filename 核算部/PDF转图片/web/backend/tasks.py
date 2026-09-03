@@ -11,6 +11,7 @@ import time
 import uuid
 
 import processor
+import report_processor
 
 _TMP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tmp')
 
@@ -74,6 +75,30 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
+def create_report_task(filename, data, sheet_name):
+    """创建报表组 Excel 处理任务。"""
+    task_id = _make_task_id()
+    task_dir = os.path.join(_TMP_ROOT, task_id)
+    in_dir = os.path.join(task_dir, 'in')
+    out_dir = os.path.join(task_dir, 'out')
+    os.makedirs(in_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+    safe = processor.sanitize_filename(filename)
+    input_path = os.path.join(in_dir, safe)
+    with open(input_path, 'wb') as file:
+        file.write(data)
+    task = {
+        'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
+        'status': 'pending', 'current': 0, 'total': 4,
+        'message': '等待处理…', 'filename': '', 'error': '',
+        'created': time.time(),
+    }
+    with _LOCK:
+        _TASKS[task_id] = task
+    _QUEUE.put((task_id, [input_path], '4', '', 'v', 'A1', None, sheet_name))
+    return task_id
+
+
 def get_task(task_id):
     """返回任务状态的副本；不存在返回 None。"""
     with _LOCK:
@@ -106,7 +131,12 @@ def _worker():
             task['message'] = msg
 
         try:
-            if mode == '1':
+            if mode == '4':
+                extension = os.path.splitext(pdfs[0])[1].lower()
+                output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
+                result = report_processor.process_report(
+                    pdfs[0], sheet_name, output, progress)
+            elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,
                     layout=layout, start_cell=start_cell,

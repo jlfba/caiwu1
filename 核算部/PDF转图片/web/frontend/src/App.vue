@@ -4,9 +4,10 @@ import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import UploadArea from './components/UploadArea.vue'
 import TemplateUpload from './components/TemplateUpload.vue'
+import ReportUpload from './components/ReportUpload.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ResultPanel from './components/ResultPanel.vue'
-import { createTask, getTask, getWorksheets } from './api'
+import { createTask, createReportTask, getTask, getWorksheets } from './api'
 
 const mode = ref('')
 const invType = ref('1')
@@ -17,6 +18,10 @@ const templateFile = ref(null) // 收款组可选表格模板
 const sheets = ref([]) // 模板的工作表列表
 const selectedSheet = ref('') // 选中的工作表
 const sheetError = ref('')
+const reportFile = ref(null)
+const reportSheets = ref([])
+const reportSheet = ref('')
+const reportError = ref('')
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -70,8 +75,51 @@ watch(mode, (val, old) => {
   if (val !== old && !submitting.value) {
     files.value = []
     clearTemplate()
+    clearReportFile()
   }
 })
+
+function clearReportFile() {
+  reportFile.value = null
+  reportSheets.value = []
+  reportSheet.value = ''
+  reportError.value = ''
+}
+
+async function onReportSelected(file) {
+  reportFile.value = file
+  reportSheets.value = []
+  reportSheet.value = ''
+  reportError.value = ''
+  try {
+    reportSheets.value = await getWorksheets(file)
+    reportSheet.value = reportSheets.value[0] || ''
+  } catch (e) {
+    reportError.value = e.message
+  }
+}
+
+async function submitReport() {
+  if (!reportFile.value || !reportSheet.value || submitting.value) return
+  stopPolling()
+  startElapsedTimer()
+  status.value = 'processing'
+  current.value = 0
+  total.value = 4
+  message.value = '正在上传表格…'
+  error.value = ''
+  filename.value = ''
+  try {
+    const data = await createReportTask(reportFile.value, reportSheet.value)
+    taskId.value = data.task_id
+    pollTimer = setInterval(poll, 1200)
+    poll()
+  } catch (e) {
+    status.value = 'error'
+    error.value = e.message
+    stopElapsedTimer()
+  }
+}
 watch(invType, (val, old) => {
   if (val !== old && mode.value === '3' && !submitting.value) files.value = []
 })
@@ -222,6 +270,7 @@ function reset() {
   elapsedSeconds.value = 0
   files.value = []
   clearTemplate()
+  clearReportFile()
 }
 
 onUnmounted(() => {
@@ -433,8 +482,33 @@ onUnmounted(() => {
         </section>
         <section v-else class="step report-placeholder">
           <div class="step-body">
-            <h2 class="step-title">报表组</h2>
-            <p class="step-sub">表格处理功能即将接入，请先准备原始 Excel 和处理规则。</p>
+            <div class="report-pane">
+              <h2 class="step-title">上传报表文件</h2>
+              <p class="step-sub">拖入一个 Excel 表格，读取工作表后选择要处理的数据源</p>
+              <div class="report-upload">
+                <ReportUpload :disabled="submitting" @selected="onReportSelected" @cleared="clearReportFile" />
+              </div>
+              <p v-if="reportError" class="lo-error">{{ reportError }}</p>
+              <div v-if="reportSheets.length" class="report-sheet-pick">
+                <span class="ts-label">选择需要处理的工作表</span>
+                <div class="sheet-btns" role="radiogroup" aria-label="选择报表工作表">
+                  <button v-for="sheet in reportSheets" :key="sheet" type="button" class="sheet-btn" :class="{ on: reportSheet === sheet }" :disabled="submitting" role="radio" :aria-checked="reportSheet === sheet" @click="reportSheet = sheet">{{ sheet }}</button>
+                </div>
+              </div>
+            </div>
+            <div class="report-action-pane">
+              <h2 class="step-title">生成无应收明细</h2>
+              <p class="step-sub">确认工作表后开始筛选，并生成无应收明细及透视表</p>
+              <div class="run-area">
+                <button class="btn-make" type="button" :disabled="!reportFile || !reportSheet || submitting" @click="submitReport">
+                  <span v-if="submitting" class="spinner" aria-hidden="true"></span>
+                  <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
+                </button>
+                <p class="run-hint">{{ reportSheet ? `已选择：${reportSheet}` : '请先上传并选择工作表' }}</p>
+              </div>
+              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :elapsed-seconds="elapsedSeconds" />
+              <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
+            </div>
           </div>
         </section>
       </div>
@@ -584,6 +658,42 @@ onUnmounted(() => {
 
 .make-section > :deep(.progress-panel),
 .make-section > :deep(.result-panel) {
+  margin-top: 20px;
+}
+
+.report-placeholder {
+  height: 100%;
+  padding-bottom: 0;
+}
+
+.report-placeholder > .step-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(24px, 3vw, 44px);
+  height: 100%;
+}
+
+.report-pane,
+.report-action-pane {
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+
+.report-upload {
+  margin-top: 20px;
+}
+
+.report-sheet-pick {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-action-pane > :deep(.progress-panel),
+.report-action-pane > :deep(.result-panel) {
   margin-top: 20px;
 }
 
@@ -1048,6 +1158,20 @@ onUnmounted(() => {
   .action-pane {
     overflow: visible;
     padding-right: 0;
+  }
+  .report-placeholder > .step-body {
+    display: block;
+    height: auto;
+  }
+  .report-pane,
+  .report-action-pane {
+    overflow: visible;
+    padding-right: 0;
+  }
+  .report-action-pane {
+    margin-top: 28px;
+    padding-top: 24px;
+    border-top: 1px dashed var(--border-strong);
   }
   .action-pane {
     margin-top: 28px;
