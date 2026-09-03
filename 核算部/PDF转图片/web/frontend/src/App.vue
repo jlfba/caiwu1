@@ -59,6 +59,7 @@ const startCellValid = computed(() => /^[A-Za-z]{1,3}\d{1,7}$/.test(startCell.va
 const canSubmit = computed(
   () =>
     files.value.length > 0 &&
+    mode.value !== '4' &&
     !submitting.value &&
     (mode.value !== '1' || startCellValid.value) &&
     (mode.value !== '1' || !templateFile.value || selectedSheet.value)
@@ -284,7 +285,7 @@ onUnmounted(() => {
 
       <div class="workflow-column workflow-right">
         <!-- 步骤 3/2：上传 PDF -->
-        <section class="step">
+        <section v-if="mode !== '4'" class="step">
       <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
@@ -429,7 +430,13 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-    </section>
+        </section>
+        <section v-else class="step report-placeholder">
+          <div class="step-body">
+            <h2 class="step-title">报表组</h2>
+            <p class="step-sub">表格处理功能即将接入，请先准备原始 Excel 和处理规则。</p>
+          </div>
+        </section>
       </div>
     </div>
   </main>
