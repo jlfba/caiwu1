@@ -1614,7 +1614,8 @@ def extract_chuangshi_surcharge_from_pdfs(pdf_paths):
     """批量识别创时附加费发票（多行 34 开头单号明细，支持跨页续行）。
     DPD 市区费段拆成独立运单号行、金额列纵向合并（由 write_detail_excel 处理标记）。
     输出行 [invoice, reference, desc, qty, unit, amt]。"""
-    return _extract_chuangshi_surcharge_batch(pdf_paths)
+    rows, pages, skipped = _extract_chuangshi_surcharge_batch(pdf_paths)
+    return _split_dpd_city_fee(rows), pages, skipped
 
 
 def chuangshi_car_mode(pdf_paths):
