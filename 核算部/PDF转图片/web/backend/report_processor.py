@@ -69,7 +69,7 @@ def _should_keep(values, idx):
     if '华南KA' in _text(values[idx['业务员'] - 1]):
         return False
     remark = _text(values[idx['自定义备注'] - 1])
-    if re.match(r'^J[0-9A-Za-z-]*', remark, re.IGNORECASE):
+    if re.match(r'^J000', remark, re.IGNORECASE):
         return False
     if '无应收' in remark or '免费补发' in remark:
         return False
@@ -89,7 +89,7 @@ def _keyword_keep(values, idx):
     if '华南KA' in _text(values[idx['业务员'] - 1]):
         return False
     remark = _text(values[idx['自定义备注'] - 1])
-    if re.match(r'^J[0-9A-Za-z-]*', remark, re.IGNORECASE):
+    if re.match(r'^J000', remark, re.IGNORECASE):
         return False
     if '无应收' in remark or '免费补发' in remark:
         return False
@@ -243,7 +243,7 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
             rules = {
                 2: lambda v: not any(word in _text(v[headers['客户简称']-1]) for word in EXCLUDED_CUSTOMERS),
                 3: lambda v: '华南KA' not in _text(v[headers['业务员']-1]),
-                4: lambda v: not (re.match(r'^J[0-9A-Za-z-]*', _text(v[headers['自定义备注']-1]), re.I) or '无应收' in _text(v[headers['自定义备注']-1])),
+                4: lambda v: not (re.match(r'^J000', _text(v[headers['自定义备注']-1]), re.I) or '无应收' in _text(v[headers['自定义备注']-1])),
                 5: lambda v: '刘丹整柜' not in _text(v[headers['配仓单号']-1]),
                 6: lambda v: '免费补发' not in _text(v[headers['自定义备注']-1]),
                 7: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000),
@@ -325,7 +325,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
             if step == 1: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
             elif step == 2: keep = not any(word in _text(values[idx['客户简称']-1]) for word in EXCLUDED_CUSTOMERS)
             elif step == 3: keep = '华南KA' not in _text(values[idx['业务员']-1])
-            elif step == 4: keep = not (re.match(r'^J[0-9A-Za-z-]*', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]))
+            elif step == 4: keep = not (re.match(r'^J000', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]))
             elif step == 5: keep = '刘丹整柜' not in _text(values[idx['配仓单号']-1])
             elif step == 6: keep = '免费补发' not in _text(values[idx['自定义备注']-1])
             elif step == 7: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
