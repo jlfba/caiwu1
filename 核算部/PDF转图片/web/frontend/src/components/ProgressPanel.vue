@@ -30,7 +30,6 @@ const percent = computed(() => {
 })
 
 const reportStages = [
-  '复制所选工作表',
   '保留应收单价小于 1',
   '删除字段关键词数据',
   '删除整柜异常数据',

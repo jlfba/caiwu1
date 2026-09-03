@@ -90,7 +90,7 @@ def create_report_task(filename, data, sheet_name):
         file.write(data)
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
-        'status': 'pending', 'current': 0, 'total': 7, 'step': 1, 'max_step': 7,
+        'status': 'pending', 'current': 0, 'total': 6, 'step': 1, 'max_step': 6,
         'input_path': input_path, 'sheet_name': sheet_name,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(),
@@ -106,7 +106,7 @@ def continue_report_task(task_id):
         task = _TASKS.get(task_id)
         if not task or task.get('status') != 'paused':
             return False
-        if task.get('step', 1) >= task.get('max_step', 7):
+        if task.get('step', 1) >= task.get('max_step', 6):
             return False
         task['step'] += 1
         task['status'] = 'pending'
@@ -146,7 +146,7 @@ def _worker():
         def progress(cur, tot, msg):
             if mode == '4step':
                 task['current'] = task.get('step', cur)
-                task['total'] = task.get('max_step', 7)
+                task['total'] = task.get('max_step', 6)
             else:
                 task['current'] = cur
                 task['total'] = tot
@@ -176,7 +176,7 @@ def _worker():
             if mode == '4step':
                 task['input_path'] = result
             if mode == '4step':
-                task['status'] = 'paused' if task.get('step', 1) < task.get('max_step', 7) else 'done'
+                task['status'] = 'paused' if task.get('step', 1) < task.get('max_step', 6) else 'done'
             else:
                 task['status'] = 'done'
             task['total'] = task['total'] or 1
