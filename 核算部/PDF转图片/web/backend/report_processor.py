@@ -222,7 +222,7 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
             kept, removed = [], []
             for values in source_rows:
                 values = list(values)
-                ok = rules[step](values, headers) if step == 3 else rules[step](values)
+                ok = rules[step](values)
                 (kept if ok else removed).append(values)
             if detail.max_row > 1: detail.delete_rows(2, detail.max_row - 1)
             for values in kept: detail.append(values)
@@ -274,9 +274,20 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
     out = Workbook(write_only=True); original = out.create_sheet(selected_sheet); detail = out.create_sheet('无应收明细')
     original.append(header)
     detail.append(header)
+    # 延续前面步骤的临时删除记录，直到最终清理步骤再删除。
+    if step > 1:
+        for old_name in source_wb.sheetnames:
+            if old_name.startswith('临时删除_步骤'):
+                old_sheet = source_wb[old_name]
+                copied = out.create_sheet(old_name)
+                for old_row in old_sheet.iter_rows(values_only=True):
+                    copied.append(list(old_row))
     deleted = out.create_sheet('临时删除_步骤%d' % step) if step in (2, 3, 4) else None
     if deleted: deleted.append(header)
     kept_count = deleted_count = row_count = 0
+    # 第 6 步在流式模式下同步汇总透视表所需的数据。
+    pivot_groups = defaultdict(Counter)
+    pivot_source_totals = Counter()
     for row in rows:
         values = list(row); original.append(values); row_count += 1
         keep = True
@@ -292,13 +303,49 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
             elif step > 5 and len(values) == len(header):
                 values = values
             detail.append(values); kept_count += 1
+            if step == 6:
+                org = _text(values[idx['客户所属机构'] - 1])
+                tracking = _text(values[idx['运单号'] - 1])
+                category = _text(values[-1])
+                if org:
+                    pivot_source_totals[org] += 1
+                if org and tracking:
+                    pivot_groups[org][category] += 1
         elif deleted:
             deleted.append(values); deleted_count += 1
         if row_count % 10000 == 0: report(1, 1, '步骤 %d/7：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
     source_wb.close()
     if step == 6:
-        # 从已经写出的明细重新读取成本较高；当前流式阶段先输出可下载明细，透视表在下一次继续时生成。
-        report(1, 1, '步骤 6/7：已完成明细流式写出，透视表将在最终步骤生成')
+        categories = [name for name in ('无应收', '金额异常', '')
+                      if any(group[name] for group in pivot_groups.values())]
+        pivot = out.create_sheet('无应收明细透视表')
+        display_categories = [('空白' if not name else name, name)
+                              for name in categories]
+        pivot.append(['客户所属机构']
+                     + [label for label, _ in display_categories]
+                     + ['合计', '总票数', '占比'])
+        for org in sorted(pivot_groups):
+            counts = [pivot_groups[org][key] for _, key in display_categories]
+            total = sum(counts)
+            denominator = pivot_source_totals.get(org, 0)
+            pivot.append([org] + counts + [total, denominator,
+                                           total / denominator if denominator else 0])
+        last_row = pivot.max_row + 1
+        pivot.append(['总计'] + [None] * (len(display_categories) + 3))
+        for col in range(2, pivot.max_column):
+            letter = get_column_letter(col)
+            pivot.cell(last_row, col, '=SUM(%s2:%s%d)' %
+                       (letter, letter, last_row - 1))
+        grand_total_col = pivot.max_column - 2
+        ticket_total_col = pivot.max_column - 1
+        ratio_col = pivot.max_column
+        grand_total = '%s%d' % (get_column_letter(grand_total_col), last_row)
+        ticket_total = '%s%d' % (get_column_letter(ticket_total_col), last_row)
+        pivot.cell(last_row, ratio_col, '=IF(%s=0,0,%s/%s)' %
+                   (ticket_total, grand_total, ticket_total))
+        for row_number in range(2, pivot.max_row + 1):
+            pivot.cell(row_number, ratio_col).number_format = '0.00%'
+        report(1, 1, '步骤 6/7：已生成无应收明细透视表')
     if step == 7:
         for name in list(out.sheetnames):
             if name.startswith('临时删除_步骤'): del out[name]
