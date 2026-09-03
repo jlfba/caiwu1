@@ -110,7 +110,7 @@ async function submitReport() {
   startElapsedTimer()
   status.value = 'processing'
   current.value = 0
-  total.value = 4
+  total.value = 5
   message.value = '正在上传表格…'
   error.value = ''
   filename.value = ''

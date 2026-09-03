@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """报表组 Excel 处理逻辑。"""
 from collections import Counter, defaultdict
-from copy import copy
 import os
 import re
 
@@ -37,25 +36,6 @@ def _number(value):
 
 def _headers(ws):
     return {_text(cell.value): cell.column for cell in ws[1] if _text(cell.value)}
-
-
-def _copy_sheet_values(source, target):
-    for row in source.iter_rows():
-        for cell in row:
-            dest = target[cell.coordinate]
-            dest.value = cell.value
-            if cell.has_style:
-                dest.font = copy(cell.font)
-                dest.fill = copy(cell.fill)
-                dest.border = copy(cell.border)
-                dest.alignment = copy(cell.alignment)
-                dest.number_format = cell.number_format
-                dest.protection = copy(cell.protection)
-    for key, dimension in source.column_dimensions.items():
-        target.column_dimensions[key].width = dimension.width
-    for key, dimension in source.row_dimensions.items():
-        target.row_dimensions[key].height = dimension.height
-    target.freeze_panes = source.freeze_panes
 
 
 def _should_keep(values, idx):
@@ -98,7 +78,7 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
         if progress:
             progress(cur, total, message)
 
-    report(1, 4, '正在读取工作表')
+    report(1, 5, '正在加载工作簿（大文件首次打开可能需要一些时间）')
     keep_vba = input_path.lower().endswith('.xlsm')
     wb = load_workbook(input_path, keep_vba=keep_vba)
     if selected_sheet not in wb.sheetnames:
@@ -112,10 +92,11 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
     for name in ('无应收明细', '无应收明细透视表'):
         if name in wb.sheetnames:
             del wb[name]
-    detail = wb.create_sheet('无应收明细')
-    _copy_sheet_values(source, detail)
+    detail = wb.copy_worksheet(source)
+    detail.title = '无应收明细'
+    report(2, 5, '正在复制所选工作表')
 
-    report(2, 4, '正在筛选无应收明细')
+    report(3, 5, '正在筛选无应收明细')
     kept = []
     for row in source.iter_rows(min_row=2, values_only=True):
         values = list(row)
@@ -134,7 +115,7 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
     detail.auto_filter.ref = detail.dimensions
     detail.freeze_panes = 'A2'
 
-    report(3, 4, '正在生成无应收明细透视表')
+    report(4, 5, '正在生成无应收明细透视表')
     groups = defaultdict(Counter)
     categories = []
     for values in kept:
@@ -181,7 +162,7 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
     for col in range(1, pivot.max_column + 1):
         pivot.column_dimensions[get_column_letter(col)].width = 22 if col == 1 else 14
 
-    report(4, 4, '正在保存处理结果')
+    report(5, 5, '正在保存处理结果')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     wb.save(output_path)
     wb.close()

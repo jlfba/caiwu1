@@ -89,7 +89,7 @@ def create_report_task(filename, data, sheet_name):
         file.write(data)
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
-        'status': 'pending', 'current': 0, 'total': 4,
+        'status': 'pending', 'current': 0, 'total': 5,
         'message': '等待处理…', 'filename': '', 'error': '',
         'created': time.time(),
     }
