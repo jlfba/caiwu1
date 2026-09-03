@@ -776,20 +776,24 @@ onUnmounted(() => {
 }
 
 .report-progress-wide > :deep(.progress-panel) {
-  min-height: 560px;
+  height: 720px;
+  min-height: 720px;
   display: flex;
   flex-direction: column;
 }
 
 .report-progress-wide > :deep(.pp-terminal) {
   flex: 1 1 auto;
-  min-height: 170px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .report-progress-wide > :deep(.pp-terminal-body) {
-  height: 380px;
-  min-height: 380px;
-  max-height: 380px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
   overflow-y: scroll;
   overscroll-behavior: contain;
 }
@@ -1271,11 +1275,12 @@ onUnmounted(() => {
     border-top: 1px dashed var(--border-strong);
   }
   .report-progress-wide > :deep(.progress-panel) {
-    min-height: 0;
+    height: 560px;
+    min-height: 560px;
   }
   .report-progress-wide > :deep(.pp-terminal-body) {
-    min-height: 220px;
-    max-height: 300px;
+    min-height: 0;
+    max-height: none;
   }
   .action-pane {
     margin-top: 28px;
