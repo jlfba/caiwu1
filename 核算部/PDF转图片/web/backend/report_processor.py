@@ -64,6 +64,22 @@ def _should_keep(values, idx):
     return True
 
 
+def _keyword_keep(values, idx):
+    customer = _text(values[idx['客户简称'] - 1])
+    if any(word in customer for word in EXCLUDED_CUSTOMERS):
+        return False
+    if '华南KA' in _text(values[idx['业务员'] - 1]):
+        return False
+    remark = _text(values[idx['自定义备注'] - 1])
+    if re.match(r'^J[0-9A-Za-z-]*', remark, re.IGNORECASE):
+        return False
+    if '无应收' in remark or '免费补发' in remark:
+        return False
+    if '刘丹整柜' in _text(values[idx['配仓单号'] - 1]):
+        return False
+    return True
+
+
 def _source_totals(ws):
     headers = _headers(ws)
     col = headers.get('客户所属机构')
@@ -199,8 +215,9 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
         detail = wb['无应收明细']
         headers = _headers(detail)
         if step in (2, 3, 4):
-            rules = {2: lambda v: _number(v[headers['应收单价']-1]) < 1 and _text(v[headers['应收单价']-1]),
-                     3: _should_keep, 4: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000)}
+            rules = {2: lambda v: bool(_text(v[headers['应收单价']-1])) and _number(v[headers['应收单价']-1]) < 1,
+                     3: lambda v: _keyword_keep(v, headers),
+                     4: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000)}
             source_rows = list(detail.iter_rows(min_row=2, values_only=True))
             kept, removed = [], []
             for values in source_rows:
@@ -262,7 +279,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
         keep = True
         if step >= 2:
             if step == 2: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) < 1
-            elif step == 3: keep = _should_keep(values, idx)
+            elif step == 3: keep = _keyword_keep(values, idx)
             elif step == 4: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
             else: keep = True
         if keep:
@@ -295,7 +312,8 @@ def _process_large_report(input_path, selected_sheet, output_path, progress=None
     if selected_sheet not in source_wb.sheetnames:
         source_wb.close()
         raise ValueError('工作表不存在：%s' % selected_sheet)
-    source = source_wb[selected_sheet]
+    source_name = '无应收明细' if step > 1 and '无应收明细' in source_wb.sheetnames else selected_sheet
+    source = source_wb[source_name]
     rows = source.iter_rows(values_only=True)
     header = next(rows, None)
     if not header:
