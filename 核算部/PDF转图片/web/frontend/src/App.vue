@@ -744,6 +744,21 @@ onUnmounted(() => {
   margin-top: 20px;
 }
 
+.report-action-pane > :deep(.progress-panel) {
+  min-height: 430px;
+  display: flex;
+  flex-direction: column;
+}
+
+.report-action-pane > :deep(.pp-terminal) {
+  flex: 1 1 auto;
+  min-height: 170px;
+}
+
+.report-action-pane > :deep(.pp-terminal-body) {
+  max-height: 260px;
+}
+
 .workflow-right > .step:first-child {
   flex: 1 1 auto;
   min-height: 0;

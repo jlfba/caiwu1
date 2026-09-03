@@ -200,11 +200,16 @@ def _process_large_report(input_path, selected_sheet, output_path, progress=None
     out_wb = Workbook(write_only=True)
     source_out = out_wb.create_sheet(selected_sheet)
     source_out.append(header)
-    detail_rows = []
+    detail = out_wb.create_sheet('无应收明细')
+    detail.append(header + ['无应收'])
     source_totals = Counter()
+    groups = defaultdict(Counter)
+    categories = []
+    row_count = kept_count = removed_count = 0
     for row in rows:
         values = list(row)
         source_out.append(values)
+        row_count += 1
         org = _text(values[idx['客户所属机构'] - 1])
         if org:
             source_totals[org] += 1
@@ -212,26 +217,21 @@ def _process_large_report(input_path, selected_sheet, output_path, progress=None
             unit_price = _number(values[idx['应收单价'] - 1])
             amount = _number(values[idx['应收金额'] - 1])
             category = '金额异常' if amount > 0 else ('无应收' if unit_price == 0 else '')
-            detail_rows.append(values + [category])
+            detail.append(values + [category])
+            kept_count += 1
+            tracking = _text(values[idx['运单号'] - 1])
+            if org and tracking:
+                groups[org][category] += 1
+                if category not in categories:
+                    categories.append(category)
+        else:
+            removed_count += 1
+        if row_count % 10000 == 0:
+            report(3, 5, '已读取 %d 行，保留 %d 行，删除 %d 行' %
+                   (row_count, kept_count, removed_count))
     source_wb.close()
 
-    report(3, 5, '正在筛选无应收明细')
-    detail = out_wb.create_sheet('无应收明细')
-    detail.append(header + ['无应收'])
-    for values in detail_rows:
-        detail.append(values)
-
     report(4, 5, '正在生成无应收明细透视表')
-    groups = defaultdict(Counter)
-    categories = []
-    for values in detail_rows:
-        org = _text(values[idx['客户所属机构'] - 1])
-        tracking = _text(values[idx['运单号'] - 1])
-        category = _text(values[-1])
-        if org and tracking:
-            groups[org][category] += 1
-            if category not in categories:
-                categories.append(category)
     categories = [name for name in ('无应收', '金额异常', '') if name in categories]
     pivot = out_wb.create_sheet('无应收明细透视表')
     display_categories = [('空白' if not name else name, name) for name in categories]
