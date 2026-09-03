@@ -30,13 +30,35 @@ async function getTask(taskId) {
   return data
 }
 
-async function getWorksheets(file) {
+async function getWorksheets(file, onProgress) {
   const fd = new FormData()
   fd.append('template', file)
-  const res = await fetch('/api/worksheets', { method: 'POST', body: fd })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.detail || '读取工作表失败')
-  return data.sheets
+  if (!onProgress) {
+    const res = await fetch('/api/worksheets', { method: 'POST', body: fd })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || '读取工作表失败')
+    return data.sheets
+  }
+  return await new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', '/api/worksheets')
+    request.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100))
+    })
+    request.addEventListener('load', () => {
+      let data = {}
+      try { data = JSON.parse(request.responseText || '{}') } catch { /* handled below */ }
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error(data.detail || '读取工作表失败'))
+        return
+      }
+      onProgress(100)
+      resolve(data.sheets || [])
+    })
+    request.addEventListener('error', () => reject(new Error('上传表格失败，请检查网络连接')))
+    request.addEventListener('abort', () => reject(new Error('上传表格已取消')))
+    request.send(fd)
+  })
 }
 
 async function createReportTask(file, sheetName) {

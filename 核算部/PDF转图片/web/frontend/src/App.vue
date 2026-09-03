@@ -23,6 +23,8 @@ const reportSheets = ref([])
 const reportSheet = ref('')
 const reportError = ref('')
 const reportLoading = ref(false)
+const reportUploadPercent = ref(0)
+const reportUploadDone = ref(false)
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -87,6 +89,8 @@ function clearReportFile() {
   reportSheet.value = ''
   reportError.value = ''
   reportLoading.value = false
+  reportUploadPercent.value = 0
+  reportUploadDone.value = false
 }
 
 async function onReportSelected(file) {
@@ -95,8 +99,13 @@ async function onReportSelected(file) {
   reportSheet.value = ''
   reportError.value = ''
   reportLoading.value = true
+  reportUploadPercent.value = 0
+  reportUploadDone.value = false
   try {
-    reportSheets.value = await getWorksheets(file)
+    reportSheets.value = await getWorksheets(file, (percent) => {
+      reportUploadPercent.value = percent
+      if (percent >= 100) reportUploadDone.value = true
+    })
     reportSheet.value = reportSheets.value[0] || ''
   } catch (e) {
     reportError.value = e.message
@@ -498,7 +507,10 @@ onUnmounted(() => {
               <div class="report-upload">
                 <ReportUpload :disabled="submitting" @selected="onReportSelected" @cleared="clearReportFile" />
               </div>
-              <p v-if="reportLoading" class="report-loading" role="status">正在读取工作表，请稍候…</p>
+              <div v-if="reportLoading" class="report-upload-progress" role="status">
+                <div class="report-upload-progress-head"><span>{{ reportUploadDone ? '上传完成，正在读取工作表…' : '正在上传表格…' }}</span><strong>{{ reportUploadPercent }}%</strong></div>
+                <div class="report-upload-track"><div class="report-upload-bar" :style="{ width: reportUploadPercent + '%' }"></div></div>
+              </div>
               <p v-if="reportError" class="lo-error" role="alert">{{ reportError }}</p>
               <div v-if="reportSheets.length" class="report-sheet-pick">
                 <span class="ts-label">选择需要处理的工作表</span>
@@ -701,6 +713,24 @@ onUnmounted(() => {
   color: var(--primary-ink);
   font-size: 13px;
 }
+
+.report-upload-progress {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.report-upload-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.report-upload-progress-head strong { color: var(--primary); font-family: var(--font-num); }
+.report-upload-track { height: 6px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: var(--surface); }
+.report-upload-bar { height: 100%; border-radius: inherit; background: var(--primary); transition: width .2s ease-out; }
 
 .report-sheet-pick {
   margin-top: 22px;
