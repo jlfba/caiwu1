@@ -450,6 +450,17 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     # 3. 购买方 / 销售方名称
     name_items = [it for it in ordered if re.search(r'名称\s*[：:]', it['text'])]
 
+    # 同一行并排的购买方/销售方名称需要优先拆分，避免整行错填到一列。
+    for line in _group_detail_lines(ordered):
+        compact = re.sub(r's+', ' ', line['text']).strip()
+        both = re.search(r'(?:购|购买方)s*名称s*[：:]s*(.+?)s+(?:销|销售方)s*名称s*[：:]s*(.+)$', compact)
+        if both:
+            if fields['buyer'] == '未知':
+                fields['buyer'] = both.group(1).strip()
+            if fields['seller'] == '未知':
+                fields['seller'] = both.group(2).strip()
+            break
+
     def find_name(header_kw):
         headers = [it for it in ordered if header_kw in it['text']]
         if not headers:
