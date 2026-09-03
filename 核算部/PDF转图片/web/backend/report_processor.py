@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 import os
 import re
+import zipfile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -16,6 +17,23 @@ REQUIRED_COLUMNS = (
     '应收单价', '客户简称', '业务员', '自定义备注', '配仓单号',
     '销售产品', '应收金额', '客户所属机构', '运单号',
 )
+
+
+def _atomic_save(workbook, output_path):
+    """先写临时文件并校验 ZIP 结构，再原子替换下载文件，避免下载到半截 Excel。"""
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    part_path = output_path + '.part'
+    try:
+        if os.path.exists(part_path):
+            os.remove(part_path)
+        workbook.save(part_path)
+        with zipfile.ZipFile(part_path) as archive:
+            if archive.testzip() is not None:
+                raise ValueError('生成的 Excel 文件校验失败')
+        os.replace(part_path, output_path)
+    finally:
+        if os.path.exists(part_path):
+            os.remove(part_path)
 
 
 def _text(value):
@@ -183,7 +201,7 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
 
     report(5, 5, '正在保存处理结果')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    wb.save(output_path)
+    _atomic_save(wb, output_path)
     wb.close()
     return output_path
 
@@ -267,7 +285,7 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
             for name in list(wb.sheetnames):
                 if name.startswith('临时删除_步骤'): del wb[name]
             report(1, 1, '步骤 10/10：已清理临时删除记录')
-    os.makedirs(os.path.dirname(output_path), exist_ok=True); wb.save(output_path); wb.close(); return output_path
+    _atomic_save(wb, output_path); wb.close(); return output_path
 
 
 def _process_large_report_step(input_path, selected_sheet, output_path, step, progress=None):
@@ -365,7 +383,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
     if step == 10:
         for name in list(out.sheetnames):
             if name.startswith('临时删除_步骤'): del out[name]
-    os.makedirs(os.path.dirname(output_path), exist_ok=True); out.save(output_path); out.close()
+    _atomic_save(out, output_path); out.close()
     return output_path
 
 
@@ -443,6 +461,6 @@ def _process_large_report(input_path, selected_sheet, output_path, progress=None
 
     report(5, 5, '正在保存处理结果')
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    out_wb.save(output_path)
+    _atomic_save(out_wb, output_path)
     out_wb.close()
     return output_path
