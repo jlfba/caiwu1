@@ -13,7 +13,7 @@ const props = defineProps({
 const terminalBody = ref(null)
 
 watch(
-  () => props.logs.length,
+  () => [props.logs.length, props.message, props.current],
   async () => {
     await nextTick()
     if (terminalBody.value) {
@@ -68,18 +68,15 @@ const elapsedText = computed(() => {
     <div class="track" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
       <div class="bar" :style="{ width: percent + '%' }"></div>
     </div>
-    <p class="pp-msg">{{ message }}</p>
-    <ol v-if="isReportFlow" class="pp-stages" aria-label="报表处理流程">
-      <li v-for="(stage, index) in reportStages" :key="stage" :class="`stage-${stageState(index)}`">
-        <span class="stage-dot" aria-hidden="true">{{ stageState(index) === 'done' ? '✓' : index + 1 }}</span>
-        <span>{{ stage }}</span>
-        <span v-if="stageState(index) === 'active'" class="stage-now">进行中</span>
-        <span v-else-if="stageState(index) === 'done'" class="stage-now">已完成</span>
-      </li>
-    </ol>
+    <p v-if="!isReportFlow" class="pp-msg">{{ message }}</p>
     <div v-if="isReportFlow" class="pp-terminal" aria-label="处理日志">
-      <div class="pp-terminal-head"><span>处理日志</span><span>{{ logs.length }} 条</span></div>
+      <div class="pp-terminal-head"><span>全部处理日志</span><span>{{ logs.length }} 条</span></div>
       <div ref="terminalBody" class="pp-terminal-body">
+        <p class="terminal-current">[当前状态] {{ message || '等待处理状态…' }}</p>
+        <p v-for="(stage, index) in reportStages" :key="`stage-${stage}`" :class="`terminal-stage stage-${stageState(index)}`">
+          [步骤 {{ index + 1 }}/5] {{ stage }} — {{ stageState(index) === 'done' ? '已完成' : stageState(index) === 'active' ? '进行中' : '待处理' }}
+        </p>
+        <p class="terminal-divider">---------------- 实时记录 ----------------</p>
         <p v-for="(line, index) in logs" :key="`${index}-${line}`">{{ line }}</p>
         <p v-if="!logs.length" class="pp-terminal-empty">等待后端日志…</p>
       </div>
@@ -249,4 +246,10 @@ const elapsedText = computed(() => {
 .pp-terminal-body p { margin: 0 0 6px; color: #c8e2df; font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pp-terminal-body p::before { content: '> '; color: #5bd0bd; }
 .pp-terminal-empty { color: #78919a !important; }
+.pp-terminal-body .terminal-current { color: #8fe3d7; font-weight: 700; }
+.pp-terminal-body .terminal-stage { color: #78919a; }
+.pp-terminal-body .terminal-stage.stage-active { color: #8fe3d7 !important; }
+.pp-terminal-body .terminal-stage.stage-done { color: #b6ccc9 !important; }
+.pp-terminal-body .terminal-divider { color: #4f6b72; }
+.pp-terminal-body .terminal-divider::before { content: ''; }
 </style>
