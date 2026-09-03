@@ -745,7 +745,7 @@ onUnmounted(() => {
 }
 
 .report-action-pane > :deep(.progress-panel) {
-  min-height: 430px;
+  min-height: 650px;
   display: flex;
   flex-direction: column;
 }
@@ -756,7 +756,8 @@ onUnmounted(() => {
 }
 
 .report-action-pane > :deep(.pp-terminal-body) {
-  max-height: 260px;
+  max-height: none;
+  min-height: 360px;
 }
 
 .workflow-right > .step:first-child {
@@ -1234,6 +1235,13 @@ onUnmounted(() => {
     margin-top: 28px;
     padding-top: 24px;
     border-top: 1px dashed var(--border-strong);
+  }
+  .report-action-pane > :deep(.progress-panel) {
+    min-height: 0;
+  }
+  .report-action-pane > :deep(.pp-terminal-body) {
+    min-height: 220px;
+    max-height: 300px;
   }
   .action-pane {
     margin-top: 28px;
