@@ -351,7 +351,7 @@ onUnmounted(() => {
     </section>
       </div>
 
-      <div class="workflow-column workflow-right">
+      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' }">
         <!-- 步骤 3/2：上传 PDF -->
         <section v-if="mode !== '4'" class="step">
       <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : 2) }">
@@ -629,6 +629,22 @@ onUnmounted(() => {
   scrollbar-width: thin;
 }
 
+.workflow-right.report-active {
+  height: auto;
+  min-height: 760px;
+  max-height: none;
+  overflow-y: auto;
+}
+
+.workflow-right.report-active > .step:first-child {
+  flex: none;
+  overflow: visible;
+}
+
+.workflow-right.report-active > .step > .step-body {
+  height: auto;
+}
+
 .workflow-right > .step {
   min-height: 0;
   padding-bottom: 0;
@@ -771,8 +787,11 @@ onUnmounted(() => {
 }
 
 .report-progress-wide > :deep(.pp-terminal-body) {
-  max-height: none;
-  min-height: 360px;
+  height: 380px;
+  min-height: 380px;
+  max-height: 380px;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
 }
 
 .workflow-right > .step:first-child {
