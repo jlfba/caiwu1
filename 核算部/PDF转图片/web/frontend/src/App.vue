@@ -691,17 +691,37 @@ onUnmounted(() => {
 
 .report-placeholder > .step-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(24px, 3vw, 44px);
-  height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  height: auto;
 }
 
 .report-pane,
 .report-action-pane {
   min-width: 0;
-  overflow-y: auto;
+  overflow: visible;
   padding-right: 4px;
   scrollbar-width: thin;
+}
+
+.report-action-pane {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+.report-action-pane > .step-title,
+.report-action-pane > .step-sub,
+.report-action-pane > .run-area {
+  grid-column: 1;
+}
+
+.report-action-pane > :deep(.progress-panel),
+.report-action-pane > :deep(.result-panel) {
+  grid-column: 1;
+  grid-row: auto;
+  width: 100%;
 }
 
 .report-upload {
@@ -745,7 +765,7 @@ onUnmounted(() => {
 }
 
 .report-action-pane > :deep(.progress-panel) {
-  min-height: 650px;
+  min-height: 560px;
   display: flex;
   flex-direction: column;
 }
