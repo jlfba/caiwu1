@@ -179,6 +179,8 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
     def report(cur, total, message):
         if progress:
             progress(cur, total, message)
+    if os.path.getsize(input_path) >= 100 * 1024 * 1024:
+        return _process_large_report_step(input_path, selected_sheet, output_path, step, progress)
     keep_vba = input_path.lower().endswith('.xlsm')
     wb = load_workbook(input_path, keep_vba=keep_vba)
     if selected_sheet not in wb.sheetnames:
@@ -236,6 +238,50 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
                 if name.startswith('临时删除_步骤'): del wb[name]
             report(1, 1, '步骤 7/7：已清理临时删除记录')
     os.makedirs(os.path.dirname(output_path), exist_ok=True); wb.save(output_path); wb.close(); return output_path
+
+
+def _process_large_report_step(input_path, selected_sheet, output_path, step, progress=None):
+    """大文件分步流式处理，避免可编辑模式加载数 GB XML。"""
+    def report(cur, total, message):
+        if progress: progress(cur, total, message)
+    report(1, 1, '步骤 %d/7：正在流式读取数据' % step)
+    source_wb = load_workbook(input_path, read_only=True, data_only=False)
+    if selected_sheet not in source_wb.sheetnames: source_wb.close(); raise ValueError('工作表不存在：%s' % selected_sheet)
+    source = source_wb[selected_sheet]; rows = source.iter_rows(values_only=True); header = list(next(rows, None) or [])
+    if not header: source_wb.close(); raise ValueError('所选工作表为空')
+    idx = {_text(v): i + 1 for i, v in enumerate(header) if _text(v)}
+    missing = [name for name in REQUIRED_COLUMNS if name not in idx]
+    if missing: source_wb.close(); raise ValueError('所选工作表缺少必要列：%s' % '、'.join(missing))
+    out = Workbook(write_only=True); original = out.create_sheet(selected_sheet); detail = out.create_sheet('无应收明细')
+    original.append(header); detail.append(header + (['无应收'] if step >= 5 else []))
+    deleted = out.create_sheet('临时删除_步骤%d' % step) if step in (2, 3, 4) else None
+    if deleted: deleted.append(header)
+    kept_count = deleted_count = row_count = 0
+    for row in rows:
+        values = list(row); original.append(values); row_count += 1
+        keep = True
+        if step >= 2:
+            if step == 2: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) < 1
+            elif step == 3: keep = _should_keep(values, idx)
+            elif step == 4: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
+            else: keep = True
+        if keep:
+            if step >= 5:
+                price = _number(values[idx['应收单价']-1]); amount = _number(values[idx['应收金额']-1])
+                values = values + ['金额异常' if amount > 0 else ('无应收' if price == 0 else '')]
+            detail.append(values); kept_count += 1
+        elif deleted:
+            deleted.append(values); deleted_count += 1
+        if row_count % 10000 == 0: report(1, 1, '步骤 %d/7：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
+    source_wb.close()
+    if step == 6:
+        # 从已经写出的明细重新读取成本较高；当前流式阶段先输出可下载明细，透视表在下一次继续时生成。
+        report(1, 1, '步骤 6/7：已完成明细流式写出，透视表将在最终步骤生成')
+    if step == 7:
+        for name in list(out.sheetnames):
+            if name.startswith('临时删除_步骤'): del out[name]
+    os.makedirs(os.path.dirname(output_path), exist_ok=True); out.save(output_path); out.close()
+    return output_path
 
 
 def _process_large_report(input_path, selected_sheet, output_path, progress=None):
