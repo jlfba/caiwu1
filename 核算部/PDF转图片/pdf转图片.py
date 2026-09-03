@@ -1284,7 +1284,7 @@ def _has_digit(s):
     return any(ch.isdigit() for ch in s)
 
 
-def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
+def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon, column_bounds=None):
     """创时亚马逊卡派/创时卡派等四列明细表 Description|Quantity|Unit Price|Amount GBP。
 
     表头下方逐行按列归类；出现 Quantity/Unit Price/Amount（须含数字）的行 = 新一行明细的起始，
@@ -1307,10 +1307,11 @@ def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
     unit_hdr, amt_hdr = hdr('UNIT') or hdr('PRICE'), hdr('AMOUNT')
     if desc_hdr is None or qty_hdr is None or unit_hdr is None or amt_hdr is None:
         return [], []
-    bounds = [desc_hdr['cx'] - desc_hdr['w'] / 2,
-              qty_hdr['cx'] - qty_hdr['w'] / 2,
-              unit_hdr['cx'] - unit_hdr['w'] / 2,
-              amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')]
+    bounds = (column_bounds or
+              [desc_hdr['cx'] - desc_hdr['w'] / 2,
+               qty_hdr['cx'] - qty_hdr['w'] / 2,
+               unit_hdr['cx'] - unit_hdr['w'] / 2,
+               amt_hdr['cx'] - amt_hdr['w'] / 2, float('inf')])
     header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
     rows, cur = [], None
     head_desc = []
@@ -1346,7 +1347,8 @@ def _chuangshi_table(lines, header_line, desc_parser=_desc_amazon):
 
 
 def extract_chuangshi_page(items, desc_parser=_desc_amazon,
-                           invoice_x=(385, 480), reference_x=(480, 580)):
+                           invoice_x=(385, 480), reference_x=(480, 580),
+                           detail_bounds=None):
     """创时亚马逊卡派/创时卡派/创时清关费等发票单页：字段 + 四列明细行。
     返回 ({invoice_no, reference}, rows, head_desc)：
       rows: 每行 [desc, desc1, qty, unit, amt]；
@@ -1370,7 +1372,8 @@ def extract_chuangshi_page(items, desc_parser=_desc_amazon,
         field_lines, header_cy, 'INVOICENUMBER', invoice_x[0], invoice_x[1])
     fields['reference'] = _chuangshi_labeled_value(
         field_lines, header_cy, 'REFERENCE', reference_x[0], reference_x[1])
-    rows, head_desc = _chuangshi_table(lines, header_line, desc_parser)
+    rows, head_desc = _chuangshi_table(
+        lines, header_line, desc_parser, column_bounds=detail_bounds)
     return fields, rows, head_desc
 
 
@@ -1428,7 +1431,8 @@ def _desc_simple(desc_lines):
 
 
 def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1,
-                             invoice_x=(385, 480), reference_x=(480, 580)):
+                             invoice_x=(385, 480), reference_x=(480, 580),
+                             detail_bounds=None):
     """创时系列发票通用批量识别。
 
     drop_desc1=True：输出 6 列（无 Description(1)）；否则 7 列。
@@ -1448,7 +1452,8 @@ def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1,
                 pages += 1
                 items = _detail_page_items(pdf_path, page, page_no)
                 fields, rows, head_desc = extract_chuangshi_page(
-                    items, desc_parser, invoice_x=invoice_x, reference_x=reference_x)
+                    items, desc_parser, invoice_x=invoice_x,
+                    reference_x=reference_x, detail_bounds=detail_bounds)
                 merged = dict(last)
                 merged.update({k: v for k, v in fields.items() if v != '未知'})
                 last = merged
@@ -1523,7 +1528,8 @@ def extract_chuangshi_surcharge_from_pdfs(pdf_paths):
     输出行 [invoice, reference, desc, qty, unit, amt]。"""
     rows, pages, skipped = _extract_chuangshi_batch(
         pdf_paths, _desc_simple, drop_desc1=True,
-        invoice_x=(350, 450), reference_x=(450, 580))
+        invoice_x=(350, 450), reference_x=(450, 580),
+        detail_bounds=[0, 400, 460, 515, float('inf')])
     return _split_dpd_city_fee(rows), pages, skipped
 
 
