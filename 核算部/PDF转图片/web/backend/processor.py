@@ -145,6 +145,7 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
 def process_receipt_mode2(pdf_paths, out_dir, progress=None):
     """收款组模式 2：识别发票五字段并生成简洁 Excel。"""
     from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
 
@@ -164,21 +165,23 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
             continue
         try:
             fields_list = tool.extract_invoice_fields_from_pdf(pdf)
-            # 原生文字层完整时直接使用；缺字段时渲染页面并走现有 OCR 兜底。
+            # 模式 2 最后一列需要发票原图，因此每一页都渲染；
+            # 文字层缺字段时再复用渲染图执行 OCR 兜底。
+            images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
             native_missing = any(not tool._invoice_fields_complete(f) for f in fields_list)
             if native_missing:
-                images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
                 merged = []
                 for page_index, image in enumerate(images):
                     initial = fields_list[page_index] if page_index < len(fields_list) else None
                     merged.append(tool.extract_invoice_fields(image, initial))
                 fields_list = merged
-            for fields in fields_list:
+            for page_index, fields in enumerate(fields_list):
                 rows.append([fields.get('date', '未知'),
                              fields.get('seller', '未知'),
                              fields.get('amount', '未知'),
                              fields.get('no', '未知'),
-                             fields.get('buyer', '未知')])
+                             fields.get('buyer', '未知'),
+                             images[page_index] if page_index < len(images) else None])
         except Exception as exc:
             print('收款组模式 2 识别失败：%s：%s' % (os.path.basename(pdf), exc))
         report(index, total, '正在识别第 %d/%d 个文件：%s' %
@@ -191,13 +194,21 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
     wb = Workbook()
     ws = wb.active
     ws.title = '发票信息'
-    headers = ('开票日期', '销售方名称', '金额', '发票号码', '购买方信息')
+    headers = ('开票日期', '销售方名称', '金额', '发票号码', '购买方信息', '发票图片')
     ws.append(list(headers))
-    for row in rows:
-        ws.append(row)
+    for excel_row, row in enumerate(rows, 2):
+        ws.append(row[:-1] + [''])
+        image_path = row[-1]
+        if image_path and os.path.isfile(image_path):
+            image = XLImage(image_path)
+            ratio = min(320 / image.width, 190 / image.height)
+            image.width = int(image.width * ratio)
+            image.height = int(image.height * ratio)
+            ws.add_image(image, 'F%d' % excel_row)
+            ws.row_dimensions[excel_row].height = 150
     for cell in ws[1]:
         cell.font = Font(bold=True)
-    widths = (16, 34, 16, 24, 34)
+    widths = (16, 34, 16, 24, 34, 46)
     for index, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(index)].width = width
     for row in ws.iter_rows(min_row=2):
