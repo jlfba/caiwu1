@@ -98,6 +98,13 @@ async def create_report_task(file: UploadFile = File(...),
     return {'task_id': task_id}
 
 
+@app.post('/api/report-tasks/{task_id}/continue')
+def continue_report_task(task_id: str):
+    if not tasks.continue_report_task(task_id):
+        return JSONResponse({'detail': '任务不存在、正在处理或已完成'}, status_code=409)
+    return {'task_id': task_id}
+
+
 @app.get('/api/tasks/{task_id}')
 def task_status(task_id: str):
     t = tasks.get_task(task_id)
@@ -111,6 +118,8 @@ def task_status(task_id: str):
         'filename': t['filename'],
         'error': t['error'],
         'logs': t.get('logs', []),
+        'step': t.get('step', 0),
+        'max_step': t.get('max_step', 0),
     }
 
 

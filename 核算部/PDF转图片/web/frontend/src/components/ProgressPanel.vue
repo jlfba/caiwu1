@@ -30,11 +30,13 @@ const percent = computed(() => {
 })
 
 const reportStages = [
-  '加载工作簿',
   '复制所选工作表',
-  '筛选无应收明细',
+  '保留应收单价小于 1',
+  '删除字段关键词数据',
+  '删除整柜异常数据',
+  '新增无应收分类',
   '生成无应收明细透视表',
-  '保存处理结果'
+  '清理临时删除记录'
 ]
 
 const isReportFlow = computed(() => props.total === reportStages.length)

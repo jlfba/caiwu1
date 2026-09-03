@@ -90,14 +90,30 @@ def create_report_task(filename, data, sheet_name):
         file.write(data)
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
-        'status': 'pending', 'current': 0, 'total': 5,
+        'status': 'pending', 'current': 0, 'total': 7, 'step': 1, 'max_step': 7,
+        'input_path': input_path, 'sheet_name': sheet_name,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(),
     }
     with _LOCK:
         _TASKS[task_id] = task
-    _QUEUE.put((task_id, [input_path], '4', '', 'v', 'A1', None, sheet_name))
+    _QUEUE.put((task_id, [input_path], '4step', '', 'v', 'A1', None, sheet_name))
     return task_id
+
+
+def continue_report_task(task_id):
+    with _LOCK:
+        task = _TASKS.get(task_id)
+        if not task or task.get('status') != 'paused':
+            return False
+        if task.get('step', 1) >= task.get('max_step', 7):
+            return False
+        task['step'] += 1
+        task['status'] = 'pending'
+        task['current'] = 0
+        task['message'] = '等待继续处理…'
+    _QUEUE.put((task_id, [task['input_path']], '4step', '', 'v', 'A1', None, task['sheet_name']))
+    return True
 
 
 def get_task(task_id):
@@ -110,7 +126,7 @@ def get_task(task_id):
 def download_path(task_id):
     """处理完成返回结果文件绝对路径，否则返回 None。"""
     task = get_task(task_id)
-    if not task or task['status'] != 'done' or not task['filename']:
+    if not task or task['status'] not in ('done', 'paused') or not task['filename']:
         return None
     path = os.path.join(task['dir'], 'out', task['filename'])
     return path if os.path.isfile(path) else None
@@ -128,13 +144,21 @@ def _worker():
         task['logs'].append('[开始] 已接收处理任务')
 
         def progress(cur, tot, msg):
-            task['current'] = cur
-            task['total'] = tot
+            if mode == '4step':
+                task['current'] = task.get('step', cur)
+                task['total'] = task.get('max_step', 7)
+            else:
+                task['current'] = cur
+                task['total'] = tot
             task['message'] = msg
             task['logs'].append('[%02d/%02d] %s' % (cur, tot, msg))
 
         try:
-            if mode == '4':
+            if mode == '4step':
+                output = os.path.join(task['out_dir'], '无应收明细-步骤%d.xlsx' % task.get('step', 1))
+                result = report_processor.process_report_step(
+                    pdfs[0], sheet_name, output, task.get('step', 1), progress)
+            elif mode == '4':
                 extension = os.path.splitext(pdfs[0])[1].lower()
                 output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
                 result = report_processor.process_report(
@@ -149,10 +173,15 @@ def _worker():
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = os.path.basename(result)
-            task['status'] = 'done'
+            if mode == '4step':
+                task['input_path'] = result
+            if mode == '4step':
+                task['status'] = 'paused' if task.get('step', 1) < task.get('max_step', 7) else 'done'
+            else:
+                task['status'] = 'done'
             task['total'] = task['total'] or 1
             task['current'] = task['total']
-            task['message'] = '处理完成'
+            task['message'] = ('步骤 %d 完成，等待确认继续' % task['step']) if mode == '4step' and task['status'] == 'paused' else '处理完成'
             task['logs'].append('[完成] 输出文件已生成：%s' % task['filename'])
         except Exception as e:
             task['status'] = 'error'

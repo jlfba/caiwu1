@@ -7,7 +7,7 @@ import TemplateUpload from './components/TemplateUpload.vue'
 import ReportUpload from './components/ReportUpload.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ResultPanel from './components/ResultPanel.vue'
-import { createTask, createReportTask, getTask, getWorksheets } from './api'
+import { createTask, createReportTask, continueReportTask, getTask, getWorksheets } from './api'
 
 const mode = ref('')
 const invType = ref('1')
@@ -34,6 +34,8 @@ const message = ref('')
 const filename = ref('')
 const error = ref('')
 const logs = ref([])
+const reportStep = ref(0)
+const reportMaxStep = ref(0)
 const elapsedSeconds = ref(0)
 
 let pollTimer = null
@@ -135,6 +137,19 @@ async function submitReport() {
     status.value = 'error'
     error.value = e.message
     stopElapsedTimer()
+  }
+}
+
+async function continueReport() {
+  if (!taskId.value || status.value !== 'paused') return
+  status.value = 'processing'
+  message.value = '正在继续处理…'
+  try {
+    await continueReportTask(taskId.value)
+    pollTimer = setInterval(poll, 1200)
+    poll()
+  } catch (e) {
+    status.value = 'error'; error.value = e.message
   }
 }
 watch(invType, (val, old) => {
@@ -261,10 +276,16 @@ async function poll() {
   total.value = data.total || 0
   message.value = data.message || ''
   logs.value = data.logs || []
+  reportStep.value = data.step || 0
+  reportMaxStep.value = data.max_step || 0
 
   if (data.status === 'done') {
     filename.value = data.filename || ''
     status.value = 'done'
+    stopPolling()
+    stopElapsedTimer()
+  } else if (data.status === 'paused') {
+    status.value = 'paused'
     stopPolling()
     stopElapsedTimer()
   } else if (data.status === 'error') {
@@ -530,8 +551,12 @@ onUnmounted(() => {
                 <p class="run-hint">{{ reportSheet ? `已选择：${reportSheet}` : '请先上传并选择工作表' }}</p>
               </div>
             </div>
-            <div v-if="submitting || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
+            <div v-if="submitting || status === 'paused' || status === 'done' || status === 'error'" class="report-progress-wide">
+              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
+              <div v-if="status === 'paused'" class="report-step-actions">
+                <a class="btn primary" :href="`/api/tasks/${taskId}/download`" :download="filename">下载步骤 {{ reportStep }} 结果</a>
+                <button class="btn ghost" type="button" @click="continueReport">继续第 {{ reportStep + 1 }} 步</button>
+              </div>
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
           </div>
@@ -796,6 +821,14 @@ onUnmounted(() => {
   flex: 1 1 auto;
   overflow-y: scroll;
   overscroll-behavior: contain;
+}
+
+.report-step-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .workflow-right > .step:first-child {

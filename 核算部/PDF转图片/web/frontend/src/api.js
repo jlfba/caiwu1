@@ -71,8 +71,15 @@ async function createReportTask(file, sheetName) {
   return data
 }
 
+async function continueReportTask(taskId) {
+  const res = await fetch(`/api/report-tasks/${taskId}/continue`, { method: 'POST' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.detail || '继续处理失败')
+  return data
+}
+
 function downloadUrl(taskId) {
   return `/api/tasks/${taskId}/download`
 }
 
-export { createTask, createReportTask, getTask, getWorksheets, downloadUrl }
+export { createTask, createReportTask, continueReportTask, getTask, getWorksheets, downloadUrl }
