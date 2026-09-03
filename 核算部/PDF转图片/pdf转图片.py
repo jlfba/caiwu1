@@ -1459,6 +1459,11 @@ def _extract_chuangshi_batch(pdf_paths, desc_parser, drop_desc1,
                 last = merged
                 if head_desc and prev_row is not None:
                     prev_row[2] = (prev_row[2] + '\n' + '\n'.join(head_desc)).strip()
+                elif head_desc and prev_row is None and rows:
+                    # The first charge can have its description and tracking
+                    # numbers above the first amount row. Keep that content
+                    # with the first charge instead of dropping it.
+                    rows[0][0] = ('\n'.join(head_desc) + '\n' + rows[0][0]).strip()
                 for r in rows:
                     if drop_desc1:
                         row = [merged.get('invoice_no', '未知'),
@@ -1494,6 +1499,89 @@ def extract_chuangshi_clearance_from_pdfs(pdf_paths):
     return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
 
 
+def _extract_chuangshi_surcharge_batch(pdf_paths):
+    """Extract surcharge charges by description sections across pages.
+
+    Surcharge PDFs vertically center the amount beside a long block of waybill
+    numbers. Splitting only at amount rows therefore assigns the next charge's
+    heading to the previous row. Here each non-waybill description heading
+    starts a section; continuation pages extend the active section.
+    """
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last = {}
+        sections = []
+        active = None
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                lines = _group_detail_lines(items)
+                header_line = next((ln for ln in lines
+                                    if all(key in _compact_text(ln['text'])
+                                           for key in ('DESCRIPTION', 'QUANTITY',
+                                                       'PRICE', 'AMOUNT'))), None)
+                if header_line is None:
+                    continue
+                header_cy = header_line['cy']
+                fields = {
+                    'invoice_no': _chuangshi_labeled_value(
+                        [ln for ln in lines if ln['cy'] < header_cy - 2],
+                        header_cy, 'INVOICENUMBER', 350, 450),
+                    'reference': _chuangshi_labeled_value(
+                        [ln for ln in lines if ln['cy'] < header_cy - 2],
+                        header_cy, 'REFERENCE', 450, 580),
+                }
+                last.update({k: v for k, v in fields.items() if v != '未知'})
+                bounds = [0, 400, 460, 515, float('inf')]
+                for ln in lines:
+                    if ln['cy'] <= header_cy + 2:
+                        continue
+                    comp = _compact_text(ln['text'])
+                    if any(word in comp for word in
+                           ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE')):
+                        break
+                    cells = [''] * 4
+                    for item in ln['items']:
+                        ci = next((i for i in range(4)
+                                   if bounds[i] <= item['cx'] < bounds[i + 1]), None)
+                        if ci is not None:
+                            cells[ci] = (cells[ci] + ' ' + item['text']).strip()
+                    desc, qty, price, amount = cells
+                    if desc and not re.match(r'^\d', desc.strip()) and '//' not in desc:
+                        active = {'desc': [desc], 'qty': '', 'price': '',
+                                  'amount': ''}
+                        sections.append(active)
+                    if any(_has_digit(value) for value in (qty, price, amount)):
+                        if active is None:
+                            active = {'desc': [], 'qty': '', 'price': '',
+                                      'amount': ''}
+                            sections.append(active)
+                        active['qty'], active['price'], active['amount'] = (
+                            qty, price, amount)
+                    elif active is not None and desc:
+                        active['desc'].append(desc)
+        finally:
+            doc.close()
+        for section in sections:
+            if not section['amount']:
+                continue
+            description = []
+            for part in section['desc']:
+                part = part.strip()
+                if part and (not description or description[-1] != part):
+                    description.append(part)
+            all_rows.append([last.get('invoice_no', '未知'),
+                             last.get('reference', '未知'),
+                             '\n'.join(description), section['qty'],
+                             section['price'], section['amount']])
+    return all_rows, pages, skipped
+
+
 # 创时附加费：DPD 市区费段的运单号拆成独立行后，金额列用该标记表示"与上方有值的单元格合并"
 _MERGE_UP = '__MERGE_AMOUNT__'
 
@@ -1526,11 +1614,7 @@ def extract_chuangshi_surcharge_from_pdfs(pdf_paths):
     """批量识别创时附加费发票（多行 34 开头单号明细，支持跨页续行）。
     DPD 市区费段拆成独立运单号行、金额列纵向合并（由 write_detail_excel 处理标记）。
     输出行 [invoice, reference, desc, qty, unit, amt]。"""
-    rows, pages, skipped = _extract_chuangshi_batch(
-        pdf_paths, _desc_simple, drop_desc1=True,
-        invoice_x=(350, 450), reference_x=(450, 580),
-        detail_bounds=[0, 400, 460, 515, float('inf')])
-    return _split_dpd_city_fee(rows), pages, skipped
+    return _extract_chuangshi_surcharge_batch(pdf_paths)
 
 
 def chuangshi_car_mode(pdf_paths):
