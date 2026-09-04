@@ -349,7 +349,7 @@ onUnmounted(() => {
       </span>
       <span class="brand-text">
         <span class="brand-name">财务内部工具</span>
-        <span class="brand-sub">发票识别 · 明细转表</span>
+        <span class="brand-sub">发票识别转表、表格处理</span>
       </span>
     </div>
   </header>
@@ -402,9 +402,9 @@ onUnmounted(() => {
       <div class="step-body">
         <div class="upload-pane">
           <h2 class="step-title">上传 PDF 文件</h2>
-          <p class="step-sub">支持多选，一次拖入全部发票</p>
+          <p class="step-sub">{{ mode === '5' ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
 
-          <UploadArea :disabled="submitting" :count="files.length" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="mode === '5'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
               <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
@@ -496,7 +496,7 @@ onUnmounted(() => {
 
           <div class="make-section">
             <h2 class="step-title">制作</h2>
-            <p class="step-sub">后端处理完成后，表格会直接从浏览器下载</p>
+            <p class="step-sub">{{ mode === '5' ? '仅提取字段，不生成或插入图片；完成后直接下载表格' : '后端处理完成后，表格会直接从浏览器下载' }}</p>
 
         <div class="run-area">
           <button

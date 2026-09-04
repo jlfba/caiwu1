@@ -543,6 +543,41 @@ def extract_invoice_fields_from_pdf(pdf_path):
     return results
 
 
+def _extract_invoice_summary_from_items(items):
+    """提取“项目名称”表头正下方的第一项文本，未找到时返回“未知”。"""
+    lines = _group_detail_lines(items)
+    for line_index, line in enumerate(lines):
+        header = next((item for item in line['items'] if '项目名称' in item['text']), None)
+        if header is None:
+            continue
+        for candidate_line in lines[line_index + 1:]:
+            if candidate_line['cy'] <= line['cy']:
+                continue
+            values = [item['text'].strip() for item in candidate_line['items']
+                      if abs(item['cx'] - header['cx']) <= max(header.get('w', 0) * 1.5, 180)
+                      and item['text'].strip()]
+            text = ' '.join(values).strip()
+            if text and '合计' not in text and '价税' not in text:
+                return text
+    return '未知'
+
+
+def extract_invoice_fields_with_summary_from_pdf(pdf_path):
+    """逐页提取收款组字段及项目名称下方摘要，文字层优先。"""
+    results = []
+    doc = fitz.open(pdf_path)
+    try:
+        for page in doc:
+            items = pdf_native_items(pdf_path, page)
+            fields = _extract_invoice_fields_from_items(items)
+            fields['summary'] = _extract_invoice_summary_from_items(items)
+            fields['_method'] = 'native' if _invoice_fields_complete(fields) else 'native-partial'
+            results.append(fields)
+    finally:
+        doc.close()
+    return results
+
+
 def _ocr_invoice_regions(image_path, fields):
     """仅针对少量缺失字段 OCR 对应区域，返回补充字段。"""
     from PIL import Image
@@ -616,6 +651,19 @@ def extract_invoice_fields(image_path, initial_fields=None):
     else:
         fields['_method'] = 'native-partial'
     fields['_elapsed'] = time.perf_counter() - started
+    return fields
+
+
+def extract_invoice_fields_with_summary(image_path, initial_fields=None):
+    """识别中文发票字段和摘要；仅供不保存图片的邵梅琳流程调用。"""
+    fields = extract_invoice_fields(image_path, initial_fields)
+    if fields.get('summary', '未知') != '未知':
+        return fields
+    try:
+        fields['summary'] = _extract_invoice_summary_from_items(ocr_lines(image_path))
+    except Exception as exc:
+        print('    摘要 OCR 失败：%s' % exc)
+        fields['summary'] = '未知'
     return fields
 
 

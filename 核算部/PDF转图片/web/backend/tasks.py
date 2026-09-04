@@ -187,6 +187,8 @@ def _worker():
                     template_path=template_path, sheet_name=sheet_name)
             elif mode == '2':
                 result = processor.process_receipt_mode2(pdfs, task['out_dir'], progress)
+            elif mode == '5':
+                result = processor.process_shao_meilin(pdfs, task['out_dir'], progress)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = result_name if mode == '4step' else os.path.basename(result)

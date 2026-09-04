@@ -236,6 +236,61 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
     return output
 
 
+def process_shao_meilin(pdf_paths, out_dir, progress=None):
+    """邵梅琳：仅识别中文发票字段，生成不含图片的 Excel。"""
+    def report(cur, tot, msg):
+        if progress:
+            progress(cur, tot, msg)
+
+    total = max(len(pdf_paths), 1)
+    rows = []
+    image_dir = os.path.join(out_dir, 'ocr_cache')
+    image_seq = 0
+
+    for index, pdf in enumerate(pdf_paths, 1):
+        if not os.path.isfile(pdf):
+            report(index, total, '跳过不存在的文件：%s' % os.path.basename(pdf))
+            continue
+        try:
+            native = tool.extract_invoice_fields_with_summary_from_pdf(pdf)
+            # 文字层完整时无需渲染；扫描件或摘要缺失时仅临时渲染给 OCR 使用。
+            needs_ocr = any(not tool._invoice_fields_complete(fields)
+                            or fields.get('summary', '未知') == '未知'
+                            for fields in native)
+            if needs_ocr:
+                images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
+                completed = []
+                for page_index, image in enumerate(images):
+                    initial = native[page_index] if page_index < len(native) else None
+                    completed.append(tool.extract_invoice_fields_with_summary(image, initial))
+                native = completed
+            for fields in native:
+                rows.append([fields.get('date', '未知'),
+                             fields.get('buyer', '未知'),
+                             fields.get('seller', '未知'),
+                             fields.get('no', '未知'),
+                             fields.get('summary', '未知'),
+                             fields.get('amount', '未知')])
+        except Exception as exc:
+            print('邵梅琳识别失败：%s，%s' % (os.path.basename(pdf), exc))
+        report(index, total, '正在识别第 %d/%d 个文件：%s' %
+               (index, total, os.path.basename(pdf)))
+
+    if not rows:
+        raise RuntimeError('没有识别到任何发票信息，未生成 Excel')
+
+    output = os.path.join(out_dir, '邵梅琳发票识别表.xlsx')
+    tool.write_detail_excel(
+        rows, output,
+        headers=('开票日期', '我方发票抬头', '对方发票抬', '发票号', '摘要', '金额'),
+        numeric_cols={5}, text_cols={3}, widths=[16, 34, 34, 22, 52, 16])
+    # OCR 图片仅作识别中转，结果目录和下载表格均不保留图片。
+    if os.path.isdir(image_dir):
+        shutil.rmtree(image_dir)
+    report(total, total, '正在生成 Excel')
+    return output
+
+
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 

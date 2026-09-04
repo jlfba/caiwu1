@@ -3,11 +3,13 @@ import { ref, watch } from 'vue'
 
 const props = defineProps({
   disabled: Boolean,
-  count: { type: Number, default: 0 }
+  count: { type: Number, default: 0 },
+  allowDirectories: Boolean
 })
 const emit = defineEmits(['add', 'remove', 'clear'])
 
 const fileInput = ref(null)
+const folderInput = ref(null)
 const dragging = ref(false)
 const expanded = ref(false)
 
@@ -23,19 +25,45 @@ function openPicker() {
   fileInput.value.click()
 }
 
+function openFolderPicker() {
+  if (folderInput.value) folderInput.value.click()
+}
+
 function onPick(event) {
   handleFiles(event.target.files)
   event.target.value = ''
 }
 
-function handleFiles(list) {
+async function handleFiles(list) {
   if (!list || !list.length) return
   emit('add', Array.from(list))
 }
 
-function onDrop(event) {
+async function readEntry(entry) {
+  if (entry.isFile) return await new Promise((resolve) => entry.file(resolve, () => resolve([])))
+  if (!entry.isDirectory) return []
+  const reader = entry.createReader()
+  const entries = []
+  let batch
+  do {
+    batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])))
+    entries.push(...batch)
+  } while (batch.length)
+  return (await Promise.all(entries.map(readEntry))).flat()
+}
+
+async function onDrop(event) {
   dragging.value = false
-  handleFiles(event.dataTransfer.files)
+  const items = Array.from(event.dataTransfer.items || [])
+  if (props.allowDirectories && items.some((item) => item.webkitGetAsEntry?.()?.isDirectory)) {
+    const files = (await Promise.all(items.map((item) => {
+      const entry = item.webkitGetAsEntry?.()
+      return entry ? readEntry(entry) : []
+    }))).flat()
+    await handleFiles(files)
+    return
+  }
+  await handleFiles(event.dataTransfer.files)
 }
 
 function onDragOver(event) {
@@ -70,6 +98,15 @@ function onDragLeave() {
         hidden
         @change="onPick"
       />
+      <input
+        v-if="allowDirectories"
+        ref="folderInput"
+        type="file"
+        webkitdirectory
+        multiple
+        hidden
+        @change="onPick"
+      />
       <span class="dz-icon">
         <svg viewBox="0 0 40 40" width="40" height="40" fill="none" aria-hidden="true">
           <circle cx="20" cy="20" r="19" stroke="var(--primary-soft)" stroke-width="2" />
@@ -77,8 +114,9 @@ function onDragLeave() {
           <path d="M12 29h16" stroke="var(--border-strong)" stroke-width="2.4" stroke-linecap="round" />
         </svg>
       </span>
-      <p class="dz-title">拖入 PDF，或点击选择文件</p>
-      <p class="dz-hint">支持多选 · 仅接受 .pdf</p>
+      <p class="dz-title">{{ allowDirectories ? '拖入 PDF 或文件夹' : '拖入 PDF，或点击选择文件' }}</p>
+      <p class="dz-hint">{{ allowDirectories ? '支持文件夹递归识别 · 仅接受 .pdf' : '支持多选 · 仅接受 .pdf' }}</p>
+      <button v-if="allowDirectories" class="folder-picker" type="button" :disabled="disabled" @click.stop="openFolderPicker">选择文件夹</button>
     </div>
 
     <div v-if="$slots.default && count" class="file-list-shell">
@@ -172,6 +210,18 @@ function onDragLeave() {
   margin: 2px 0 0;
   font-size: 12.5px;
   color: var(--text-faint);
+}
+
+.folder-picker {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .file-list-shell {
