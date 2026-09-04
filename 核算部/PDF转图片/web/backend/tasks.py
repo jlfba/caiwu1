@@ -94,7 +94,7 @@ def create_report_task(filename, data, sheet_name):
         'status': 'pending', 'current': 0, 'total': 10, 'step': 1, 'max_step': 10,
         'input_path': input_path, 'sheet_name': sheet_name,
         'source_path': input_path, 'csv_work': os.path.join(out_dir, 'csv_work'),
-        'result_path': '',
+        'result_path': '', 'web_auto': True,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
     }
@@ -166,7 +166,12 @@ def _worker():
 
         try:
             if mode == '4step':
-                result, result_name = report_csv_cli.run_web_csv_step(task, task.get('step', 1), progress)
+                result = None; result_name = ''
+                first_step = task.get('step', 1)
+                for report_step in range(first_step, task.get('max_step', 10) + 1):
+                    task['step'] = report_step
+                    result, result_name = report_csv_cli.run_web_csv_step(task, report_step, progress)
+                    task['input_path'] = result
             elif mode == '4':
                 extension = os.path.splitext(pdfs[0])[1].lower()
                 output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
@@ -185,9 +190,7 @@ def _worker():
             if mode == '4step':
                 task['result_path'] = result
             if mode == '4step':
-                task['input_path'] = result
-            if mode == '4step':
-                task['status'] = 'paused' if task.get('step', 1) < task.get('max_step', 10) else 'done'
+                task['status'] = 'done'
             else:
                 task['status'] = 'done'
             task['total'] = task['total'] or 1

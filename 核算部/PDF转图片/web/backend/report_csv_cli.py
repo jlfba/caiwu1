@@ -86,6 +86,15 @@ def export_xlsx(csv_path, output, log_dir, totals_path, idx):
     cats=[x for x in ('无应收','金额异常','') if any(g[x] for g in groups.values())]; pivot=wb.create_sheet('无应收明细透视表'); pivot.append(['客户所属机构']+[('空白' if not x else x) for x in cats]+['合计','总票数','占比'])
     for org in sorted(groups):
         nums=[groups[org][x] for x in cats]; total=sum(nums); den=totals.get(org,0); pivot.append([org]+nums+[total,den,total/den if den else 0])
+    # 把每一步的 CSV 结果一并放进最终总表，便于一次性核对，不再需要逐步确认。
+    for name in sorted(os.listdir(log_dir)):
+        match = re.match(r'step(\d+)\.csv$', name)
+        if not match or name == os.path.basename(csv_path):
+            continue
+        ws = wb.create_sheet(f'无应收明细-步骤{match.group(1)}')
+        with open(os.path.join(log_dir, name), newline='', encoding='utf-8-sig') as f:
+            for row in csv.reader(f):
+                ws.append(row)
     for name in sorted(os.listdir(log_dir)):
         if name.startswith('临时删除_步骤') and name.endswith('.csv'):
             ws=wb.create_sheet(name[:-4]);
@@ -137,7 +146,7 @@ def run_web_csv_step(task, step, progress=None):
         task['csv_idx'] = {x:i for i,x in enumerate(task['csv_header'])}
     current = os.path.join(work, f'step{step-1}.csv')
     if step == 1: current = os.path.join(work, 'step0.csv')
-    if step == 10: current = os.path.join(work, 'step8.csv')
+    if step == 10: current = os.path.join(work, 'step9.csv')
     if step <= 7:
         nxt = os.path.join(work, f'step{step}.csv')
         kept, removed = process_step(current, nxt, os.path.join(work, f'临时删除_步骤{step}.csv'), step, task['csv_header'], task['csv_idx'])
@@ -149,7 +158,11 @@ def run_web_csv_step(task, step, progress=None):
         return nxt, '无应收明细-步骤8.csv'
     if step == 9:
         if progress: progress(1, 1, '步骤 9/10：透视表将在最终总表中生成')
-        return current, '无应收明细-步骤9.csv'
+        nxt = os.path.join(work, 'step9.csv')
+        if current != nxt:
+            with open(current, 'rb') as source, open(nxt, 'wb') as target:
+                target.write(source.read())
+        return nxt, '无应收明细-步骤9.csv'
     final = os.path.join(task['out_dir'], '无应收明细-最终总表.xlsx')
     export_xlsx(current, final, work, os.path.join(work, 'totals.csv'), task['csv_idx'])
     if progress: progress(1, 1, '步骤 10/10：已生成包含明细和透视表的最终总表')
