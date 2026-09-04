@@ -17,6 +17,7 @@ REQUIRED_COLUMNS = (
     '应收单价', '客户简称', '业务员', '自定义备注', '配仓单号',
     '销售产品', '应收金额', '客户所属机构', '运单号',
 )
+SOURCE_TOTALS_SHEET = '原始机构总票数'
 
 
 def _atomic_save(workbook, output_path):
@@ -293,15 +294,26 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
         if progress: progress(cur, total, message)
     report(1, 1, '步骤 %d/9：正在流式读取数据' % step)
     source_wb = load_workbook(input_path, read_only=True, data_only=False)
-    if selected_sheet not in source_wb.sheetnames: source_wb.close(); raise ValueError('工作表不存在：%s' % selected_sheet)
+    if step == 1 and selected_sheet not in source_wb.sheetnames:
+        source_wb.close(); raise ValueError('工作表不存在：%s' % selected_sheet)
     source_name = '无应收明细' if step > 1 and '无应收明细' in source_wb.sheetnames else selected_sheet
     source = source_wb[source_name]; rows = source.iter_rows(values_only=True); header = list(next(rows, None) or [])
     if not header: source_wb.close(); raise ValueError('所选工作表为空')
     idx = {_text(v): i + 1 for i, v in enumerate(header) if _text(v)}
     missing = [name for name in REQUIRED_COLUMNS if name not in idx]
     if missing: source_wb.close(); raise ValueError('所选工作表缺少必要列：%s' % '、'.join(missing))
-    out = Workbook(write_only=True); original = out.create_sheet(selected_sheet); detail = out.create_sheet('无应收明细')
-    original.append(header)
+    out = Workbook(write_only=True)
+    # 中间结果只保留“无应收明细”及删除记录；原始表仍在用户上传的文件中，
+    # 不再每一步复制数百万行，避免大表处理和下载被原表复制拖慢。
+    original = None
+    source_totals = Counter()
+    if step > 1 and SOURCE_TOTALS_SHEET in source_wb.sheetnames:
+        totals_sheet = out.create_sheet(SOURCE_TOTALS_SHEET)
+        for row_number, old_row in enumerate(source_wb[SOURCE_TOTALS_SHEET].iter_rows(values_only=True)):
+            copied_row = list(old_row)
+            totals_sheet.append(copied_row)
+            if row_number and len(copied_row) >= 2:
+                source_totals[_text(copied_row[0])] = int(_number(copied_row[1]))
     detail.append(header)
     # 延续前面步骤的临时删除记录，直到最终清理步骤再删除。
     if step > 1:
@@ -318,7 +330,12 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
     pivot_groups = defaultdict(Counter)
     pivot_source_totals = Counter()
     for row in rows:
-        values = list(row); original.append(values); row_count += 1
+        values = list(row)
+        if step == 1:
+            org = _text(values[idx['客户所属机构'] - 1])
+            if org:
+                source_totals[org] += 1
+        row_count += 1
         keep = True
         if step >= 1:
             if step == 1: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
@@ -339,15 +356,19 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
                 org = _text(values[idx['客户所属机构'] - 1])
                 tracking = _text(values[idx['运单号'] - 1])
                 category = _text(values[-1])
-                if org:
-                    pivot_source_totals[org] += 1
                 if org and tracking:
                     pivot_groups[org][category] += 1
         elif deleted:
             deleted.append(values); deleted_count += 1
-        if row_count % 10000 == 0: report(1, 1, '步骤 %d/7：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
+        if row_count % 10000 == 0: report(1, 1, '步骤 %d/9：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
     source_wb.close()
-    if step == 6:
+    if step == 1:
+        totals_sheet = out.create_sheet(SOURCE_TOTALS_SHEET)
+        totals_sheet.append(['客户所属机构', '总票数'])
+        for org, total in sorted(source_totals.items()):
+            totals_sheet.append([org, total])
+    if step == 8:
+        pivot_source_totals = source_totals
         categories = [name for name in ('无应收', '金额异常', '')
                       if any(group[name] for group in pivot_groups.values())]
         pivot = out.create_sheet('无应收明细透视表')
@@ -380,7 +401,8 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
         report(1, 1, '步骤 8/9：已生成无应收明细透视表')
     if step == 9:
         for name in list(out.sheetnames):
-            if name.startswith('临时删除_步骤'): del out[name]
+            if name.startswith('临时删除_步骤') or name == SOURCE_TOTALS_SHEET:
+                del out[name]
     _atomic_save(out, output_path); out.close()
     return output_path
 
