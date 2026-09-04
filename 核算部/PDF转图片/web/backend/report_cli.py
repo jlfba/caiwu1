@@ -3,6 +3,7 @@
 import argparse
 import os
 import sys
+import re
 
 from openpyxl import load_workbook
 
@@ -14,6 +15,16 @@ except ImportError:
 
 def _progress(current, total, message):
     print(f"[进度] {message}", flush=True)
+
+
+def _clean_path(value):
+    value = value.strip()
+    # 支持直接拖入文件，也支持误粘贴 PowerShell 的 & '路径' / & "路径"。
+    if value.startswith('&'):
+        value = value[1:].strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    return value.strip()
 
 
 def _choose_sheet(path):
@@ -44,7 +55,7 @@ def main():
     parser.add_argument('--no-pause', action='store_true', help='不在每一步等待回车')
     args = parser.parse_args()
 
-    path = args.input or input('请输入 Excel 文件路径：').strip().strip('\"')
+    path = _clean_path(args.input or input('请输入 Excel 文件路径：'))
     path = os.path.abspath(path)
     if not os.path.isfile(path):
         print(f'文件不存在：{path}', file=sys.stderr)
