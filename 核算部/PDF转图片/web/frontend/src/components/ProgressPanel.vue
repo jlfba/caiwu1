@@ -30,6 +30,7 @@ const percent = computed(() => {
 })
 
 const reportStages = [
+  '删除操作状态为签入的数据',
   '保留应收单价小于 1',
   '删除客户简称关键词',
   '删除业务员华南KA',

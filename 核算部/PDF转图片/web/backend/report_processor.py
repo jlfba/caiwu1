@@ -14,7 +14,7 @@ EXCLUDED_CUSTOMERS = (
     '龙行-清关', '李增韬',
 )
 REQUIRED_COLUMNS = (
-    '应收单价', '客户简称', '业务员', '自定义备注', '配仓单号',
+    '操作状态', '应收单价', '客户简称', '业务员', '自定义备注', '配仓单号',
     '销售产品', '应收金额', '客户所属机构', '运单号',
 )
 SOURCE_TOTALS_SHEET = '原始机构总票数'
@@ -207,7 +207,7 @@ def process_report(input_path, selected_sheet, output_path, progress=None):
     return output_path
 
 
-STEP_NAMES = ('筛选应收单价小于等于1', '删除客户简称关键词', '删除业务员华南KA', '删除备注J000、无应收、免费补发', '删除配仓单号刘丹整柜', '删除整柜高金额', '新增无应收分类', '生成透视表', '清理临时记录')
+STEP_NAMES = ('删除操作状态签入', '筛选应收单价小于等于1', '删除客户简称关键词', '删除业务员华南KA', '删除备注J000、无应收、免费补发', '删除配仓单号刘丹整柜', '删除整柜高金额', '新增无应收分类', '生成透视表', '清理临时记录')
 
 def process_report_step(input_path, selected_sheet, output_path, step, progress=None):
     """执行单个可暂停步骤；中间删除记录保存在临时工作表。"""
@@ -229,24 +229,25 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
         for name in ('无应收明细', '无应收明细透视表'):
             if name in wb.sheetnames: del wb[name]
         detail = wb.copy_worksheet(source); detail.title = '无应收明细'
-        # 第 1 步即执行价格筛选：只保留“应收单价”小于 1 的数据。
+        # 第 1 步：删除“操作状态”包含“签入”的数据。
         source_rows = list(detail.iter_rows(min_row=2, values_only=True))
-        kept = [list(v) for v in source_rows if bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) <= 1]
-        removed = [list(v) for v in source_rows if not (bool(_text(v[idx['应收单价'] - 1])) and _number(v[idx['应收单价'] - 1]) <= 1)]
+        kept = [list(v) for v in source_rows if '签入' not in _text(v[idx['操作状态'] - 1])]
+        removed = [list(v) for v in source_rows if '签入' in _text(v[idx['操作状态'] - 1])]
         if detail.max_row > 1: detail.delete_rows(2, detail.max_row - 1)
         for values in kept: detail.append(values)
         log = wb.create_sheet('临时删除_步骤1'); log.append(list(source.iter_rows(min_row=1, max_row=1, values_only=True))[0]); [log.append(v) for v in removed]
-        report(1, 1, '步骤 1/9：保留应收单价小于等于1的数据，保留 %d 行，删除 %d 行' % (len(kept), len(removed)))
+        report(1, 1, '步骤 1/10：删除操作状态包含“签入”的数据，保留 %d 行，删除 %d 行' % (len(kept), len(removed)))
     else:
         detail = wb['无应收明细']
         headers = _headers(detail)
-        if step in (2, 3, 4, 5, 6):
+        if step in (2, 3, 4, 5, 6, 7):
             rules = {
-                2: lambda v: not any(word in _text(v[headers['客户简称']-1]) for word in EXCLUDED_CUSTOMERS),
-                3: lambda v: '华南KA' not in _text(v[headers['业务员']-1]),
-                4: lambda v: not (re.match(r'^J000', _text(v[headers['自定义备注']-1]), re.I) or '无应收' in _text(v[headers['自定义备注']-1]) or '免费补发' in _text(v[headers['自定义备注']-1])),
-                5: lambda v: '刘丹整柜' not in _text(v[headers['配仓单号']-1]),
-                6: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000),
+                2: lambda v: bool(_text(v[headers['应收单价']-1])) and _number(v[headers['应收单价']-1]) <= 1,
+                3: lambda v: not any(word in _text(v[headers['客户简称']-1]) for word in EXCLUDED_CUSTOMERS),
+                4: lambda v: '华南KA' not in _text(v[headers['业务员']-1]),
+                5: lambda v: not (re.match(r'^J000', _text(v[headers['自定义备注']-1]), re.I) or '无应收' in _text(v[headers['自定义备注']-1]) or '免费补发' in _text(v[headers['自定义备注']-1])),
+                6: lambda v: '刘丹整柜' not in _text(v[headers['配仓单号']-1]),
+                7: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000),
             }
             source_rows = list(detail.iter_rows(min_row=2, values_only=True))
             kept, removed = [], []
@@ -260,15 +261,15 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
             if log_name in wb.sheetnames: del wb[log_name]
             log = wb.create_sheet(log_name); log.append(list(detail.iter_rows(min_row=1, max_row=1, values_only=True))[0] if detail.max_row else [])
             for values in removed: log.append(values)
-            report(1, 1, '步骤 %d/9：保留 %d 行，删除 %d 行' % (step, len(kept), len(removed)))
-        elif step == 7:
+            report(1, 1, '步骤 %d/10：保留 %d 行，删除 %d 行' % (step, len(kept), len(removed)))
+        elif step == 8:
             if '无应收' not in headers:
                 col = detail.max_column + 1; detail.cell(1, col, '无应收')
                 for row in detail.iter_rows(min_row=2):
                     amount = _number(row[headers['应收金额']-1].value); price = _number(row[headers['应收单价']-1].value)
                     row[col-1].value = '金额异常' if amount > 0 else ('无应收' if price == 0 else '')
-            report(1, 1, '步骤 7/9：已新增无应收分类')
-        elif step == 8:
+            report(1, 1, '步骤 8/10：已新增无应收分类')
+        elif step == 9:
             if '无应收明细透视表' in wb.sheetnames: del wb['无应收明细透视表']
             headers = _headers(detail); groups = defaultdict(Counter); source_totals = Counter()
             for row in detail.iter_rows(min_row=2, values_only=True):
@@ -280,11 +281,11 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
             for org in sorted(groups):
                 nums=[groups[org][x] for x in cats]; total=sum(nums); denominator=source_totals.get(org, 0)
                 pivot.append([org]+nums+[total, denominator, total / denominator if denominator else 0])
-            report(1, 1, '步骤 8/9：已生成透视表')
-        elif step == 9:
+            report(1, 1, '步骤 9/10：已生成透视表')
+        elif step == 10:
             for name in list(wb.sheetnames):
                 if name.startswith('临时删除_步骤'): del wb[name]
-            report(1, 1, '步骤 9/9：已清理临时删除记录')
+            report(1, 1, '步骤 10/10：已清理临时删除记录')
     _atomic_save(wb, output_path); wb.close(); return output_path
 
 
@@ -292,7 +293,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
     """大文件分步流式处理，避免可编辑模式加载数 GB XML。"""
     def report(cur, total, message):
         if progress: progress(cur, total, message)
-    report(1, 1, '步骤 %d/9：正在流式读取数据' % step)
+    report(1, 1, '步骤 %d/10：正在流式读取数据' % step)
     source_wb = load_workbook(input_path, read_only=True, data_only=False)
     if step == 1 and selected_sheet not in source_wb.sheetnames:
         source_wb.close(); raise ValueError('工作表不存在：%s' % selected_sheet)
@@ -303,6 +304,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
     missing = [name for name in REQUIRED_COLUMNS if name not in idx]
     if missing: source_wb.close(); raise ValueError('所选工作表缺少必要列：%s' % '、'.join(missing))
     out = Workbook(write_only=True)
+    detail = out.create_sheet('无应收明细')
     # 中间结果只保留“无应收明细”及删除记录；原始表仍在用户上传的文件中，
     # 不再每一步复制数百万行，避免大表处理和下载被原表复制拖慢。
     original = None
@@ -323,7 +325,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
                 copied = out.create_sheet(old_name)
                 for old_row in old_sheet.iter_rows(values_only=True):
                     copied.append(list(old_row))
-    deleted = out.create_sheet('临时删除_步骤%d' % step) if step in (1, 2, 3, 4, 5, 6) else None
+    deleted = out.create_sheet('临时删除_步骤%d' % step) if step in (1, 2, 3, 4, 5, 6, 7) else None
     if deleted: deleted.append(header)
     kept_count = deleted_count = row_count = 0
     # 第 6 步在流式模式下同步汇总透视表所需的数据。
@@ -338,21 +340,22 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
         row_count += 1
         keep = True
         if step >= 1:
-            if step == 1: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
-            elif step == 2: keep = not any(word in _text(values[idx['客户简称']-1]) for word in EXCLUDED_CUSTOMERS)
-            elif step == 3: keep = '华南KA' not in _text(values[idx['业务员']-1])
-            elif step == 4: keep = not (re.match(r'^J000', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]) or '免费补发' in _text(values[idx['自定义备注']-1]))
-            elif step == 5: keep = '刘丹整柜' not in _text(values[idx['配仓单号']-1])
-            elif step == 6: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
+            if step == 1: keep = '签入' not in _text(values[idx['操作状态']-1])
+            elif step == 2: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
+            elif step == 3: keep = not any(word in _text(values[idx['客户简称']-1]) for word in EXCLUDED_CUSTOMERS)
+            elif step == 4: keep = '华南KA' not in _text(values[idx['业务员']-1])
+            elif step == 5: keep = not (re.match(r'^J000', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]) or '免费补发' in _text(values[idx['自定义备注']-1]))
+            elif step == 6: keep = '刘丹整柜' not in _text(values[idx['配仓单号']-1])
+            elif step == 7: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
             else: keep = True
         if keep:
-            if step >= 7 and step == 7:
+            if step >= 8 and step == 8:
                 price = _number(values[idx['应收单价']-1]); amount = _number(values[idx['应收金额']-1])
                 values = values + ['金额异常' if amount > 0 else ('无应收' if price == 0 else '')]
             elif step > 5 and len(values) == len(header):
                 values = values
             detail.append(values); kept_count += 1
-            if step == 8:
+            if step == 9:
                 org = _text(values[idx['客户所属机构'] - 1])
                 tracking = _text(values[idx['运单号'] - 1])
                 category = _text(values[-1])
@@ -360,14 +363,14 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
                     pivot_groups[org][category] += 1
         elif deleted:
             deleted.append(values); deleted_count += 1
-        if row_count % 10000 == 0: report(1, 1, '步骤 %d/9：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
+        if row_count % 10000 == 0: report(1, 1, '步骤 %d/10：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
     source_wb.close()
     if step == 1:
         totals_sheet = out.create_sheet(SOURCE_TOTALS_SHEET)
         totals_sheet.append(['客户所属机构', '总票数'])
         for org, total in sorted(source_totals.items()):
             totals_sheet.append([org, total])
-    if step == 8:
+    if step == 9:
         pivot_source_totals = source_totals
         categories = [name for name in ('无应收', '金额异常', '')
                       if any(group[name] for group in pivot_groups.values())]
@@ -398,8 +401,8 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
                    (ticket_total, grand_total, ticket_total))
         for row_number in range(2, pivot.max_row + 1):
             pivot.cell(row_number, ratio_col).number_format = '0.00%'
-        report(1, 1, '步骤 8/9：已生成无应收明细透视表')
-    if step == 9:
+        report(1, 1, '步骤 9/10：已生成无应收明细透视表')
+    if step == 10:
         for name in list(out.sheetnames):
             if name.startswith('临时删除_步骤') or name == SOURCE_TOTALS_SHEET:
                 del out[name]
