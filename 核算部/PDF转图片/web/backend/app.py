@@ -26,6 +26,7 @@ _FRONT_DIST = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'frontend', 'dist'))
 _XLSX_MEDIA = ('application/vnd.openxmlformats-officedocument.'
                'spreadsheetml.sheet')
+_CSV_MEDIA = 'text/csv; charset=utf-8'
 
 
 @app.post('/api/worksheets')
@@ -129,8 +130,9 @@ def download(task_id: str):
     path = tasks.download_path(task_id)
     if not path:
         return JSONResponse({'detail': '结果不存在或任务未完成'}, status_code=404)
+    media_type = _CSV_MEDIA if path.lower().endswith('.csv') else _XLSX_MEDIA
     return FileResponse(path, filename=os.path.basename(path),
-                        media_type=_XLSX_MEDIA)
+                        media_type=media_type)
 
 
 # 托管前端构建产物（dev 阶段 dist 可能不存在，仅由 npm run dev 提供页面）

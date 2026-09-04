@@ -137,6 +137,7 @@ def run_web_csv_step(task, step, progress=None):
         task['csv_idx'] = {x:i for i,x in enumerate(task['csv_header'])}
     current = os.path.join(work, f'step{step-1}.csv')
     if step == 1: current = os.path.join(work, 'step0.csv')
+    if step == 10: current = os.path.join(work, 'step8.csv')
     if step <= 7:
         nxt = os.path.join(work, f'step{step}.csv')
         kept, removed = process_step(current, nxt, os.path.join(work, f'临时删除_步骤{step}.csv'), step, task['csv_header'], task['csv_idx'])
