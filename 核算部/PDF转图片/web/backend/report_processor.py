@@ -18,6 +18,7 @@ REQUIRED_COLUMNS = (
     '销售产品', '应收金额', '客户所属机构', '运单号',
 )
 SOURCE_TOTALS_SHEET = '原始机构总票数'
+PROGRESS_LOG_INTERVAL = 100_000
 
 
 def _atomic_save(workbook, output_path):
@@ -363,7 +364,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
                     pivot_groups[org][category] += 1
         elif deleted:
             deleted.append(values); deleted_count += 1
-        if row_count % 10000 == 0: report(1, 1, '步骤 %d/10：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
+        if row_count % PROGRESS_LOG_INTERVAL == 0: report(1, 1, '步骤 %d/10：已读取 %d 行，保留 %d 行，删除 %d 行' % (step, row_count, kept_count, deleted_count))
     source_wb.close()
     if step == 1:
         totals_sheet = out.create_sheet(SOURCE_TOTALS_SHEET)
@@ -465,7 +466,7 @@ def _process_large_report(input_path, selected_sheet, output_path, progress=None
                     categories.append(category)
         else:
             removed_count += 1
-        if row_count % 10000 == 0:
+        if row_count % PROGRESS_LOG_INTERVAL == 0:
             report(3, 5, '已读取 %d 行，保留 %d 行，删除 %d 行' %
                    (row_count, kept_count, removed_count))
     source_wb.close()
