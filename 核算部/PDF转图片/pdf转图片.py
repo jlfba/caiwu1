@@ -561,10 +561,12 @@ def _extract_invoice_summary_from_items(items):
             values = [item['text'].strip() for item in candidate_line['items']
                       if item['cx'] < right_edge and item['text'].strip()]
             text = ' '.join(values).strip()
-            # 该类发票的项目摘要固定以 * 起始；只接受这一明确特征，
-            # 避免把项目名称列中其他文本或合计行写入摘要。
-            if text.startswith('*'):
-                return text
+            # OCR 可能把票面半角 * 识别成全角/数学星号，也可能将星号和
+            # 项目文字切成相邻文本块。只要项目名称列中出现星号，就从星号
+            # 开始保留该项目内容；右侧列已由规格型号边界排除。
+            marker = re.search(r'[*＊∗✱]', text)
+            if marker:
+                return '*' + text[marker.end():].strip()
     return '未知'
 
 
