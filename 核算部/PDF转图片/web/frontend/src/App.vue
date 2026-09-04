@@ -41,6 +41,7 @@ const elapsedSeconds = ref(0)
 let pollTimer = null
 let elapsedTimer = null
 let elapsedStartedAt = 0
+let elapsedAccumulated = 0
 
 const steps = computed(() => {
   const list = [
@@ -142,6 +143,7 @@ async function submitReport() {
 
 async function continueReport() {
   if (!taskId.value || status.value !== 'paused') return
+  resumeElapsedTimer()
   status.value = 'processing'
   message.value = '正在继续处理…'
   try {
@@ -212,7 +214,8 @@ function stopPolling() {
 
 function stopElapsedTimer(captureFinal = true) {
   if (captureFinal && elapsedStartedAt) {
-    elapsedSeconds.value = Math.floor((Date.now() - elapsedStartedAt) / 1000)
+    elapsedAccumulated += Math.floor((Date.now() - elapsedStartedAt) / 1000)
+    elapsedSeconds.value = elapsedAccumulated
   }
   if (elapsedTimer) {
     clearInterval(elapsedTimer)
@@ -223,10 +226,19 @@ function stopElapsedTimer(captureFinal = true) {
 
 function startElapsedTimer() {
   stopElapsedTimer()
+  elapsedAccumulated = 0
   elapsedStartedAt = Date.now()
   elapsedSeconds.value = 0
   elapsedTimer = setInterval(() => {
-    elapsedSeconds.value = Math.floor((Date.now() - elapsedStartedAt) / 1000)
+    elapsedSeconds.value = elapsedAccumulated + Math.floor((Date.now() - elapsedStartedAt) / 1000)
+  }, 1000)
+}
+
+function resumeElapsedTimer() {
+  if (elapsedTimer) return
+  elapsedStartedAt = Date.now()
+  elapsedTimer = setInterval(() => {
+    elapsedSeconds.value = elapsedAccumulated + Math.floor((Date.now() - elapsedStartedAt) / 1000)
   }, 1000)
 }
 
@@ -308,6 +320,7 @@ function reset() {
   error.value = ''
   logs.value = []
   elapsedSeconds.value = 0
+  elapsedAccumulated = 0
   files.value = []
   clearTemplate()
   clearReportFile()
