@@ -12,6 +12,7 @@ import uuid
 
 import processor
 import report_processor
+import report_csv_cli
 
 _TMP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tmp')
 
@@ -92,6 +93,8 @@ def create_report_task(filename, data, sheet_name):
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
         'status': 'pending', 'current': 0, 'total': 10, 'step': 1, 'max_step': 10,
         'input_path': input_path, 'sheet_name': sheet_name,
+        'source_path': input_path, 'csv_work': os.path.join(out_dir, 'csv_work'),
+        'result_path': '',
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
     }
@@ -135,7 +138,7 @@ def download_path(task_id):
     task = get_task(task_id)
     if not task or task['status'] not in ('done', 'paused') or not task['filename']:
         return None
-    path = os.path.join(task['dir'], 'out', task['filename'])
+    path = task.get('result_path') or os.path.join(task['dir'], 'out', task['filename'])
     return path if os.path.isfile(path) else None
 
 
@@ -163,9 +166,7 @@ def _worker():
 
         try:
             if mode == '4step':
-                output = os.path.join(task['out_dir'], '无应收明细-步骤%d.xlsx' % task.get('step', 1))
-                result = report_processor.process_report_step(
-                    pdfs[0], sheet_name, output, task.get('step', 1), progress)
+                result, result_name = report_csv_cli.run_web_csv_step(task, task.get('step', 1), progress)
             elif mode == '4':
                 extension = os.path.splitext(pdfs[0])[1].lower()
                 output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
@@ -180,7 +181,9 @@ def _worker():
                 result = processor.process_receipt_mode2(pdfs, task['out_dir'], progress)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
-            task['filename'] = os.path.basename(result)
+            task['filename'] = result_name if mode == '4step' else os.path.basename(result)
+            if mode == '4step':
+                task['result_path'] = result
             if mode == '4step':
                 task['input_path'] = result
             if mode == '4step':

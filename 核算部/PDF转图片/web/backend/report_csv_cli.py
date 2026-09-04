@@ -121,6 +121,38 @@ def export_csv_results(csv_path, output_dir, log_dir, totals_path, idx):
             total = sum(nums); denominator = totals.get(org, 0)
             out.writerow([org] + nums + [total, denominator, total / denominator if denominator else 0])
     return detail_output, pivot_output
+
+def run_web_csv_step(task, step, progress=None):
+    """网页报表任务的 CSV 分步入口；只在最后一步导出 XLSX。"""
+    work = task['csv_work']
+    os.makedirs(work, exist_ok=True)
+    source = task['source_path']
+    if step == 1 and not os.path.isfile(os.path.join(work, 'step0.csv')):
+        if progress: progress(1, 1, '正在读取所选工作表并转换为 CSV')
+        header, idx = read_sheet(source, task['sheet_name'], os.path.join(work, 'step0.csv'), os.path.join(work, 'totals.csv'))
+        task['csv_header'] = header; task['csv_idx'] = idx
+    else:
+        with open(os.path.join(work, 'step0.csv'), newline='', encoding='utf-8-sig') as f:
+            task['csv_header'] = next(csv.reader(f))
+        task['csv_idx'] = {x:i for i,x in enumerate(task['csv_header'])}
+    current = os.path.join(work, f'step{step-1}.csv')
+    if step == 1: current = os.path.join(work, 'step0.csv')
+    if step <= 7:
+        nxt = os.path.join(work, f'step{step}.csv')
+        kept, removed = process_step(current, nxt, os.path.join(work, f'临时删除_步骤{step}.csv'), step, task['csv_header'], task['csv_idx'])
+        if progress: progress(1, 1, f'步骤 {step}/10：已完成，保留 {kept} 行，删除 {removed} 行')
+        return nxt, f'无应收明细-步骤{step}.csv'
+    if step == 8:
+        nxt = os.path.join(work, 'step8.csv'); add_category(current, nxt, task['csv_idx'])
+        if progress: progress(1, 1, '步骤 8/10：已新增无应收&金额异常列')
+        return nxt, '无应收明细-步骤8.csv'
+    if step == 9:
+        if progress: progress(1, 1, '步骤 9/10：透视表将在最终总表中生成')
+        return current, '无应收明细-步骤9.csv'
+    final = os.path.join(task['out_dir'], '无应收明细-最终总表.xlsx')
+    export_xlsx(current, final, work, os.path.join(work, 'totals.csv'), task['csv_idx'])
+    if progress: progress(1, 1, '步骤 10/10：已生成包含明细和透视表的最终总表')
+    return final, os.path.basename(final)
 def main():
     p=argparse.ArgumentParser(description='报表组 CSV 高速终端版'); p.add_argument('input',nargs='?'); p.add_argument('-s','--sheet'); p.add_argument('-o','--output-dir'); p.add_argument('--no-pause',action='store_true'); a=p.parse_args()
     source=clean_path(a.input or input('请输入 Excel 文件路径：')); source=os.path.abspath(source)
