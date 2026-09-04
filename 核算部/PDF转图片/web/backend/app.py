@@ -120,6 +120,7 @@ def task_status(task_id: str):
         'logs': t.get('logs', []),
         'step': t.get('step', 0),
         'max_step': t.get('max_step', 0),
+        'elapsed_seconds': t.get('elapsed_seconds', 0),
     }
 
 

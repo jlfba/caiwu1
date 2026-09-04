@@ -93,7 +93,7 @@ def create_report_task(filename, data, sheet_name):
         'status': 'pending', 'current': 0, 'total': 10, 'step': 1, 'max_step': 10,
         'input_path': input_path, 'sheet_name': sheet_name,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
-        'created': time.time(),
+        'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
     }
     with _LOCK:
         _TASKS[task_id] = task
@@ -120,7 +120,14 @@ def get_task(task_id):
     """返回任务状态的副本；不存在返回 None。"""
     with _LOCK:
         t = _TASKS.get(task_id)
-        return dict(t) if t else None
+        if not t:
+            return None
+        result = dict(t)
+        elapsed = result.get('elapsed_seconds', 0)
+        if result.get('processing_started_at') is not None:
+            elapsed += int(time.time() - result['processing_started_at'])
+        result['elapsed_seconds'] = elapsed
+        return result
 
 
 def download_path(task_id):
@@ -140,6 +147,7 @@ def _worker():
         if task is None:
             continue
         task['status'] = 'processing'
+        task['processing_started_at'] = time.time()
         task['message'] = '开始处理…'
         task['logs'].append('[开始] 已接收处理任务')
 
@@ -188,6 +196,11 @@ def _worker():
             task['error'] = str(e)
             task['message'] = '处理失败：%s' % e
             task['logs'].append('[失败] %s' % e)
+        finally:
+            if mode == '4step' and task.get('processing_started_at') is not None:
+                task['elapsed_seconds'] = task.get('elapsed_seconds', 0) + int(
+                    time.time() - task['processing_started_at'])
+                task['processing_started_at'] = None
 
 
 def cleanup_old_tmp(older_than=24 * 3600):

@@ -120,7 +120,10 @@ async function onReportSelected(file) {
 async function submitReport() {
   if (!reportFile.value || !reportSheet.value || submitting.value) return
   stopPolling()
-  startElapsedTimer()
+  // 报表分步任务的耗时由后端累计，避免暂停和轮询时序造成前端漏计。
+  stopElapsedTimer(false)
+  elapsedSeconds.value = 0
+  elapsedAccumulated = 0
   status.value = 'processing'
   current.value = 0
   total.value = 5
@@ -143,7 +146,6 @@ async function submitReport() {
 
 async function continueReport() {
   if (!taskId.value || status.value !== 'paused') return
-  resumeElapsedTimer()
   status.value = 'processing'
   message.value = '正在继续处理…'
   try {
@@ -290,6 +292,9 @@ async function poll() {
   logs.value = data.logs || []
   reportStep.value = data.step || 0
   reportMaxStep.value = data.max_step || 0
+  if (mode.value === '3' && Number.isFinite(data.elapsed_seconds)) {
+    elapsedSeconds.value = data.elapsed_seconds
+  }
 
   if (data.status === 'done') {
     filename.value = data.filename || ''
