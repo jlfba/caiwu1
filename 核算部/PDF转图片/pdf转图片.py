@@ -544,7 +544,7 @@ def extract_invoice_fields_from_pdf(pdf_path):
 
 
 def _extract_invoice_summary_from_items(items):
-    """提取发票“项目名称”列正下方的第一项内容，绝不取右侧合计字段。"""
+    """提取“项目名称”列中以 * 开头的项目摘要，绝不取右侧合计字段。"""
     lines = _group_detail_lines(items)
     for line_index, line in enumerate(lines):
         header = next((item for item in line['items'] if '项目名称' in item['text']), None)
@@ -559,10 +559,11 @@ def _extract_invoice_summary_from_items(items):
             if candidate_line['cy'] <= line['cy']:
                 continue
             values = [item['text'].strip() for item in candidate_line['items']
-                      if item['cx'] < right_edge
-                      and item['text'].strip()]
+                      if item['cx'] < right_edge and item['text'].strip()]
             text = ' '.join(values).strip()
-            if text and not any(word in text for word in ('合计', '价税', '小写', '大写')):
+            # 该类发票的项目摘要固定以 * 起始；只接受这一明确特征，
+            # 避免把项目名称列中其他文本或合计行写入摘要。
+            if text.startswith('*'):
                 return text
     return '未知'
 
