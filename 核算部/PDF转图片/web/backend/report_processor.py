@@ -6,6 +6,7 @@ import re
 import zipfile
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.writer.excel import ExcelWriter
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -28,7 +29,10 @@ def _atomic_save(workbook, output_path):
     try:
         if os.path.exists(part_path):
             os.remove(part_path)
-        workbook.save(part_path)
+        # openpyxl 默认压缩等级偏重；大表使用快速压缩，显著减少每一步保存等待。
+        with zipfile.ZipFile(part_path, 'w', zipfile.ZIP_DEFLATED,
+                             allowZip64=True, compresslevel=1) as archive:
+            ExcelWriter(workbook, archive).save()
         with zipfile.ZipFile(part_path) as archive:
             if archive.testzip() is not None:
                 raise ValueError('生成的 Excel 文件校验失败')
