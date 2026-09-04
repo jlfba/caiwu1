@@ -292,7 +292,7 @@ async function poll() {
   logs.value = data.logs || []
   reportStep.value = data.step || 0
   reportMaxStep.value = data.max_step || 0
-  if (mode.value === '3' && Number.isFinite(data.elapsed_seconds)) {
+  if (mode.value === '4' && Number.isFinite(data.elapsed_seconds)) {
     elapsedSeconds.value = data.elapsed_seconds
   }
 
