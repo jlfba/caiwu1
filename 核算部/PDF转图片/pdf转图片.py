@@ -544,20 +544,25 @@ def extract_invoice_fields_from_pdf(pdf_path):
 
 
 def _extract_invoice_summary_from_items(items):
-    """提取“项目名称”表头正下方的第一项文本，未找到时返回“未知”。"""
+    """提取发票“项目名称”列正下方的第一项内容，绝不取右侧合计字段。"""
     lines = _group_detail_lines(items)
     for line_index, line in enumerate(lines):
         header = next((item for item in line['items'] if '项目名称' in item['text']), None)
         if header is None:
             continue
+        # “规格型号”是项目名称列右边界；优先用它圈定整列，
+        # 而不是以“项目名称”文字中心作宽松范围，避免把右侧“合计”识别成摘要。
+        spec_header = next((item for item in line['items'] if '规格型号' in item['text']), None)
+        right_edge = (spec_header['cx'] - spec_header.get('w', 0) / 2 - 4
+                      if spec_header else header['cx'] + max(header.get('w', 0) * 4, 220))
         for candidate_line in lines[line_index + 1:]:
             if candidate_line['cy'] <= line['cy']:
                 continue
             values = [item['text'].strip() for item in candidate_line['items']
-                      if abs(item['cx'] - header['cx']) <= max(header.get('w', 0) * 1.5, 180)
+                      if item['cx'] < right_edge
                       and item['text'].strip()]
             text = ' '.join(values).strip()
-            if text and '合计' not in text and '价税' not in text:
+            if text and not any(word in text for word in ('合计', '价税', '小写', '大写')):
                 return text
     return '未知'
 
