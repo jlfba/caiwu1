@@ -2,6 +2,7 @@
 import { ref, computed, watch, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
+import ReceiptTypeSelect from './components/ReceiptTypeSelect.vue'
 import UploadArea from './components/UploadArea.vue'
 import TemplateUpload from './components/TemplateUpload.vue'
 import ReportUpload from './components/ReportUpload.vue'
@@ -11,7 +12,10 @@ import { createTask, createReportTask, continueReportTask, getTask, getWorksheet
 
 const mode = ref('')
 const invType = ref('1')
+const receiptType = ref('')
 const files = ref([])
+const receiptModes = { '谢莉丽': '1', '赵淑华': '2', '邵梅琳': '5' }
+const effectiveMode = computed(() => mode.value === 'receipt' ? receiptModes[receiptType.value] || '' : mode.value)
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
 const startCell = ref('A1') // 收款组起始格
 const templateFile = ref(null) // 收款组可选表格模板
@@ -46,13 +50,12 @@ let elapsedAccumulated = 0
 const steps = computed(() => {
   const list = [
     { key: 'mode', no: 1, label: '选择功能' },
-    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '3' },
+    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '3' || mode.value === 'receipt' },
     { key: 'upload', no: 3, label: '上传 PDF' },
     { key: 'run', no: 4, label: '制作' }
   ]
-  // 收款组少一步发票类型
-  if (mode.value !== '3') list[2].no = 2
-  if (mode.value !== '3') list[3].no = 3
+  if (mode.value !== '3' && mode.value !== 'receipt') list[2].no = 2
+  if (mode.value !== '3' && mode.value !== 'receipt') list[3].no = 3
   let stepNo = 0
   for (const s of list) {
     if (s.visible) s.cur = ++stepNo
@@ -62,7 +65,7 @@ const steps = computed(() => {
 
 const currentStep = computed(() => {
   if (!mode.value) return 1
-  if (mode.value === '3') return 2
+  if (mode.value === '3' || mode.value === 'receipt') return 2
   return 3
 })
 
@@ -72,17 +75,26 @@ const canSubmit = computed(
   () =>
     files.value.length > 0 &&
     mode.value !== '4' &&
+    (mode.value !== 'receipt' || !!effectiveMode.value) &&
     !submitting.value &&
-    (mode.value !== '1' || startCellValid.value) &&
-    (mode.value !== '1' || !templateFile.value || selectedSheet.value)
+    (effectiveMode.value !== '1' || startCellValid.value) &&
+    (effectiveMode.value !== '1' || !templateFile.value || selectedSheet.value)
 )
 
 // 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
 watch(mode, (val, old) => {
   if (val !== old && !submitting.value) {
+    if (val !== 'receipt') receiptType.value = ''
     files.value = []
     clearTemplate()
     clearReportFile()
+  }
+})
+
+watch(receiptType, (val, old) => {
+  if (val && val !== old && !submitting.value) {
+    files.value = []
+    clearTemplate()
   }
 })
 
@@ -257,12 +269,12 @@ async function submit() {
   try {
     const data = await createTask({
       files: files.value,
-      mode: mode.value,
+      mode: effectiveMode.value,
       invType: invType.value,
-      layout: mode.value === '1' ? layoutDir.value : 'v',
-      startCell: mode.value === '1' ? startCell.value : 'A1',
-      template: mode.value === '1' ? templateFile.value : null,
-      sheetName: mode.value === '1' ? selectedSheet.value : ''
+      layout: effectiveMode.value === '1' ? layoutDir.value : 'v',
+      startCell: effectiveMode.value === '1' ? startCell.value : 'A1',
+      template: effectiveMode.value === '1' ? templateFile.value : null,
+      sheetName: effectiveMode.value === '1' ? selectedSheet.value : ''
     })
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
@@ -374,8 +386,8 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 步骤 2：选择发票类型（付款组） -->
-    <section v-if="mode === '3'" class="step">
+    <!-- 步骤 2：选择发票类型 -->
+    <section v-if="mode === '3' || mode === 'receipt'" class="step">
       <span class="step-dot" :class="{ done: false, cur: currentStep === 2 }">
         <svg v-if="currentStep > 2" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
@@ -384,27 +396,28 @@ onUnmounted(() => {
       </span>
       <div class="step-body">
         <h2 class="step-title">选择发票类型</h2>
-        <p class="step-sub">十三种版式，选错会识别不到明细</p>
-        <InvoiceTypeSelect v-model="invType" :disabled="submitting" />
+        <p class="step-sub">{{ mode === 'receipt' ? '选择人员对应的发票类型' : '十三种版式，选错会识别不到明细' }}</p>
+        <ReceiptTypeSelect v-if="mode === 'receipt'" v-model="receiptType" :disabled="submitting" />
+        <InvoiceTypeSelect v-else v-model="invType" :disabled="submitting" />
       </div>
     </section>
       </div>
 
       <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' }">
         <!-- 步骤 3/2：上传 PDF -->
-        <section v-if="mode !== '4'" class="step">
-      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : 2) }">
+        <section v-if="mode !== '4' && mode !== 'receipt' || mode === 'receipt' && effectiveMode" class="step">
+      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' || mode === 'receipt' ? 3 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <template v-else>{{ mode === '3' ? 3 : 2 }}</template>
+        <template v-else>{{ mode === '3' || mode === 'receipt' ? 3 : 2 }}</template>
       </span>
       <div class="step-body">
         <div class="upload-pane">
           <h2 class="step-title">上传 PDF 文件</h2>
-          <p class="step-sub">{{ mode === '5' ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
+          <p class="step-sub">{{ effectiveMode === '5' ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
 
-          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="mode === '5'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="effectiveMode === '5'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
               <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
@@ -423,7 +436,7 @@ onUnmounted(() => {
           </div>
           </UploadArea>
 
-          <div v-if="mode === '1'" class="template-section">
+          <div v-if="effectiveMode === '1'" class="template-section">
           <div class="ts-head">
             <span class="ts-label">插入已有表格（可选）</span>
             <span class="ts-tip">不传模板则自动生成新表格</span>
@@ -453,7 +466,7 @@ onUnmounted(() => {
 
         <div class="action-pane">
 
-        <div v-if="mode === '1'" class="layout-options">
+        <div v-if="effectiveMode === '1'" class="layout-options">
           <div class="ts-head">
             <span class="ts-label">排版位置</span>
             <span class="ts-tip">图片在表格里的排布方式</span>
@@ -496,7 +509,7 @@ onUnmounted(() => {
 
           <div class="make-section">
             <h2 class="step-title">制作</h2>
-            <p class="step-sub">{{ mode === '5' ? '仅提取字段，不生成或插入图片；完成后直接下载表格' : '后端处理完成后，表格会直接从浏览器下载' }}</p>
+            <p class="step-sub">{{ effectiveMode === '5' ? '仅提取字段，不生成或插入图片；完成后直接下载表格' : '后端处理完成后，表格会直接从浏览器下载' }}</p>
 
         <div class="run-area">
           <button
