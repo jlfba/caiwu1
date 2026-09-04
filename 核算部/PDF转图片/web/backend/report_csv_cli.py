@@ -136,8 +136,11 @@ def main():
         current=nxt if os.path.exists(nxt) else current
     print('\n===== 步骤 10/10：导出最终CSV =====')
     detail_output, pivot_output = export_csv_results(current, outdir, work, totals, idx)
-    print('最终明细：' + detail_output)
-    print('透视表：' + pivot_output)
+    final_xlsx = os.path.join(outdir, '无应收明细-最终总表.xlsx')
+    export_xlsx(current, final_xlsx, work, totals, idx)
+    print('最终明细 CSV：' + detail_output)
+    print('透视表 CSV：' + pivot_output)
+    print('最终总表 Excel（含明细和透视表工作表）：' + final_xlsx)
     print('删除记录和中间 CSV 保存在：' + work)
     return 0
 if __name__=='__main__': raise SystemExit(main())
