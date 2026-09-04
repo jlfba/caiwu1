@@ -54,6 +54,16 @@ def _number(value):
         return 0.0
 
 
+def _remove_by_remark(value):
+    """第 5 步备注删除规则：J000 开头、无应收或免费补发，任一命中即删除。"""
+    remark = _text(value)
+    # Excel 备注中常有全角空格、换行或不换行空格，统一移除后再判断。
+    compact = re.sub(r'[\s\u00a0\u3000]+', '', remark)
+    return bool(re.match(r'^J000', compact, re.IGNORECASE)
+                or '无应收' in compact
+                or '免费补发' in compact)
+
+
 def _headers(ws):
     return {_text(cell.value): cell.column for cell in ws[1] if _text(cell.value)}
 
@@ -71,9 +81,7 @@ def _should_keep(values, idx):
     if '华南KA' in _text(values[idx['业务员'] - 1]):
         return False
     remark = _text(values[idx['自定义备注'] - 1])
-    if re.match(r'^J000', remark, re.IGNORECASE):
-        return False
-    if '无应收' in remark or '免费补发' in remark:
+    if _remove_by_remark(remark):
         return False
     if '刘丹整柜' in _text(values[idx['配仓单号'] - 1]):
         return False
@@ -91,9 +99,7 @@ def _keyword_keep(values, idx):
     if '华南KA' in _text(values[idx['业务员'] - 1]):
         return False
     remark = _text(values[idx['自定义备注'] - 1])
-    if re.match(r'^J000', remark, re.IGNORECASE):
-        return False
-    if '无应收' in remark or '免费补发' in remark:
+    if _remove_by_remark(remark):
         return False
     if '刘丹整柜' in _text(values[idx['配仓单号'] - 1]):
         return False
@@ -246,7 +252,7 @@ def process_report_step(input_path, selected_sheet, output_path, step, progress=
                 2: lambda v: bool(_text(v[headers['应收单价']-1])) and _number(v[headers['应收单价']-1]) <= 1,
                 3: lambda v: not any(word in _text(v[headers['客户简称']-1]) for word in EXCLUDED_CUSTOMERS),
                 4: lambda v: '华南KA' not in _text(v[headers['业务员']-1]),
-                5: lambda v: not (re.match(r'^J000', _text(v[headers['自定义备注']-1]), re.I) or '无应收' in _text(v[headers['自定义备注']-1]) or '免费补发' in _text(v[headers['自定义备注']-1])),
+                5: lambda v: not _remove_by_remark(v[headers['自定义备注']-1]),
                 6: lambda v: '刘丹整柜' not in _text(v[headers['配仓单号']-1]),
                 7: lambda v: not ('整柜' in _text(v[headers['销售产品']-1]) and _number(v[headers['应收金额']-1]) > 10000),
             }
@@ -345,7 +351,7 @@ def _process_large_report_step(input_path, selected_sheet, output_path, step, pr
             elif step == 2: keep = bool(_text(values[idx['应收单价']-1])) and _number(values[idx['应收单价']-1]) <= 1
             elif step == 3: keep = not any(word in _text(values[idx['客户简称']-1]) for word in EXCLUDED_CUSTOMERS)
             elif step == 4: keep = '华南KA' not in _text(values[idx['业务员']-1])
-            elif step == 5: keep = not (re.match(r'^J000', _text(values[idx['自定义备注']-1]), re.I) or '无应收' in _text(values[idx['自定义备注']-1]) or '免费补发' in _text(values[idx['自定义备注']-1]))
+            elif step == 5: keep = not _remove_by_remark(values[idx['自定义备注']-1])
             elif step == 6: keep = '刘丹整柜' not in _text(values[idx['配仓单号']-1])
             elif step == 7: keep = not ('整柜' in _text(values[idx['销售产品']-1]) and _number(values[idx['应收金额']-1]) > 10000)
             else: keep = True
