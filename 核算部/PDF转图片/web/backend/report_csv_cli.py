@@ -9,7 +9,7 @@ STEPS = (
     '删除操作状态签入', '筛选应收单价小于等于1', '删除客户简称关键词',
     '删除业务员华南KA', '删除备注J000、无应收、免费补发',
     '删除配仓单号刘丹整柜', '删除整柜且应收金额大于10000',
-    '新增无应收分类', '生成透视表', '导出最终XLSX',
+    '新增无应收分类', '生成透视表', '导出最终CSV',
 )
 
 def text(v): return '' if v is None else str(v).strip()
@@ -69,16 +69,16 @@ def process_step(src, dst, log_path, step, header, idx):
     return kept, removed
 def add_category(src, dst, idx):
     with open(src, newline='', encoding='utf-8-sig') as fi, open(dst, 'w', newline='', encoding='utf-8-sig') as fo:
-        reader=csv.reader(fi); out=csv.writer(fo); h=next(reader); out.writerow(h+['无应收'])
+        reader=csv.reader(fi); out=csv.writer(fo); h=next(reader); h = h + [''] * max(0, 49 - len(h)); h[48] = '无应收&金额异常'; out.writerow(h)
         for v in reader:
-            price=number(v[idx['应收单价']]); amount=number(v[idx['应收金额']]); out.writerow(v+['金额异常' if amount>0 else ('无应收' if price==0 else '')])
+            price=number(v[idx['应收单价']]); amount=number(v[idx['应收金额']]); v = v + [''] * max(0, 49 - len(v)); v[48] = '金额异常' if amount>0 else ('无应收' if price==0 else ''); out.writerow(v)
 def export_xlsx(csv_path, output, log_dir, totals_path, idx):
     wb=Workbook(write_only=True); detail=wb.create_sheet('无应收明细')
     groups={}; totals={}
     with open(csv_path, newline='', encoding='utf-8-sig') as f:
         r=csv.reader(f); h=next(r); detail.append(h)
         for v in r:
-            detail.append(v); org=text(v[idx['客户所属机构']]); cat=text(v[-1]); tracking=text(v[idx['运单号']]);
+            detail.append(v); org=text(v[idx['客户所属机构']]); cat=text(v[48]); tracking=text(v[idx['运单号']]);
             if org: groups.setdefault(org, Counter()); groups[org][cat] += 1
     with open(totals_path, newline='', encoding='utf-8-sig') as f:
         for i,row in enumerate(csv.reader(f)):
@@ -92,6 +92,35 @@ def export_xlsx(csv_path, output, log_dir, totals_path, idx):
             with open(os.path.join(log_dir,name),newline='',encoding='utf-8-sig') as f:
                 for row in csv.reader(f): ws.append(row)
     wb.save(output); wb.close()
+
+def export_csv_results(csv_path, output_dir, log_dir, totals_path, idx):
+    detail_output = os.path.join(output_dir, '无应收明细-最终结果.csv')
+    with open(csv_path, 'rb') as source, open(detail_output, 'wb') as target:
+        target.write(source.read())
+    groups = {}
+    with open(csv_path, newline='', encoding='utf-8-sig') as f:
+        reader = csv.reader(f); header = next(reader)
+        for row in reader:
+            org = text(row[idx['客户所属机构']])
+            tracking = text(row[idx['运单号']])
+            category = text(row[48]) if len(row) > 48 else ''
+            if org and tracking:
+                groups.setdefault(org, Counter())[category] += 1
+    totals = {}
+    with open(totals_path, newline='', encoding='utf-8-sig') as f:
+        for i, row in enumerate(csv.reader(f)):
+            if i and len(row) >= 2:
+                totals[text(row[0])] = int(number(row[1]))
+    cats = [x for x in ('无应收', '金额异常', '') if any(g[x] for g in groups.values())]
+    pivot_output = os.path.join(output_dir, '无应收明细透视表.csv')
+    with open(pivot_output, 'w', newline='', encoding='utf-8-sig') as f:
+        out = csv.writer(f)
+        out.writerow(['客户所属机构'] + [('空白' if not x else x) for x in cats] + ['合计', '总票数', '占比'])
+        for org in sorted(groups):
+            nums = [groups[org][x] for x in cats]
+            total = sum(nums); denominator = totals.get(org, 0)
+            out.writerow([org] + nums + [total, denominator, total / denominator if denominator else 0])
+    return detail_output, pivot_output
 def main():
     p=argparse.ArgumentParser(description='报表组 CSV 高速终端版'); p.add_argument('input',nargs='?'); p.add_argument('-s','--sheet'); p.add_argument('-o','--output-dir'); p.add_argument('--no-pause',action='store_true'); a=p.parse_args()
     source=clean_path(a.input or input('请输入 Excel 文件路径：')); source=os.path.abspath(source)
@@ -105,5 +134,10 @@ def main():
         else: print('完成：透视数据将在最终导出时生成')
         if step < 9 and not a.no_pause and input('按回车继续，输入 q 退出：').strip().lower()=='q': return 0
         current=nxt if os.path.exists(nxt) else current
-    final=os.path.join(outdir,'无应收明细-最终结果.xlsx'); print('\n===== 步骤 10/10：导出最终XLSX ====='); export_xlsx(current,final,work,totals,idx); print('最终文件：'+final); return 0
+    print('\n===== 步骤 10/10：导出最终CSV =====')
+    detail_output, pivot_output = export_csv_results(current, outdir, work, totals, idx)
+    print('最终明细：' + detail_output)
+    print('透视表：' + pivot_output)
+    print('删除记录和中间 CSV 保存在：' + work)
+    return 0
 if __name__=='__main__': raise SystemExit(main())
