@@ -368,7 +368,7 @@ def _payment_extract(items, payment_type):
         amount = _wechat_amount(min(candidates, key=lambda pair: pair[0])[1].get('text', ''))
     else:
         amount = _wechat_amount(text, items)
-    return date_value, time_value, amount
+    return date_value, time_value, amount.lstrip('-\uFF0D\u2013\u2014')
 
 
 def _wechat_pdf_page_items(page):
