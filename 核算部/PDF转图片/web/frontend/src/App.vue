@@ -17,8 +17,11 @@ const receiptPerson = ref('')
 const receiptSubtype = ref('')
 const files = ref([])
 const receiptModes = { '谢莉丽': '1', '赵淑华': '2', '邵梅琳': '5' }
+const paymentLabel = computed(() => receiptSubtype.value === 'alipay' ? '支付宝' : receiptSubtype.value === 'huolala' ? '货拉拉' : '微信')
 const effectiveMode = computed(() => mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice'
   ? receiptModes[receiptPerson.value]
+  : mode.value === 'receipt' && receiptSubtype.value === 'alipay' ? '6'
+  : mode.value === 'receipt' && receiptSubtype.value === 'huolala' ? '6'
   : mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'wechat' ? '6'
   : mode.value === 'receipt' ? '' : mode.value)
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
@@ -201,7 +204,7 @@ function addFiles(list) {
   const seen = new Set(files.value.map((f) => `${f.name}:${f.size}`))
   for (const f of list) {
     const name = f.name.toLowerCase()
-    const allowed = effectiveMode.value === '6'
+    const allowed = ['6', '7', '8'].includes(effectiveMode.value)
       ? ['.pdf', '.png', '.jpg', '.jpeg'].some((ext) => name.endsWith(ext))
       : name.endsWith('.pdf')
     if (!allowed) continue
@@ -293,7 +296,7 @@ async function submit() {
     const data = await createTask({
       files: files.value,
       mode: effectiveMode.value,
-      invType: invType.value,
+      invType: mode.value === 'receipt' ? receiptSubtype.value : invType.value,
       layout: effectiveMode.value === '1' ? layoutDir.value : 'v',
       startCell: effectiveMode.value === '1' ? startCell.value : 'A1',
       template: effectiveMode.value === '1' ? templateFile.value : null,
@@ -452,10 +455,10 @@ onUnmounted(() => {
       </span>
       <div class="step-body">
         <div class="upload-pane">
-          <h2 class="step-title">{{ effectiveMode === '6' ? '上传微信凭证' : '上传 PDF 文件' }}</h2>
-          <p class="step-sub">{{ effectiveMode === '6' ? '支持图片、PDF，也可以直接拖入文件夹' : effectiveMode === '5' ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
+          <h2 class="step-title">{{ effectiveMode === '6' && receiptSubtype !== 'invoice' ? '上传' + paymentLabel + '凭证' : '上传 PDF 文件' }}</h2>
+          <p class="step-sub">{{ effectiveMode === '6' && receiptSubtype !== 'invoice' ? '支持图片、PDF，也可以直接拖入文件夹' : effectiveMode === '5' ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
 
-          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="effectiveMode === '5' || effectiveMode === '6'" :accept="effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'" :file-label="effectiveMode === '6' ? '微信凭证' : 'PDF'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="effectiveMode === '5' || effectiveMode === '6'" :accept="effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'" :file-label="effectiveMode === '6' && receiptSubtype !== 'invoice' ? paymentLabel + '凭证' : 'PDF'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
               <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />

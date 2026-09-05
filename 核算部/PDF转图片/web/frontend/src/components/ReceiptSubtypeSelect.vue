@@ -4,8 +4,8 @@ defineEmits(['update:modelValue'])
 const types = [
   { id: 'invoice', label: '发票识别', ready: true },
   { id: 'wechat', label: '微信', ready: true },
-  { id: 'alipay', label: '支付宝', ready: false },
-  { id: 'huolala', label: '货拉拉', ready: false }
+  { id: 'alipay', label: '支付宝', ready: true },
+  { id: 'huolala', label: '货拉拉', ready: true }
 ]
 </script>
 

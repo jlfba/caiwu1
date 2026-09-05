@@ -343,6 +343,34 @@ def _wechat_extract(items):
     return date_value, time_value, _wechat_amount(text, items)
 
 
+def _payment_extract(items, payment_type):
+    text = _wechat_items_text(items)
+    date_value, time_value = _wechat_date_time(text)
+    date_labels = {'alipay': '\u652f\u4ed8\u65f6\u95f4', 'huolala': '\u652f\u4ed8\u65f6\u95f4', 'wechat': '\u8f6c\u8d26\u65f6\u95f4'}
+    anchor_text = date_labels.get(payment_type, '\u652f\u4ed8\u65f6\u95f4')
+    label = next((item for item in items if anchor_text in item.get('text', '')), None)
+    if label:
+        nearby = [item for item in items if item.get('cx', 0) > label.get('cx', 0) and abs(item.get('cy', 0) - label.get('cy', 0)) < max(30, label.get('h', 12) * 2.5)]
+        near_date, near_time = _wechat_date_time(_wechat_items_text(nearby))
+        if near_date != '未知':
+            date_value, time_value = near_date, near_time
+    amount_anchor = {'alipay': '\u4ea4\u6613\u6210\u529f', 'huolala': '\u8d27\u62c9\u62c9', 'wechat': ''}.get(payment_type, '')
+    anchor = next((item for item in items if amount_anchor and amount_anchor in item.get('text', '')), None)
+    candidates = []
+    for item in items:
+        if not re.search(r'[-\uFF0D\u2013\u2014]\s*\d', item.get('text', '')):
+            continue
+        if anchor and item.get('cy', 0) >= anchor.get('cy', 0):
+            continue
+        distance = abs(item.get('cy', 0) - anchor.get('cy', 0)) if anchor else item.get('cy', 0)
+        candidates.append((distance, item))
+    if candidates:
+        amount = _wechat_amount(min(candidates, key=lambda pair: pair[0])[1].get('text', ''))
+    else:
+        amount = _wechat_amount(text, items)
+    return date_value, time_value, amount
+
+
 def _wechat_pdf_page_items(page):
     words = page.get_text('words') or []
     return [{'text': word[4].strip(), 'cx': (word[0] + word[2]) / 2,
@@ -350,7 +378,7 @@ def _wechat_pdf_page_items(page):
              'h': word[3] - word[1]} for word in words if word[4].strip()]
 
 
-def process_wechat_receipts(file_paths, out_dir, progress=None):
+def process_payment_receipts(file_paths, out_dir, progress=None, payment_type='wechat'):
     """赵淑华微信转账：每张凭证一行，最后一列嵌入原凭证。"""
     from openpyxl import Workbook
     from openpyxl.drawing.image import Image as XLImage
@@ -382,7 +410,7 @@ def process_wechat_receipts(file_paths, out_dir, progress=None):
                         items = _wechat_pdf_page_items(page)
                         if not items:
                             items = tool.ocr_lines(image_path)
-                        date_value, time_value, amount = _wechat_extract(items)
+                        date_value, time_value, amount = _payment_extract(items, payment_type)
                         rows.append([date_value, time_value, amount, image_path])
                 finally:
                     doc.close()
@@ -390,14 +418,14 @@ def process_wechat_receipts(file_paths, out_dir, progress=None):
                 image_path = os.path.join(image_dir, "wechat_%05d%s" % (image_seq, ext))
                 image_seq += 1
                 shutil.copy2(path, image_path)
-                rows.append([*_wechat_extract(tool.ocr_lines(image_path)), image_path])
+                rows.append([*_payment_extract(tool.ocr_lines(image_path), payment_type), image_path])
         except Exception as exc:
             print('微信转账识别失败：%s：%s' % (os.path.basename(path), exc))
         report(file_index, total, '正在识别微信凭证 %d/%d：%s' % (file_index, total, os.path.basename(path)))
 
     if not rows:
         raise RuntimeError('没有识别到微信转账凭证')
-    output = os.path.join(out_dir, '赵淑华微信转账.xlsx')
+    output = os.path.join(out_dir, {'wechat': '赵淑华微信转账.xlsx', 'alipay': '赵淑华支付宝支付.xlsx', 'huolala': '赵淑华货拉拉支付.xlsx'}.get(payment_type, '赵淑华支付凭证.xlsx'))
     wb = Workbook()
     ws = wb.active
     ws.title = '微信转账'
