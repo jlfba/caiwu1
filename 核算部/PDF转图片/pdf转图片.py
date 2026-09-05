@@ -546,6 +546,22 @@ def extract_invoice_fields_from_pdf(pdf_path):
 def _extract_invoice_summary_from_items(items):
     """提取“项目名称”列中以 * 开头的项目摘要，绝不取右侧合计字段。"""
     lines = _group_detail_lines(items)
+
+    def summary_after_marker(text):
+        """从项目星号开始取值，并截断同一 OCR 行里混入的表头。"""
+        marker = re.search(r'[*＊∗✱]', text)
+        if not marker:
+            return '未知'
+        value = text[marker.end():].strip()
+        # 同一视觉行的排序会因 PDF/OCR 坐标而变化：
+        # 既可能是“项目名称 *项目内容”，也可能是“*项目内容 项目名称”。
+        # 后一种必须在表头处截断，不能把“项目名称”写进摘要。
+        for label in ('项目名称', '规格型号', '单位', '数量', '单价', '金额'):
+            pos = value.find(label)
+            if pos >= 0:
+                value = value[:pos].strip()
+        return '*' + value if value else '未知'
+
     for line_index, line in enumerate(lines):
         header = next((item for item in line['items'] if '项目名称' in item['text']), None)
         if header is None:
@@ -560,9 +576,9 @@ def _extract_invoice_summary_from_items(items):
         header_values = [item['text'].strip() for item in line['items']
                          if item['cx'] < right_edge and item['text'].strip()]
         header_text = ' '.join(header_values).strip()
-        marker = re.search(r'[*＊∗✱]', header_text)
-        if marker:
-            return '*' + header_text[marker.end():].strip()
+        summary = summary_after_marker(header_text)
+        if summary != '未知':
+            return summary
         for candidate_line in lines[line_index + 1:]:
             if candidate_line['cy'] <= line['cy']:
                 continue
@@ -572,9 +588,9 @@ def _extract_invoice_summary_from_items(items):
             # OCR 可能把票面半角 * 识别成全角/数学星号，也可能将星号和
             # 项目文字切成相邻文本块。只要项目名称列中出现星号，就从星号
             # 开始保留该项目内容；右侧列已由规格型号边界排除。
-            marker = re.search(r'[*＊∗✱]', text)
-            if marker:
-                return '*' + text[marker.end():].strip()
+            summary = summary_after_marker(text)
+            if summary != '未知':
+                return summary
     return '未知'
 
 
