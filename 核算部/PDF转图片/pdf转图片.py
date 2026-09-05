@@ -555,6 +555,14 @@ def _extract_invoice_summary_from_items(items):
         spec_header = next((item for item in line['items'] if '规格型号' in item['text']), None)
         right_edge = (spec_header['cx'] - spec_header.get('w', 0) / 2 - 4
                       if spec_header else header['cx'] + max(header.get('w', 0) * 4, 220))
+        # 有些票面的“项目名称”表头和第一条项目内容在 OCR 后会合并成同一行。
+        # 先在表头所在行、且位于项目名称列边界内查找星号，避免漏掉这种版式。
+        header_values = [item['text'].strip() for item in line['items']
+                         if item['cx'] < right_edge and item['text'].strip()]
+        header_text = ' '.join(header_values).strip()
+        marker = re.search(r'[*＊∗✱]', header_text)
+        if marker:
+            return '*' + header_text[marker.end():].strip()
         for candidate_line in lines[line_index + 1:]:
             if candidate_line['cy'] <= line['cy']:
                 continue
