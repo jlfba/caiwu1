@@ -245,16 +245,25 @@ def process_shao_meilin(pdf_paths, out_dir, progress=None):
     total = max(len(pdf_paths), 1)
     rows = []
     image_dir = os.path.join(out_dir, 'ocr_cache')
+    image_seq = 0
 
     for index, pdf in enumerate(pdf_paths, 1):
         if not os.path.isfile(pdf):
             report(index, total, '跳过不存在的文件：%s' % os.path.basename(pdf))
             continue
         try:
-            # 有文字层的页直接读取原始文字，不因缺字段或摘要而转图；
-            # 只有完全没有文字层的扫描页才临时单页 OCR。
-            native = tool.extract_invoice_fields_with_summary_from_pdf(
-                pdf, ocr_dir=image_dir)
+            native = tool.extract_invoice_fields_with_summary_from_pdf(pdf)
+            # 文字层不完整时，用渲染图补齐字段和摘要。
+            needs_ocr = any(not tool._invoice_fields_complete(fields)
+                            or fields.get('summary', '未知') == '未知'
+                            for fields in native)
+            if needs_ocr:
+                images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
+                completed = []
+                for page_index, image in enumerate(images):
+                    initial = native[page_index] if page_index < len(native) else None
+                    completed.append(tool.extract_invoice_fields_with_summary(image, initial))
+                native = completed
             for fields in native:
                 rows.append([fields.get('date', '未知'),
                              fields.get('buyer', '未知'),

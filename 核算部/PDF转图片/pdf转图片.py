@@ -448,19 +448,12 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
                 break
 
     # 3. 购买方 / 销售方名称
-    def compact_cn(text):
-        return re.sub(r'\s+', '', str(text or ''))
-
-    buyer_label = r'购\s*买(?:方)?\s*(?:名\s*称)?\s*[：:]'
-    seller_label = r'销\s*售(?:方)?\s*(?:名\s*称)?\s*[：:]'
-    name_items = [it for it in ordered
-                  if re.search(r'名\s*称\s*[：:]', it['text'])
-                  or re.search(r'(?:购\s*买|销\s*售)', it['text'])]
+    name_items = [it for it in ordered if re.search(r'名称\s*[：:]', it['text'])]
 
     # 同一行并排的购买方/销售方名称需要优先拆分，避免整行错填到一列。
     for line in _group_detail_lines(ordered):
-        compact = compact_cn(line['text'])
-        both = re.search(buyer_label + r'(.*?)' + seller_label + r'(.+)$', compact)
+        compact = re.sub(r'\s+', ' ', line['text']).strip()
+        both = re.search(r'(?:购|购买方)\s*名称\s*[：:]\s*(.*?)\s*(?:销|销售方)\s*名称\s*[：:]\s*(.+)$', compact)
         if both:
             if fields['buyer'] == '未知':
                 fields['buyer'] = both.group(1).strip()
@@ -469,8 +462,7 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
             break
 
     def find_name(header_kw):
-        headers = [it for it in ordered
-                   if header_kw in it['text'] or header_kw in compact_cn(it['text'])]
+        headers = [it for it in ordered if header_kw in it['text']]
         if not headers:
             headers = [c for c in _merge_vertical_headers(ordered)
                        if header_kw in c['text']]
@@ -479,10 +471,7 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
         header = min(headers, key=lambda it: it.get('aspect', 99))
         best = min(name_items, key=lambda it: abs(it['cx'] - header['cx'])
                    + abs(it['cy'] - header['cy']))
-        normalized = compact_cn(best['text'])
-        m = re.search(r'(?:购\s*买|销\s*售)(?:方)?(?:名\s*称)?[：:](.+)', normalized)
-        if not m:
-            m = re.search(r'名\s*称[：:](.+)', normalized)
+        m = re.search(r'名称\s*[：:]\s*(.+)', best['text'])
         return m.group(1).strip() if m and m.group(1).strip() else '未知'
 
     if fields['buyer'] == '未知':
@@ -496,18 +485,14 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     def clean_party_values():
         buyer = str(fields.get('buyer', '未知') or '未知').strip()
         seller = str(fields.get('seller', '未知') or '未知').strip()
-        seller_mark = r'销\s*售(?:方)?\s*(?:名\s*称)?\s*[：:]?'
-        buyer_mark = r'购\s*买(?:方)?\s*(?:名\s*称)?\s*[：:]?'
+        seller_mark = r'(?:销|销售方)\s*名称\s*[：:]?'
+        buyer_mark = r'(?:购|购买方)\s*名称\s*[：:]?'
         if re.search(seller_mark, buyer):
             buyer = re.split(seller_mark, buyer, maxsplit=1)[0].strip()
         if re.search(buyer_mark, seller):
             seller = re.split(buyer_mark, seller, maxsplit=1)[-1].strip()
         buyer = re.sub(r'^' + buyer_mark, '', buyer).strip()
         seller = re.sub(r'^' + seller_mark, '', seller).strip()
-        # OCR/PDF 文字层可能把同一行后面的业务字段拼到销售方名称后。
-        for stop in ('下载次数', '下载次數', '校验码', '校驗碼', '机器编号', '机器编号'):
-            seller = seller.split(stop, 1)[0].strip()
-            buyer = buyer.split(stop, 1)[0].strip()
         fields['buyer'] = buyer or '未知'
         fields['seller'] = seller or '未知'
 
