@@ -543,6 +543,20 @@ def extract_invoice_fields_from_pdf(pdf_path):
     return results
 
 
+def _normalize_invoice_summary(summary):
+    """规范摘要中的生活服务类别，修正 OCR 漏字或错字。"""
+    text = str(summary or '').strip()
+    if not text or text == '未知':
+        return text or '未知'
+    compact = re.sub(r'\s+', '', text)
+    match = re.search(r'生活服务', compact)
+    if not match:
+        return text
+    # 统一为发票常见项目类别，保留后续的第二个星号和具体项目。
+    suffix = compact[match.end():]
+    return '*生产生活服务' + suffix
+
+
 def _extract_invoice_summary_from_items(items):
     """提取“项目名称”列中以 * 开头的项目摘要，绝不取右侧合计字段。"""
     lines = _group_detail_lines(items)
@@ -560,7 +574,7 @@ def _extract_invoice_summary_from_items(items):
             pos = value.find(label)
             if pos >= 0:
                 value = value[:pos].strip()
-        return '*' + value if value else '未知'
+        return _normalize_invoice_summary('*' + value) if value else '未知'
 
     for line_index, line in enumerate(lines):
         header = next((item for item in line['items'] if '项目名称' in item['text']), None)
@@ -704,7 +718,8 @@ def extract_invoice_fields(image_path, initial_fields=None):
 
 def extract_invoice_fields_with_summary(image_path, initial_fields=None):
     """识别中文发票字段和摘要；仅供不保存图片的邵梅琳流程调用。"""
-    initial_summary = (initial_fields or {}).get('summary', '未知')
+    initial_summary = _normalize_invoice_summary(
+        (initial_fields or {}).get('summary', '未知'))
     fields = extract_invoice_fields(image_path, initial_fields)
     # 原始 PDF 文字层通常比 OCR 更准确；已有摘要时禁止 OCR 覆盖，
     # 避免“生产”被 OCR 误识别成“生性产”。
@@ -714,7 +729,8 @@ def extract_invoice_fields_with_summary(image_path, initial_fields=None):
     if fields.get('summary', '未知') != '未知':
         return fields
     try:
-        fields['summary'] = _extract_invoice_summary_from_items(ocr_lines(image_path))
+        fields['summary'] = _normalize_invoice_summary(
+            _extract_invoice_summary_from_items(ocr_lines(image_path)))
     except Exception as exc:
         print('    摘要 OCR 失败：%s' % exc)
         fields['summary'] = '未知'
