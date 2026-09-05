@@ -132,20 +132,37 @@ def export_combined_csv(csv_path, output, totals_path, idx, progress=None):
     groups = {}
     with open(output, 'w', newline='', encoding='utf-8-sig') as out_file:
         out = csv.writer(out_file)
+        # 先扫描明细并汇总透视数据，最终 CSV 将透视表放在最上方。
         with open(csv_path, newline='', encoding='utf-8-sig') as source:
-            reader = csv.reader(source)
-            header = next(reader)
-            out.writerow(['【无应收明细】'])
-            out.writerow(header)
+            reader = csv.reader(source); header = next(reader)
+            detail_rows = []
             for row_number, row in enumerate(reader, 1):
-                out.writerow(row)
+                detail_rows.append(row)
                 org = text(row[idx['客户所属机构']])
                 tracking = text(row[idx['运单号']])
                 category = text(row[48]) if len(row) > 48 else ''
                 if org and tracking:
                     groups.setdefault(org, Counter())[category] += 1
                 if progress and row_number % 100000 == 0:
-                    progress(1, 1, f'步骤 10/10：CSV 明细已写入 {row_number} 行')
+                    progress(1, 1, f'步骤 10/10：正在汇总透视数据，已读取 {row_number} 行')
+        totals = {}
+        with open(totals_path, newline='', encoding='utf-8-sig') as totals_file:
+            for index, row in enumerate(csv.reader(totals_file)):
+                if index and len(row) >= 2:
+                    totals[text(row[0])] = int(number(row[1]))
+        categories = [x for x in ('无应收', '金额异常', '')
+                      if any(group[x] for group in groups.values())]
+        out.writerow(['【无应收明细透视表】'])
+        out.writerow(['客户所属机构'] + [('空白' if not x else x) for x in categories]
+                     + ['合计', '总票数', '占比'])
+        for org in sorted(groups):
+            counts = [groups[org][key] for key in categories]
+            total = sum(counts); denominator = totals.get(org, 0)
+            ratio = total / denominator if denominator else 0
+            out.writerow([org] + counts + [total, denominator, f'{ratio:.2%}'])
+        out.writerow([]); out.writerow([]); out.writerow(['【无应收明细】']); out.writerow(header)
+        out.writerows(detail_rows)
+        return output
         totals = {}
         with open(totals_path, newline='', encoding='utf-8-sig') as totals_file:
             for index, row in enumerate(csv.reader(totals_file)):
