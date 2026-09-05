@@ -127,6 +127,45 @@ def export_csv_results(csv_path, output_dir, log_dir, totals_path, idx):
             out.writerow([org] + nums + [total, denominator, total / denominator if denominator else 0])
     return detail_output, pivot_output
 
+def export_combined_csv(csv_path, output, totals_path, idx, progress=None):
+    """将明细和透视结果串联到一个 CSV，用于最终速度/体积测试。"""
+    groups = {}
+    with open(output, 'w', newline='', encoding='utf-8-sig') as out_file:
+        out = csv.writer(out_file)
+        with open(csv_path, newline='', encoding='utf-8-sig') as source:
+            reader = csv.reader(source)
+            header = next(reader)
+            out.writerow(['【无应收明细】'])
+            out.writerow(header)
+            for row_number, row in enumerate(reader, 1):
+                out.writerow(row)
+                org = text(row[idx['客户所属机构']])
+                tracking = text(row[idx['运单号']])
+                category = text(row[48]) if len(row) > 48 else ''
+                if org and tracking:
+                    groups.setdefault(org, Counter())[category] += 1
+                if progress and row_number % 100000 == 0:
+                    progress(1, 1, f'步骤 10/10：CSV 明细已写入 {row_number} 行')
+        totals = {}
+        with open(totals_path, newline='', encoding='utf-8-sig') as totals_file:
+            for index, row in enumerate(csv.reader(totals_file)):
+                if index and len(row) >= 2:
+                    totals[text(row[0])] = int(number(row[1]))
+        categories = [x for x in ('无应收', '金额异常', '')
+                      if any(group[x] for group in groups.values())]
+        out.writerow([])
+        out.writerow([])
+        out.writerow(['【无应收明细透视表】'])
+        out.writerow(['客户所属机构'] + [('空白' if not x else x) for x in categories]
+                     + ['合计', '总票数', '占比'])
+        for org in sorted(groups):
+            counts = [groups[org][key] for key in categories]
+            total = sum(counts)
+            denominator = totals.get(org, 0)
+            out.writerow([org] + counts + [total, denominator,
+                                           total / denominator if denominator else 0])
+    return output
+
 def run_web_csv_step(task, step, progress=None):
     """网页报表任务的 CSV 分步入口；只在最后一步导出 XLSX。"""
     work = task['csv_work']
@@ -160,9 +199,10 @@ def run_web_csv_step(task, step, progress=None):
                 target.write(source.read())
         return nxt, '无应收明细-步骤9.csv'
     final = os.path.join(task['out_dir'], '无应收明细-最终总表.xlsx')
-    export_xlsx(current, final, work, os.path.join(work, 'totals.csv'), task['csv_idx'], progress)
-    if progress: progress(1, 1, '步骤 10/10：已生成包含明细和透视表的最终总表')
-    return final, os.path.basename(final)
+    final_csv = os.path.join(task['out_dir'], '无应收明细-最终测试.csv')
+    export_combined_csv(current, final_csv, os.path.join(work, 'totals.csv'), task['csv_idx'], progress)
+    if progress: progress(1, 1, '步骤 10/10：已生成包含明细和透视结果的最终 CSV')
+    return final_csv, os.path.basename(final_csv)
 def main():
     p=argparse.ArgumentParser(description='报表组 CSV 高速终端版'); p.add_argument('input',nargs='?'); p.add_argument('-s','--sheet'); p.add_argument('-o','--output-dir'); p.add_argument('--no-pause',action='store_true'); a=p.parse_args()
     source=clean_path(a.input or input('请输入 Excel 文件路径：')); source=os.path.abspath(source)
