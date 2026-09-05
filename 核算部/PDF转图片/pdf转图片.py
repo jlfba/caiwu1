@@ -453,7 +453,15 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     # 同一行并排的购买方/销售方名称需要优先拆分，避免整行错填到一列。
     for line in _group_detail_lines(ordered):
         compact = re.sub(r'\s+', ' ', line['text']).strip()
-        both = re.search(r'(?:购|购买方)\s*名称\s*[：:]\s*(.*?)\s*(?:销|销售方)\s*名称\s*[：:]\s*(.+)$', compact)
+        # 兼容“购买方：… 销 售 名称：…”这类标签缺字/被空格拆开的票面。
+        compact_labels = re.sub(r'\s+', '', line['text'])
+        both = re.search(
+            r'购(?:买)?方?(?:名称)?[：:](.*?)销(?:售)?方?(?:名称)?[：:](.+)$',
+            compact_labels)
+        if not both:
+            both = re.search(
+                r'(?:购|购买方)\s*名称\s*[：:]\s*(.*?)\s*(?:销|销售方)\s*名称\s*[：:]\s*(.+)$',
+                compact)
         if both:
             if fields['buyer'] == '未知':
                 fields['buyer'] = both.group(1).strip()
@@ -485,14 +493,20 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     def clean_party_values():
         buyer = str(fields.get('buyer', '未知') or '未知').strip()
         seller = str(fields.get('seller', '未知') or '未知').strip()
-        seller_mark = r'(?:销|销售方)\s*名称\s*[：:]?'
-        buyer_mark = r'(?:购|购买方)\s*名称\s*[：:]?'
+        # 兼容黑体发票文字层把标签拆成“销 售 名称”等形式。
+        seller_mark = r'(?:销\s*售)(?:方)?\s*(?:名\s*称)?\s*[：:]?'
+        buyer_mark = r'(?:购\s*买)(?:方)?\s*(?:名\s*称)?\s*[：:]?'
         if re.search(seller_mark, buyer):
             buyer = re.split(seller_mark, buyer, maxsplit=1)[0].strip()
         if re.search(buyer_mark, seller):
             seller = re.split(buyer_mark, seller, maxsplit=1)[-1].strip()
         buyer = re.sub(r'^' + buyer_mark, '', buyer).strip()
         seller = re.sub(r'^' + seller_mark, '', seller).strip()
+        # 销售方后面可能继续拼入票面上的下载/校验/机器信息，只保留公司名称。
+        trailing_mark = (r'(?:下载\s*次(?:数|數)|校验\s*码|校驗\s*碼|'
+                         r'机器\s*编号|密码\s*区)')
+        seller = re.split(trailing_mark, seller, maxsplit=1)[0].strip()
+        buyer = re.split(trailing_mark, buyer, maxsplit=1)[0].strip()
         fields['buyer'] = buyer or '未知'
         fields['seller'] = seller or '未知'
 
