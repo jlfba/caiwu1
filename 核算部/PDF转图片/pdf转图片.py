@@ -704,7 +704,13 @@ def extract_invoice_fields(image_path, initial_fields=None):
 
 def extract_invoice_fields_with_summary(image_path, initial_fields=None):
     """识别中文发票字段和摘要；仅供不保存图片的邵梅琳流程调用。"""
+    initial_summary = (initial_fields or {}).get('summary', '未知')
     fields = extract_invoice_fields(image_path, initial_fields)
+    # 原始 PDF 文字层通常比 OCR 更准确；已有摘要时禁止 OCR 覆盖，
+    # 避免“生产”被 OCR 误识别成“生性产”。
+    if initial_summary != '未知':
+        fields['summary'] = initial_summary
+        return fields
     if fields.get('summary', '未知') != '未知':
         return fields
     try:
