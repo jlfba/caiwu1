@@ -20,10 +20,8 @@ const receiptModes = { '谢莉丽': '1', '赵淑华': '2', '邵梅琳': '5' }
 const paymentLabel = computed(() => receiptSubtype.value === 'alipay' ? '支付宝' : receiptSubtype.value === 'huolala' ? '货拉拉' : '微信')
 const effectiveMode = computed(() => mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice'
   ? receiptModes[receiptPerson.value]
-  : mode.value === 'receipt' && receiptSubtype.value === 'alipay' ? '6'
-  : mode.value === 'receipt' && receiptSubtype.value === 'huolala' ? '6'
-  : mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'wechat' ? '6'
-  : mode.value === 'receipt' ? '' : mode.value)
+  : mode.value === 'receipt' && ['wechat', 'alipay', 'huolala'].includes(receiptSubtype.value) ? '6'
+  : mode.value === 'receipt' ? (receiptModes[receiptPerson.value] || '') : mode.value)
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
 const startCell = ref('A1') // 收款组起始格
 const templateFile = ref(null) // 收款组可选表格模板
