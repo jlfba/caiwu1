@@ -40,7 +40,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     saved = []
     for i, (orig_name, data) in enumerate(pdf_files, 1):
         safe = processor.sanitize_filename(orig_name)
-        if not safe.lower().endswith('.pdf'):
+        if not safe.lower().endswith(('.pdf', '.png', '.jpg', '.jpeg')):
             safe += '.pdf'
         path = os.path.join(in_dir, '%03d_%s' % (i, safe))
         with open(path, 'wb') as f:
@@ -189,6 +189,8 @@ def _worker():
                 result = processor.process_receipt_mode2(pdfs, task['out_dir'], progress)
             elif mode == '5':
                 result = processor.process_shao_meilin(pdfs, task['out_dir'], progress)
+            elif mode == '6':
+                result = processor.process_wechat_receipts(pdfs, task['out_dir'], progress)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = result_name if mode == '4step' else os.path.basename(result)

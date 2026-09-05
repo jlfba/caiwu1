@@ -4,7 +4,9 @@ import { ref, watch } from 'vue'
 const props = defineProps({
   disabled: Boolean,
   count: { type: Number, default: 0 },
-  allowDirectories: Boolean
+  allowDirectories: Boolean,
+  accept: { type: String, default: '.pdf' },
+  fileLabel: { type: String, default: 'PDF' }
 })
 const emit = defineEmits(['add', 'remove', 'clear'])
 
@@ -93,7 +95,7 @@ function onDragLeave() {
       <input
         ref="fileInput"
         type="file"
-        accept=".pdf"
+        :accept="accept"
         multiple
         hidden
         @change="onPick"
@@ -114,14 +116,14 @@ function onDragLeave() {
           <path d="M12 29h16" stroke="var(--border-strong)" stroke-width="2.4" stroke-linecap="round" />
         </svg>
       </span>
-      <p class="dz-title">{{ allowDirectories ? '拖入 PDF 或文件夹' : '拖入 PDF，或点击选择文件' }}</p>
-      <p class="dz-hint">{{ allowDirectories ? '支持文件夹递归识别 · 仅接受 .pdf' : '支持多选 · 仅接受 .pdf' }}</p>
+      <p class="dz-title">{{ allowDirectories ? '拖入 ' + fileLabel + ' 或文件夹' : '拖入 ' + fileLabel + '，或点击选择文件' }}</p>
+      <p class="dz-hint">{{ allowDirectories ? '支持文件夹递归识别 · 仅接受 ' + accept : '支持多选 · 仅接受 ' + accept }}</p>
       <button v-if="allowDirectories" class="folder-picker" type="button" :disabled="disabled" @click.stop="openFolderPicker">选择文件夹</button>
     </div>
 
     <div v-if="$slots.default && count" class="file-list-shell">
       <div class="file-list-head">
-        <span class="file-count">已选 {{ count }} 个 PDF</span>
+        <span class="file-count">已选 {{ count }} 个{{ fileLabel }}</span>
         <button
           class="file-list-toggle"
           type="button"

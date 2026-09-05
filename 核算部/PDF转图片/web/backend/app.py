@@ -60,8 +60,8 @@ async def create_task(files: list[UploadFile] = File(...),
                       start_cell: str = Form('A1'),
                       template: UploadFile = File(None),
                       sheet_name: str = Form('')):
-    if mode not in ('1', '2', '3', '4', '5'):
-        return JSONResponse({'detail': 'mode 无效，应为 1、2、3、4 或 5'}, status_code=400)
+    if mode not in ('1', '2', '3', '4', '5', '6'):
+        return JSONResponse({'detail': 'mode 无效，应为 1、2、3、4、5 或 6'}, status_code=400)
     if mode == '3' and inv_type not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'):
         return JSONResponse({'detail': 'inv_type 无效，应为 1-13'}, status_code=400)
     if layout not in ('v', 'h'):
@@ -71,20 +71,21 @@ async def create_task(files: list[UploadFile] = File(...),
     if template and not (template.filename or '').lower().endswith(('.xlsx', '.xlsm')):
         return JSONResponse({'detail': '表格模板仅支持 .xlsx / .xlsm'}, status_code=400)
 
-    pdfs = []
+    uploads = []
+    allowed_extensions = ('.pdf',) if mode != '6' else ('.pdf', '.png', '.jpg', '.jpeg')
     for f in files:
-        if not (f.filename or '').lower().endswith('.pdf'):
-            return JSONResponse({'detail': '仅支持 .pdf 文件：%s' % f.filename},
+        if not (f.filename or '').lower().endswith(allowed_extensions):
+            return JSONResponse({'detail': '文件类型不支持：%s' % f.filename},
                                 status_code=400)
-        pdfs.append((f.filename or 'file.pdf', await f.read()))
+        uploads.append((f.filename or 'file.pdf', await f.read()))
 
     tpl = None
     if template:
         tpl = (template.filename or 'template.xlsx', await template.read())
 
-    task_id = tasks.create_task(pdfs, mode, inv_type, layout, start_cell,
+    task_id = tasks.create_task(uploads, mode, inv_type, layout, start_cell,
                                 template=tpl, sheet_name=sheet_name.strip())
-    return {'task_id': task_id, 'files': len(pdfs)}
+    return {'task_id': task_id, 'files': len(uploads)}
 
 
 @app.post('/api/report-tasks')

@@ -5,6 +5,8 @@
 后续对控制台版逻辑的修改会自动同步到网页版。
 """
 import os
+import re
+import datetime
 import shutil
 import sys
 
@@ -288,6 +290,137 @@ def process_shao_meilin(pdf_paths, out_dir, progress=None):
     if os.path.isdir(image_dir):
         shutil.rmtree(image_dir)
     report(total, total, '正在生成 Excel')
+    return output
+
+
+def _wechat_items_text(items):
+    return ' '.join(str(item.get('text', '')) for item in items if item.get('text'))
+
+
+def _wechat_date_time(text):
+    compact = re.sub(r'\s+', '', text or '')
+    date_pattern = r'(20\d{2})[\u5e74./-](\d{1,2})[\u6708./-](\d{1,2})\u65e5?[^0-9]{0,8}(\d{1,2})[:\uFF1A](\d{2})[:\uFF1A](\d{2})'
+    compact_pattern = r'(20\d{2})(\d{2})(\d{2})[^0-9]{0,8}(\d{1,2})[:\uFF1A](\d{2})[:\uFF1A](\d{2})'
+    patterns = (
+        date_pattern,
+        compact_pattern,
+        r'(20\d{2})[年./-](\d{1,2})[月./-](\d{1,2})日?[^0-9]{0,8}(\d{1,2})[:：](\d{2})[:：](\d{2})',
+        r'(20\d{2})(\d{2})(\d{2})[^0-9]{0,8}(\d{1,2})[:：](\d{2})[:：](\d{2})',
+    )
+    for pattern in patterns:
+        match = re.search(pattern, compact)
+        if match:
+            year, month, day, hour, minute, second = map(int, match.groups())
+            try:
+                date_value = datetime.date(year, month, day).isoformat()
+                return date_value, "%02d:%02d:%02d" % (hour, minute, second)
+            except ValueError:
+                pass
+    return '未知', '未知'
+
+
+def _wechat_amount(text, items=None):
+    source = text or ''
+    if items:
+        top = [item for item in items if item.get('cy', 999999) <= max(240, max(x.get('cy', 0) for x in items) * 0.35)]
+        source = _wechat_items_text(top) + ' ' + source
+    match = re.search(r'[-\uFF0D\u2013\u2014]\s*(\d[\d,]*(?:\.\d{1,2})?)', source)
+    if not match:
+        return '未知'
+    return '-' + match.group(1).replace(',', '')
+
+
+def _wechat_extract(items):
+    text = _wechat_items_text(items)
+    date_value, time_value = _wechat_date_time(text)
+    transfer_label = '\u8f6c\u8d26\u65f6\u95f4'
+    label = next((item for item in items if transfer_label in item.get('text', '')), None)
+    if label:
+        nearby = [item for item in items if item.get('cx', 0) > label.get('cx', 0) and abs(item.get('cy', 0) - label.get('cy', 0)) < max(30, label.get('h', 12) * 2.5)]
+        near_date, near_time = _wechat_date_time(_wechat_items_text(nearby))
+        if near_date != '未知':
+            date_value, time_value = near_date, near_time
+    return date_value, time_value, _wechat_amount(text, items)
+
+
+def _wechat_pdf_page_items(page):
+    words = page.get_text('words') or []
+    return [{'text': word[4].strip(), 'cx': (word[0] + word[2]) / 2,
+             'cy': (word[1] + word[3]) / 2, 'w': word[2] - word[0],
+             'h': word[3] - word[1]} for word in words if word[4].strip()]
+
+
+def process_wechat_receipts(file_paths, out_dir, progress=None):
+    """赵淑华微信转账：每张凭证一行，最后一列嵌入原凭证。"""
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.utils import get_column_letter
+
+    def report(cur, total, message):
+        if progress:
+            progress(cur, total, message)
+
+    image_dir = os.path.join(out_dir, 'wechat_images')
+    os.makedirs(image_dir, exist_ok=True)
+    rows = []
+    total = max(len(file_paths), 1)
+    image_seq = 0
+    for file_index, path in enumerate(file_paths, 1):
+        if not os.path.isfile(path):
+            continue
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext == '.pdf':
+                doc = tool.fitz.open(path)
+                try:
+                    for page_index, page in enumerate(doc):
+                        image_path = os.path.join(image_dir, "wechat_%05d.png" % image_seq)
+                        image_seq += 1
+                        pix = page.get_pixmap(matrix=tool.fitz.Matrix(2, 2), alpha=False)
+                        pix.save(image_path)
+                        items = _wechat_pdf_page_items(page)
+                        if not items:
+                            items = tool.ocr_lines(image_path)
+                        date_value, time_value, amount = _wechat_extract(items)
+                        rows.append([date_value, time_value, amount, image_path])
+                finally:
+                    doc.close()
+            else:
+                image_path = os.path.join(image_dir, "wechat_%05d%s" % (image_seq, ext))
+                image_seq += 1
+                shutil.copy2(path, image_path)
+                rows.append([*_wechat_extract(tool.ocr_lines(image_path)), image_path])
+        except Exception as exc:
+            print('微信转账识别失败：%s：%s' % (os.path.basename(path), exc))
+        report(file_index, total, '正在识别微信凭证 %d/%d：%s' % (file_index, total, os.path.basename(path)))
+
+    if not rows:
+        raise RuntimeError('没有识别到微信转账凭证')
+    output = os.path.join(out_dir, '赵淑华微信转账.xlsx')
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '微信转账'
+    ws.append(['转账时间年', '转账时间', '金额', '附图'])
+    for row_index, row in enumerate(rows, 2):
+        ws.append(row[:3] + [''])
+        image = XLImage(row[3])
+        ratio = min(320 / image.width, 190 / image.height)
+        image.width = int(image.width * ratio)
+        image.height = int(image.height * ratio)
+        ws.add_image(image, 'D%d' % row_index)
+        ws.row_dimensions[row_index].height = 150
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for index, width in enumerate((16, 14, 16, 46), 1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical='top', wrap_text=True)
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    wb.save(output)
+    report(total, total, '微信转账 Excel 已生成')
     return output
 
 
