@@ -453,7 +453,7 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     # 同一行并排的购买方/销售方名称需要优先拆分，避免整行错填到一列。
     for line in _group_detail_lines(ordered):
         compact = re.sub(r'\s+', ' ', line['text']).strip()
-        both = re.search(r'(?:购|购买方)\s*名称\s*[：:]\s*(.+?)\s+(?:销|销售方)\s*名称\s*[：:]\s*(.+)$', compact)
+        both = re.search(r'(?:购|购买方)\s*名称\s*[：:]\s*(.*?)\s*(?:销|销售方)\s*名称\s*[：:]\s*(.+)$', compact)
         if both:
             if fields['buyer'] == '未知':
                 fields['buyer'] = both.group(1).strip()
@@ -485,8 +485,8 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
     def clean_party_values():
         buyer = str(fields.get('buyer', '未知') or '未知').strip()
         seller = str(fields.get('seller', '未知') or '未知').strip()
-        seller_mark = r'(?:销|销售方)s*名称s*[：:]?'
-        buyer_mark = r'(?:购|购买方)s*名称s*[：:]?'
+        seller_mark = r'(?:销|销售方)\s*名称\s*[：:]?'
+        buyer_mark = r'(?:购|购买方)\s*名称\s*[：:]?'
         if re.search(seller_mark, buyer):
             buyer = re.split(seller_mark, buyer, maxsplit=1)[0].strip()
         if re.search(buyer_mark, seller):
