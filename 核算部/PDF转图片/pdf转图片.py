@@ -498,6 +498,8 @@ def _extract_invoice_fields_from_items(items, initial_fields=None):
         buyer_mark = r'(?:购\s*买)(?:方)?\s*(?:名\s*称)?\s*[：:]?'
         if re.search(seller_mark, buyer):
             buyer = re.split(seller_mark, buyer, maxsplit=1)[0].strip()
+        # OCR 可能漏掉“销”，只剩“售 名称/售名称”；这仍是销售方栏的起点。
+        buyer = re.split(r'售\s*名称\s*[：:]', buyer, maxsplit=1)[0].strip()
         if re.search(buyer_mark, seller):
             seller = re.split(buyer_mark, seller, maxsplit=1)[-1].strip()
         buyer = re.sub(r'^' + buyer_mark, '', buyer).strip()
