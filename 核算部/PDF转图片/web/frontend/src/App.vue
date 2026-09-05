@@ -3,6 +3,7 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import ReceiptTypeSelect from './components/ReceiptTypeSelect.vue'
+import ReceiptSubtypeSelect from './components/ReceiptSubtypeSelect.vue'
 import UploadArea from './components/UploadArea.vue'
 import TemplateUpload from './components/TemplateUpload.vue'
 import ReportUpload from './components/ReportUpload.vue'
@@ -12,10 +13,13 @@ import { createTask, createReportTask, continueReportTask, getTask, getWorksheet
 
 const mode = ref('')
 const invType = ref('1')
-const receiptType = ref('')
+const receiptPerson = ref('')
+const receiptSubtype = ref('')
 const files = ref([])
 const receiptModes = { '谢莉丽': '1', '赵淑华': '2', '邵梅琳': '5' }
-const effectiveMode = computed(() => mode.value === 'receipt' ? receiptModes[receiptType.value] || '' : mode.value)
+const effectiveMode = computed(() => mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice'
+  ? receiptModes[receiptPerson.value]
+  : mode.value === 'receipt' ? '' : mode.value)
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
 const startCell = ref('A1') // 收款组起始格
 const templateFile = ref(null) // 收款组可选表格模板
@@ -50,12 +54,14 @@ let elapsedAccumulated = 0
 const steps = computed(() => {
   const list = [
     { key: 'mode', no: 1, label: '选择功能' },
-    { key: 'type', no: 2, label: '发票类型', visible: mode.value === '3' || mode.value === 'receipt' },
+    { key: 'type', no: 2, label: '选择人员', visible: mode.value === '3' || mode.value === 'receipt' },
+    { key: 'subtype', no: 3, label: '发票类型', visible: mode.value === 'receipt' },
     { key: 'upload', no: 3, label: '上传 PDF' },
     { key: 'run', no: 4, label: '制作' }
   ]
   if (mode.value !== '3' && mode.value !== 'receipt') list[2].no = 2
   if (mode.value !== '3' && mode.value !== 'receipt') list[3].no = 3
+  if (mode.value === 'receipt') list[3].no = 4
   let stepNo = 0
   for (const s of list) {
     if (s.visible) s.cur = ++stepNo
@@ -65,6 +71,7 @@ const steps = computed(() => {
 
 const currentStep = computed(() => {
   if (!mode.value) return 1
+  if (mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value) return 3
   if (mode.value === '3' || mode.value === 'receipt') return 2
   return 3
 })
@@ -84,15 +91,26 @@ const canSubmit = computed(
 // 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
 watch(mode, (val, old) => {
   if (val !== old && !submitting.value) {
-    if (val !== 'receipt') receiptType.value = ''
+    if (val !== 'receipt') {
+      receiptPerson.value = ''
+      receiptSubtype.value = ''
+    }
     files.value = []
     clearTemplate()
     clearReportFile()
   }
 })
 
-watch(receiptType, (val, old) => {
+watch(receiptPerson, (val, old) => {
   if (val && val !== old && !submitting.value) {
+    files.value = []
+    clearTemplate()
+    receiptSubtype.value = ''
+  }
+})
+
+watch(receiptSubtype, (val, old) => {
+  if (val !== old && !submitting.value) {
     files.value = []
     clearTemplate()
   }
@@ -386,7 +404,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <!-- 步骤 2：选择发票类型 -->
+    <!-- 步骤 2：选择人员/付款组发票类型 -->
     <section v-if="mode === '3' || mode === 'receipt'" class="step">
       <span class="step-dot" :class="{ done: false, cur: currentStep === 2 }">
         <svg v-if="currentStep > 2" viewBox="0 0 16 16" width="14" height="14" fill="none">
@@ -395,22 +413,37 @@ onUnmounted(() => {
         <template v-else>2</template>
       </span>
       <div class="step-body">
-        <h2 class="step-title">选择发票类型</h2>
-        <p class="step-sub">{{ mode === 'receipt' ? '选择人员对应的发票类型' : '十三种版式，选错会识别不到明细' }}</p>
-        <ReceiptTypeSelect v-if="mode === 'receipt'" v-model="receiptType" :disabled="submitting" />
+        <h2 class="step-title">{{ mode === 'receipt' ? '选择人员' : '选择发票类型' }}</h2>
+        <p class="step-sub">{{ mode === 'receipt' ? '先选择收款组人员' : '十三种版式，选错会识别不到明细' }}</p>
+        <ReceiptTypeSelect v-if="mode === 'receipt'" v-model="receiptPerson" :disabled="submitting" />
         <InvoiceTypeSelect v-else v-model="invType" :disabled="submitting" />
+      </div>
+    </section>
+
+    <!-- 步骤 3：选择收款组人员对应类型 -->
+    <section v-if="mode === 'receipt' && receiptPerson === '赵淑华'" class="step">
+      <span class="step-dot" :class="{ done: receiptSubtype, cur: currentStep === 3 }">
+        <svg v-if="receiptSubtype" viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <template v-else>3</template>
+      </span>
+      <div class="step-body">
+        <h2 class="step-title">选择发票类型</h2>
+        <p class="step-sub">{{ receiptPerson }}的处理类型</p>
+        <ReceiptSubtypeSelect v-model="receiptSubtype" :disabled="submitting" />
       </div>
     </section>
       </div>
 
       <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' }">
         <!-- 步骤 3/2：上传 PDF -->
-        <section v-if="mode !== '4' && mode !== 'receipt' || mode === 'receipt' && effectiveMode" class="step">
-      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' || mode === 'receipt' ? 3 : 2) }">
+        <section v-if="mode !== '4' && (mode !== 'receipt' || effectiveMode)" class="step">
+      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : mode === 'receipt' ? 4 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
-        <template v-else>{{ mode === '3' || mode === 'receipt' ? 3 : 2 }}</template>
+        <template v-else>{{ mode === '3' ? 3 : mode === 'receipt' ? 4 : 2 }}</template>
       </span>
       <div class="step-body">
         <div class="upload-pane">
