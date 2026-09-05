@@ -594,16 +594,32 @@ def _extract_invoice_summary_from_items(items):
     return '未知'
 
 
-def extract_invoice_fields_with_summary_from_pdf(pdf_path):
-    """逐页提取收款组字段及项目名称下方摘要，文字层优先。"""
+def extract_invoice_fields_with_summary_from_pdf(pdf_path, ocr_dir=None):
+    """逐页提取邵梅琳字段；有文字层时绝不 OCR，仅扫描页单页 OCR。"""
     results = []
     doc = fitz.open(pdf_path)
     try:
-        for page in doc:
+        for page_no, page in enumerate(doc, 1):
             items = pdf_native_items(pdf_path, page)
+            used_ocr = not items
+            if not items:
+                # 只有完全没有文字层的扫描页才转图；同一页 OCR 一次后，
+                # 五个基础字段和摘要共用同一批带坐标文本。
+                target_dir = ocr_dir or os.path.dirname(pdf_path)
+                os.makedirs(target_dir, exist_ok=True)
+                image_path = os.path.join(
+                    target_dir, '.receipt_ocr_%s_%d.png' % (os.getpid(), page_no))
+                zoom = RENDER_DPI / 72.0
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                try:
+                    pix.save(image_path)
+                    items = ocr_lines(image_path)
+                finally:
+                    if os.path.isfile(image_path):
+                        os.remove(image_path)
             fields = _extract_invoice_fields_from_items(items)
             fields['summary'] = _extract_invoice_summary_from_items(items)
-            fields['_method'] = 'native' if _invoice_fields_complete(fields) else 'native-partial'
+            fields['_method'] = 'scan-ocr' if used_ocr else 'native'
             results.append(fields)
     finally:
         doc.close()
