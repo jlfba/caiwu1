@@ -27,6 +27,7 @@ _FRONT_DIST = os.path.normpath(os.path.join(
 _XLSX_MEDIA = ('application/vnd.openxmlformats-officedocument.'
                'spreadsheetml.sheet')
 _CSV_MEDIA = 'text/csv; charset=utf-8'
+_ZIP_MEDIA = 'application/zip'
 
 
 @app.post('/api/worksheets')
@@ -131,7 +132,12 @@ def download(task_id: str):
     path = tasks.download_path(task_id)
     if not path:
         return JSONResponse({'detail': '结果不存在或任务未完成'}, status_code=404)
-    media_type = _CSV_MEDIA if path.lower().endswith('.csv') else _XLSX_MEDIA
+    if path.lower().endswith('.csv'):
+        media_type = _CSV_MEDIA
+    elif path.lower().endswith('.zip'):
+        media_type = _ZIP_MEDIA
+    else:
+        media_type = _XLSX_MEDIA
     return FileResponse(path, filename=os.path.basename(path),
                         media_type=media_type)
 
