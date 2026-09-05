@@ -422,7 +422,6 @@ onUnmounted(() => {
       </span>
       <div class="step-body">
         <h2 class="step-title">{{ mode === 'receipt' ? '选择人员' : '选择发票类型' }}</h2>
-        <p class="step-sub">{{ mode === 'receipt' ? '先选择收款组人员' : '十三种版式，选错会识别不到明细' }}</p>
         <ReceiptTypeSelect v-if="mode === 'receipt'" v-model="receiptPerson" :disabled="submitting" />
         <InvoiceTypeSelect v-else v-model="invType" :disabled="submitting" />
       </div>
@@ -438,7 +437,6 @@ onUnmounted(() => {
       </span>
       <div class="step-body">
         <h2 class="step-title">选择发票类型</h2>
-        <p class="step-sub">{{ receiptPerson }}的处理类型</p>
         <ReceiptSubtypeSelect v-model="receiptSubtype" :disabled="submitting" />
       </div>
     </section>
