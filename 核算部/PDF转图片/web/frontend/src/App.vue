@@ -428,7 +428,7 @@ onUnmounted(() => {
     </section>
 
     <!-- 步骤 3：选择收款组人员对应类型 -->
-    <section v-if="mode === 'receipt' && receiptPerson === '赵淑华'" class="step">
+    <section v-if="mode === 'receipt' && (receiptPerson === '赵淑华' || receiptPerson === '邵梅琳')" class="step">
       <span class="step-dot" :class="{ done: receiptSubtype, cur: currentStep === 3 }">
         <svg v-if="receiptSubtype" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
