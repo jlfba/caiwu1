@@ -21,6 +21,8 @@ const paymentLabel = computed(() => receiptSubtype.value === 'alipay' ? '支付�
 const effectiveMode = computed(() => mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice'
   ? receiptModes[receiptPerson.value]
   : mode.value === 'receipt' && ['wechat', 'alipay', 'huolala'].includes(receiptSubtype.value) ? '6'
+ : mode.value === 'receipt' && receiptSubtype.value === 'ordinary_invoice' ? '9'
+  : mode.value === 'receipt' && receiptSubtype.value === 'ordinary_invoice' ? '9'
   : mode.value === 'receipt' ? (receiptModes[receiptPerson.value] || '') : mode.value)
 const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
 const startCell = ref('A1') // 收款组起始格
@@ -435,7 +437,7 @@ onUnmounted(() => {
       </span>
       <div class="step-body">
         <h2 class="step-title">选择发票类型</h2>
-        <ReceiptSubtypeSelect v-model="receiptSubtype" :disabled="submitting" />
+        <ReceiptSubtypeSelect v-model="receiptSubtype" :person="receiptPerson" :disabled="submitting" />
       </div>
     </section>
       </div>

@@ -297,6 +297,77 @@ def _wechat_items_text(items):
     return ' '.join(str(item.get('text', '')) for item in items if item.get('text'))
 
 
+def _ordinary_service_from_items(items):
+    lines = tool._group_detail_lines(items)
+    labels = ("\u8d27\u7269\u6216\u5e94\u7a0e\u52b3\u52a1", "\u670d\u52a1\u540d\u79f0")
+    stops = ("\u5408\u8ba1", "\u4ef7\u7a0e\u5408\u8ba1", "\u5907\u6ce8", "\u6536\u6b3e\u4eba", "\u5f00\u7968\u4eba")
+    for i, line in enumerate(lines):
+        text = re.sub(r"\s+", "", line.get("text", ""))
+        if not any(label in text for label in labels):
+            continue
+        header_items = line.get("items", [])
+        anchor = next((item for item in header_items if any(label in item.get("text", "") for label in labels)), None)
+        left = anchor.get("cx", 0) - anchor.get("w", 0) / 2 if anchor else 0
+        right = max((item.get("cx", 0) for item in header_items), default=left + 260) + 80
+        values = []
+        for candidate in lines[i + 1:]:
+            value_text = re.sub(r"\s+", "", candidate.get("text", ""))
+            if any(stop in value_text for stop in stops):
+                break
+            selected = [item.get("text", "").strip() for item in candidate.get("items", []) if left - 12 <= item.get("cx", 0) < right and item.get("text", "").strip()]
+            if selected:
+                values.append(" ".join(selected))
+        if values:
+            return "\n".join(values).strip()
+    flat = sorted(items, key=lambda item: (item.get("cy", 0), item.get("cx", 0)))
+    label_words = ("\u8d27\u7269\u6216\u5e94\u7a0e\u52b3\u52a1", "\u670d\u52a1\u540d\u79f0")
+    stop_words = ("\u5408\u8ba1", "\u4ef7\u7a0e\u5408\u8ba1", "\u5907\u6ce8", "\u6536\u6b3e\u4eba", "\u5f00\u7968\u4eba")
+    header = next((item for item in flat if any(word in item.get("text", "") for word in label_words)), None)
+    if header:
+        header_y = header.get("cy", 0)
+        later = [item for item in flat if item.get("cy", 0) > header_y + max(3, header.get("h", 10))]
+        stop_y = next((item.get("cy", 0) for item in later if any(word in item.get("text", "") for word in stop_words)), float("inf"))
+        values = [item.get("text", "").strip() for item in later if item.get("cy", 0) < stop_y and item.get("cx", 0) <= header.get("cx", 0) + max(140, header.get("w", 0) / 2) and item.get("text", "").strip()]
+        if values:
+            return " \n".join(values).strip()
+    return "\u672a\u77e5"
+
+def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
+    def report(cur, total, message):
+        if progress:
+            progress(cur, total, message)
+    total = max(len(pdf_paths), 1)
+    rows = []
+    for index, pdf in enumerate(pdf_paths, 1):
+        try:
+            native = tool.extract_invoice_fields_from_pdf(pdf)
+            doc = tool.fitz.open(pdf)
+            try:
+                for page_index, page in enumerate(doc):
+                    fields = native[page_index] if page_index < len(native) else {}
+                    items = tool.pdf_native_items(pdf, page)
+                    if not items or not tool._invoice_fields_complete(fields):
+                        cache_dir = os.path.join(out_dir, "ordinary_cache")
+                        os.makedirs(cache_dir, exist_ok=True)
+                        image_path = os.path.join(cache_dir, "page_%05d.png" % len(rows))
+                        pix = page.get_pixmap(matrix=tool.fitz.Matrix(tool.RENDER_DPI / 72.0, tool.RENDER_DPI / 72.0), alpha=False)
+                        pix.save(image_path)
+                        ocr_items = tool.ocr_lines(image_path)
+                        fields = tool._merge_invoice_fields(fields, tool._extract_invoice_fields_from_items(ocr_items, fields))
+                        items = items + ocr_items if items else ocr_items
+                    rows.append([fields.get("no", "\u672a\u77e5"), fields.get("date", "\u672a\u77e5"), fields.get("buyer", "\u672a\u77e5"), fields.get("seller", "\u672a\u77e5"), _ordinary_service_from_items(items), fields.get("amount", "\u672a\u77e5")])
+            finally:
+                doc.close()
+        except Exception as exc:
+            print("ordinary invoice recognition failed: %s: %s" % (os.path.basename(pdf), exc))
+        report(index, total, "ordinary invoice %d/%d: %s" % (index, total, os.path.basename(pdf)))
+    if not rows:
+        raise RuntimeError("\u6ca1\u6709\u8bc6\u522b\u5230\u666e\u901a\u53d1\u7968\u4fe1\u606f")
+    output = os.path.join(out_dir, "\u9093\u6885\u7433\u666e\u901a\u53d1\u7968\u8bc6\u522b\u8868.xlsx")
+    tool.write_detail_excel(rows, output, headers=("\u53d1\u7968\u53f7\u7801", "\u5f00\u7968\u65e5\u671f", "\u8d2d\u4e70\u65b9\u540d\u79f0", "\u9500\u552e\u65b9\u540d\u79f0", "\u8d27\u7269\u6216\u5e94\u7a0e\u52b3\u52a1\u3001\u670d\u52a1\u540d\u79f0", "\u603b\u91d1\u989d"), numeric_cols={5}, text_cols={0}, widths=[22, 16, 34, 34, 52, 16])
+    return output
+
+
 def _wechat_date_time(text):
     compact = re.sub(r'\s+', '', text or '')
     date_pattern = r'(20\d{2})[\u5e74./-](\d{1,2})[\u6708./-](\d{1,2})\u65e5?[^0-9]{0,8}(\d{1,2})[:\uFF1A](\d{2})[:\uFF1A](\d{2})'

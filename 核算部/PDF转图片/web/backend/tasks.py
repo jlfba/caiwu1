@@ -191,6 +191,8 @@ def _worker():
                 result = processor.process_shao_meilin(pdfs, task['out_dir'], progress)
             elif mode == '6':
                 result = processor.process_payment_receipts(pdfs, task['out_dir'], progress, inv_type)
+            elif mode == '9':
+                result = processor.process_shao_ordinary_invoice(pdfs, task['out_dir'], progress)
             else:
                 result = processor.process_mode2(pdfs, task['out_dir'], inv_type, progress)
             task['filename'] = result_name if mode == '4step' else os.path.basename(result)

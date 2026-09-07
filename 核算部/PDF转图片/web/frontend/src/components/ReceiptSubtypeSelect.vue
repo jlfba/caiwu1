@@ -1,5 +1,6 @@
 <script setup>
-defineProps({ modelValue: String, disabled: Boolean })
+import { computed } from 'vue'
+const props = defineProps({ modelValue: String, disabled: Boolean, person: String })
 defineEmits(['update:modelValue'])
 const types = [
   { id: 'invoice', label: '发票识别', ready: true },
@@ -7,12 +8,13 @@ const types = [
   { id: 'alipay', label: '支付宝', ready: true },
   { id: 'huolala', label: '货拉拉', ready: true }
 ]
+const visibleTypes = computed(() => props.person === '邵梅琳' ? [types[0], { id: 'ordinary_invoice', label: '普通发票识别', ready: true }] : types)
 </script>
 
 <template>
   <div class="receipt-subtype" role="radiogroup" aria-label="选择发票类型">
     <button
-      v-for="type in types"
+    v-for="type in visibleTypes"
       :key="type.id"
       class="type-option"
       :class="{ active: modelValue === type.id, unavailable: !type.ready }"
