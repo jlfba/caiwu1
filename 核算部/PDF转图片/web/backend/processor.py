@@ -308,13 +308,27 @@ def _ordinary_service_from_items(items):
         header_items = line.get("items", [])
         anchor = next((item for item in header_items if any(label in item.get("text", "") for label in labels)), None)
         left = anchor.get("cx", 0) - anchor.get("w", 0) / 2 if anchor else 0
-        right = max((item.get("cx", 0) for item in header_items), default=left + 260) + 80
+        # 右边界取服务名称右侧最近表头的左边缘，避免把后面的规格、数量、金额等列带入。
+        right = left + 260
+        if anchor:
+            right_headers = []
+            for candidate in lines:
+                if abs(candidate.get("cy", 0) - line.get("cy", 0)) > max(4, anchor.get("h", 10) * 1.5):
+                    continue
+                for item in candidate.get("items", []):
+                    candidate_text = re.sub(r"\s+", "", item.get("text", ""))
+                    if item.get("cx", 0) <= anchor.get("cx", 0):
+                        continue
+                    if candidate_text in ("规格型号", "单位", "数量", "单价", "金额", "税率", "税额"):
+                        right_headers.append(item.get("cx", 0) - item.get("w", 0) / 2)
+            if right_headers:
+                right = min(right_headers)
         values = []
         for candidate in lines[i + 1:]:
             value_text = re.sub(r"\s+", "", candidate.get("text", ""))
             if any(stop in value_text for stop in stops):
                 break
-            selected = [item.get("text", "").strip() for item in candidate.get("items", []) if left - 12 <= item.get("cx", 0) < right and item.get("text", "").strip()]
+            selected = [item.get("text", "").strip() for item in candidate.get("items", []) if left - 8 <= item.get("cx", 0) < right and item.get("text", "").strip()]
             if selected:
                 values.append(" ".join(selected))
         if values:
@@ -332,6 +346,82 @@ def _ordinary_service_from_items(items):
             return " \n".join(values).strip()
     return "\u672a\u77e5"
 
+
+def _ordinary_party_fields(items, fields):
+    """普通发票专用的购买方/销售方坐标兜底。
+
+    这类电子发票的“购买方/销售方”常被 PDF 文字层拆成左侧竖排单字，
+    而公司名称是右侧独立文字块。按明细表头把页面分成上下两个区域，
+    分别在“名称：”所在横带右侧取公司名，避免两栏互相串值。
+    """
+    if not items:
+        return fields
+    ordered = sorted(items, key=lambda item: (item.get("cy", 0), item.get("cx", 0)))
+    compact = lambda value: re.sub(r"\s+", "", str(value or ""))
+    header = next((item for item in ordered
+                   if "货物或应税劳务" in compact(item.get("text"))
+                   or "服务名称" in compact(item.get("text"))), None)
+    header_y = header.get("cy", 0) if header else 180
+
+    def find_name(y_min, y_max):
+        name_labels = [item for item in ordered
+                       if "名称" in compact(item.get("text"))
+                       and y_min <= item.get("cy", 0) <= y_max]
+        # PDF 文字层经常把“名称：”拆成“名”和“称：”两个条目；
+        # 用视觉行重新合并后再找标签，避免因此漏掉公司名称。
+        if not name_labels:
+            for line in tool._group_detail_lines(ordered):
+                if "名称" in compact(line.get("text", "")) and y_min <= line.get("cy", 0) <= y_max:
+                    name_labels = [item for item in line.get("items", [])
+                                   if "称" in compact(item.get("text", ""))]
+                    if name_labels:
+                        break
+        if not name_labels:
+            return "未知"
+        label = min(name_labels, key=lambda item: abs(item.get("cy", 0) -
+                                                       (y_min + y_max) / 2))
+        candidates = []
+        for item in ordered:
+            text = str(item.get("text", "")).strip()
+            if not text or item is label:
+                continue
+            if not (y_min <= item.get("cy", 0) <= y_max):
+                continue
+            if item.get("cx", 0) <= label.get("cx", 0) + 12:
+                continue
+            if compact(text) in ("纳税人识别号：", "纳税人识别号:", "地址、电话：", "地址、电话:",
+                                 "电子支付标识：", "电子支付标识:"):
+                continue
+            if re.fullmatch(r"[0-9A-Za-z]+", compact(text)):
+                continue
+            candidates.append(item)
+        if not candidates:
+            # 标签和值在同一视觉行时，直接取标签右侧第一个非标签文字块。
+            for line in tool._group_detail_lines(ordered):
+                if abs(line.get("cy", 0) - label.get("cy", 0)) > 14:
+                    continue
+                right_items = [item for item in line.get("items", [])
+                               if item.get("cx", 0) > label.get("cx", 0) + 12
+                               and str(item.get("text", "")).strip()]
+                right_items = [item for item in right_items
+                               if compact(item.get("text")) not in ("名称", "名称：", "名称:")]
+                if right_items:
+                    return " ".join(item.get("text", "").strip() for item in right_items)
+            return "未知"
+        # 同一横带优先；公司名通常是该带中最靠左、最长的非标签文字块。
+        same_band = [item for item in candidates
+                     if abs(item.get("cy", 0) - label.get("cy", 0)) <= 14]
+        pool = same_band or candidates
+        pool.sort(key=lambda item: (abs(item.get("cy", 0) - label.get("cy", 0)),
+                                   item.get("cx", 0), -len(str(item.get("text", "")))))
+        return str(pool[0].get("text", "")).strip() or "未知"
+
+    if fields.get("buyer", "未知") == "未知":
+        fields["buyer"] = find_name(0, header_y - 8)
+    if fields.get("seller", "未知") == "未知":
+        fields["seller"] = find_name(header_y + 90, max(item.get("cy", 0) for item in ordered) + 10)
+    return fields
+
 def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
     def report(cur, total, message):
         if progress:
@@ -346,6 +436,7 @@ def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
                 for page_index, page in enumerate(doc):
                     fields = native[page_index] if page_index < len(native) else {}
                     items = tool.pdf_native_items(pdf, page)
+                    summary_items = items
                     if not items or not tool._invoice_fields_complete(fields):
                         cache_dir = os.path.join(out_dir, "ordinary_cache")
                         os.makedirs(cache_dir, exist_ok=True)
@@ -354,8 +445,10 @@ def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
                         pix.save(image_path)
                         ocr_items = tool.ocr_lines(image_path)
                         fields = tool._merge_invoice_fields(fields, tool._extract_invoice_fields_from_items(ocr_items, fields))
-                        items = items + ocr_items if items else ocr_items
-                    rows.append([fields.get("no", "\u672a\u77e5"), fields.get("date", "\u672a\u77e5"), fields.get("buyer", "\u672a\u77e5"), fields.get("seller", "\u672a\u77e5"), _ordinary_service_from_items(items), fields.get("amount", "\u672a\u77e5")])
+                        if not summary_items:
+                            summary_items = ocr_items
+                    fields = _ordinary_party_fields(items, fields)
+                    rows.append([fields.get("no", "\u672a\u77e5"), fields.get("date", "\u672a\u77e5"), fields.get("buyer", "\u672a\u77e5"), fields.get("seller", "\u672a\u77e5"), _ordinary_service_from_items(summary_items), fields.get("amount", "\u672a\u77e5")])
             finally:
                 doc.close()
         except Exception as exc:
