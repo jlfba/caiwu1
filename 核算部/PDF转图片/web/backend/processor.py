@@ -47,6 +47,25 @@ def _blank_workbook(path):
     wb.save(path)
 
 
+def _fast_invoice_fields_from_pdf(pdf_path):
+    """读取 PDF 原生文字和坐标，供需要保留图片的流程快速识别字段。"""
+    results = []
+    doc = tool.fitz.open(pdf_path)
+    try:
+        for page in doc:
+            items = tool.pdf_native_items(pdf_path, page)
+            fields = tool._extract_invoice_fields_from_items(items)
+            # 普通电子发票常见的竖排购买方/销售方和金额布局，
+            # 使用已经验证过的坐标规则补齐通用解析漏掉的字段。
+            fields = tool._merge_invoice_fields(fields, _ordinary_native_fields(items))
+            fields = _ordinary_party_fields(items, fields)
+            fields['_method'] = 'native' if tool._invoice_fields_complete(fields) else 'native-partial'
+            results.append(fields)
+    finally:
+        doc.close()
+    return results
+
+
 def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1',
                   template_path=None, sheet_name=''):
     """收款组：PDF 转图片 + OCR 识别重命名 + 生成含图 Excel。
@@ -91,7 +110,7 @@ def process_mode1(pdf_paths, out_dir, progress=None, layout='v', start_cell='A1'
     for pdf in pdf_paths:
         try:
             try:
-                pdf_fields = tool.extract_invoice_fields_from_pdf(pdf)
+                pdf_fields = _fast_invoice_fields_from_pdf(pdf)
             except Exception as e:
                 pdf_fields = []
                 report(pages_done, total_units,
@@ -181,7 +200,7 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
             report(index, total, '跳过不存在的文件：%s' % os.path.basename(pdf))
             continue
         try:
-            fields_list = tool.extract_invoice_fields_from_pdf(pdf)
+            fields_list = _fast_invoice_fields_from_pdf(pdf)
             # 模式 2 最后一列需要发票原图，因此每一页都渲染；
             # 文字层缺字段时再复用渲染图执行 OCR 兜底。
             images, image_seq = tool.pdf_to_images(pdf, image_dir, start_index=image_seq)
