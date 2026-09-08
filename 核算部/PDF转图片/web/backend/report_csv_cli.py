@@ -271,7 +271,7 @@ def run_web_csv_step(task, step, progress=None):
         return nxt, f"{REPORT_PROFILES[profile]['detail']}-步骤{step}.csv"
     category_step = 7 if profile == 'no_salesperson_cost' else 8
     if step == category_step:
-        nxt = os.path.join(work, 'step8.csv'); add_category(current, nxt, task['csv_idx'], profile)
+        nxt = os.path.join(work, f'step{step}.csv'); add_category(current, nxt, task['csv_idx'], profile)
         if progress: progress(1, 1, f'步骤 {step}/10：已新增分类列')
         return nxt, f"{REPORT_PROFILES[profile]['detail']}-步骤{step}.csv"
     pivot_step = 8 if profile == 'no_salesperson_cost' else 9
