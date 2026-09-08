@@ -254,8 +254,28 @@ def process_shao_meilin(pdf_paths, out_dir, progress=None):
             report(index, total, '跳过不存在的文件：%s' % os.path.basename(pdf))
             continue
         try:
-            native = tool.extract_invoice_fields_with_summary_from_pdf(pdf)
-            # 文字层不完整时，用渲染图补齐字段和摘要。
+            # 普通电子发票优先走一次 PDF 原生文字层；字段和“*”摘要都能从
+            # 坐标文字中取得时，直接完成，不再因为摘要字段未被通用规则识别
+            # 而重复转图、启动 OCR。
+            native = []
+            doc = tool.fitz.open(pdf)
+            try:
+                for page in doc:
+                    items = tool.pdf_native_items(pdf, page)
+                    fields = tool._extract_invoice_fields_from_items(items)
+                    fields = tool._merge_invoice_fields(fields, _ordinary_native_fields(items))
+                    summary = tool._normalize_invoice_summary(
+                        tool._extract_invoice_summary_from_items(items))
+                    # 这类票的表头可能是“货物或应税劳务、服务名称”，
+                    # 通用摘要规则只认“项目名称”，因此用坐标列规则补齐。
+                    if summary == '未知':
+                        summary = _ordinary_service_from_items(items)
+                    fields['summary'] = summary
+                    native.append(fields)
+            finally:
+                doc.close()
+
+            # 原生文字层缺失或字段不完整时，才用 OCR 兜底。
             needs_ocr = any(not tool._invoice_fields_complete(fields)
                             or fields.get('summary', '未知') == '未知'
                             for fields in native)
