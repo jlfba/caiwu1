@@ -91,13 +91,16 @@ async def create_task(files: list[UploadFile] = File(...),
 
 @app.post('/api/report-tasks')
 async def create_report_task(file: UploadFile = File(...),
-                             sheet_name: str = Form(...)):
+                             sheet_name: str = Form(...),
+                             report_profile: str = Form('no_receivable')):
     filename = file.filename or 'report.xlsx'
     if not filename.lower().endswith(('.xlsx', '.xlsm')):
         return JSONResponse({'detail': '报表组仅支持 .xlsx / .xlsm 文件'}, status_code=400)
     if not sheet_name.strip():
         return JSONResponse({'detail': '请选择要处理的工作表'}, status_code=400)
-    task_id = tasks.create_report_task(filename, await file.read(), sheet_name.strip())
+    if report_profile not in ('no_receivable', 'no_salesperson_cost'):
+        return JSONResponse({'detail': '报表处理类型无效'}, status_code=400)
+    task_id = tasks.create_report_task(filename, await file.read(), sheet_name.strip(), report_profile)
     return {'task_id': task_id}
 
 

@@ -77,7 +77,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_report_task(filename, data, sheet_name):
+def create_report_task(filename, data, sheet_name, report_profile='no_receivable'):
     """创建报表组 Excel 处理任务。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
@@ -89,10 +89,11 @@ def create_report_task(filename, data, sheet_name):
     input_path = os.path.join(in_dir, safe)
     with open(input_path, 'wb') as file:
         file.write(data)
+    max_step = 9 if report_profile == 'no_salesperson_cost' else 10
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
-        'status': 'pending', 'current': 0, 'total': 10, 'step': 1, 'max_step': 10,
-        'input_path': input_path, 'sheet_name': sheet_name,
+        'status': 'pending', 'current': 0, 'total': max_step, 'step': 1, 'max_step': max_step,
+        'input_path': input_path, 'sheet_name': sheet_name, 'report_profile': report_profile,
         'source_path': input_path, 'csv_work': os.path.join(out_dir, 'csv_work'),
         'result_path': '', 'web_auto': True,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],

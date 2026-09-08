@@ -8,6 +8,7 @@ const props = defineProps({
   message: { type: String, default: '' },
   elapsedSeconds: { type: Number, default: -1 },
   logs: { type: Array, default: () => [] }
+  ,reportProfile: { type: String, default: 'no_receivable' }
 })
 
 const terminalBody = ref(null)
@@ -29,7 +30,7 @@ const percent = computed(() => {
   return Math.min(100, Math.round((props.current / props.total) * 100))
 })
 
-const reportStages = [
+const noReceivableStages = [
   '删除操作状态为签入的数据',
   '保留应收单价小于 1',
   '删除客户简称关键词',
@@ -41,8 +42,20 @@ const reportStages = [
   '生成无应收明细透视表',
   '清理临时删除记录'
 ]
+const noSalespersonCostStages = [
+  '保留业务成本单价小于 1',
+  '删除操作状态为签入的数据',
+  '删除客户简称关键词',
+  '删除业务员华南KA',
+  '删除备注J000、无应收、免费补发',
+  '删除整柜且应收金额大于10000',
+  '新增无业务员成本分类',
+  '生成无业务员成本明细透视表',
+  '整理步骤 CSV 并导出最终结果'
+]
+const reportStages = computed(() => props.reportProfile === 'no_salesperson_cost' ? noSalespersonCostStages : noReceivableStages)
 
-const isReportFlow = computed(() => props.total === reportStages.length)
+const isReportFlow = computed(() => props.total >= 9)
 
 function stageState(index) {
   if (props.current > index + 1) return 'done'

@@ -61,10 +61,11 @@ async function getWorksheets(file, onProgress) {
   })
 }
 
-async function createReportTask(file, sheetName) {
+async function createReportTask(file, sheetName, reportProfile = 'no_receivable') {
   const fd = new FormData()
   fd.append('file', file, file.name)
   fd.append('sheet_name', sheetName)
+  fd.append('report_profile', reportProfile)
   const res = await fetch('/api/report-tasks', { method: 'POST', body: fd })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.detail || '创建报表任务失败')
