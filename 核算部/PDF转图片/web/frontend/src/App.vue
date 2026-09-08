@@ -31,7 +31,7 @@ const sheets = ref([]) // 模板的工作表列表
 const selectedSheet = ref('') // 选中的工作表
 const sheetError = ref('')
 const reportFile = ref(null)
-const reportProfile = ref('no_receivable')
+const reportProfile = ref('bundle')
 const reportSheets = ref([])
 const reportSheet = ref('')
 const reportError = ref('')
@@ -173,7 +173,7 @@ async function submitReport() {
   filename.value = ''
   logs.value = []
   try {
-    const data = await createReportTask(reportFile.value, reportSheet.value, reportProfile.value)
+    const data = await createReportTask(reportFile.value, reportSheet.value, 'bundle')
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -617,12 +617,8 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="report-action-pane">
-              <div class="report-kind-toggle" role="radiogroup" aria-label="选择报表处理类型">
-                <button type="button" :class="{ on: reportProfile === 'no_receivable' }" @click="selectReportProfile('no_receivable')">无应收明细</button>
-                <button type="button" :class="{ on: reportProfile === 'no_salesperson_cost' }" @click="selectReportProfile('no_salesperson_cost')">无业务员成本明细</button>
-              </div>
-              <h2 class="step-title">生成{{ reportProfile === 'no_salesperson_cost' ? '无业务员成本明细' : '无应收明细' }}</h2>
-              <p class="step-sub">确认工作表后按规则筛选，并生成明细及透视表</p>
+              <h2 class="step-title">生成报表组总表</h2>
+              <p class="step-sub">确认工作表后同时生成无应收明细和无业务员成本明细</p>
               <div class="run-area">
                 <button class="btn-make" type="button" :disabled="!reportFile || !reportSheet || reportLoading || submitting" @click="submitReport">
                   <span v-if="submitting" class="spinner" aria-hidden="true"></span>

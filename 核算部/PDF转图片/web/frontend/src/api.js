@@ -61,7 +61,7 @@ async function getWorksheets(file, onProgress) {
   })
 }
 
-async function createReportTask(file, sheetName, reportProfile = 'no_receivable') {
+async function createReportTask(file, sheetName, reportProfile = 'bundle') {
   const fd = new FormData()
   fd.append('file', file, file.name)
   fd.append('sheet_name', sheetName)

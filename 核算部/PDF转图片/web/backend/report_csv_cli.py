@@ -246,6 +246,92 @@ def export_step_package(work, output_dir, totals_path, idx, progress=None, profi
             archive.write(file_path, os.path.basename(file_path))
     return zip_path
 
+def export_xlsx_bundle(work_map, output, progress=None):
+    wb = Workbook(write_only=True)
+    for profile, info in work_map.items():
+        config = REPORT_PROFILES[profile]
+        csv_path, totals_path, idx, category_col = info
+        detail = wb.create_sheet(config['detail'])
+        groups = {}
+        with open(csv_path, newline='', encoding='utf-8-sig') as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            detail.append(header)
+            for row in reader:
+                detail.append(row)
+                org = text(row[idx['客户所属机构']])
+                tracking = text(row[idx['运单号']])
+                if org and tracking:
+                    groups.setdefault(org, Counter())[text(row[category_col])] += 1
+        totals = {}
+        with open(totals_path, newline='', encoding='utf-8-sig') as f:
+            for n, row in enumerate(csv.reader(f)):
+                if n and len(row) >= 2:
+                    totals[text(row[0])] = int(number(row[1]))
+        cats = [x for x in (config['category_zero'], '金额异常', '') if any(g[x] for g in groups.values())]
+        pivot = wb.create_sheet(config['pivot'])
+        pivot.append(['客户所属机构'] + [('空白' if not x else x) for x in cats] + ['合计', '总票数', '占比'])
+        for org in sorted(groups):
+            counts = [groups[org][x] for x in cats]
+            total = sum(counts)
+            denominator = totals.get(org, 0)
+            pivot.append([org] + counts + [total, denominator, total / denominator if denominator else 0])
+    if progress:
+        progress(1, 1, '正在保存包含两个明细表和两个透视表的最终 XLSX')
+    wb.save(output)
+    wb.close()
+
+def run_web_csv_bundle(task, progress=None):
+    root = os.path.join(task['out_dir'], 'csv_work')
+    work_map = {}
+    for profile in ('no_receivable', 'no_salesperson_cost'):
+        config = REPORT_PROFILES[profile]
+        work = os.path.join(root, profile)
+        os.makedirs(work, exist_ok=True)
+        csv0 = os.path.join(work, 'step0.csv')
+        totals = os.path.join(work, 'totals.csv')
+        header, idx = read_sheet(task['source_path'], task['sheet_name'], csv0, totals, profile)
+        current = csv0
+        max_filter = 7 if profile == 'no_receivable' else 6
+        for step in range(1, max_filter + 1):
+            nxt = os.path.join(work, f'step{step}.csv')
+            kept, removed = process_step(current, nxt, os.path.join(work, f'临时删除_步骤{step}.csv'), step, header, idx, profile)
+            if progress:
+                progress(1, 1, f'{config["detail"]}：步骤 {step} 完成，保留 {kept} 行，删除 {removed} 行')
+            current = nxt
+        category_step = 8 if profile == 'no_receivable' else 7
+        category_path = os.path.join(work, f'step{category_step}.csv')
+        add_category(current, category_path, idx, profile)
+        current = category_path
+        final_step = 9 if profile == 'no_receivable' else 8
+        final_csv = os.path.join(work, f'step{final_step}.csv')
+        if current != final_csv:
+            with open(current, 'rb') as source, open(final_csv, 'wb') as target:
+                target.write(source.read())
+        category_col = 48 if profile == 'no_receivable' else len(header)
+        work_map[profile] = (final_csv, totals, idx, category_col)
+    package_dir = os.path.join(task['out_dir'], '报表组步骤结果')
+    os.makedirs(package_dir, exist_ok=True)
+    files = []
+    for profile, info in work_map.items():
+        config = REPORT_PROFILES[profile]
+        work = os.path.dirname(info[0])
+        for step in range(1, 10):
+            path = os.path.join(work, f'step{step}.csv')
+            if os.path.isfile(path):
+                out = os.path.join(package_dir, f'{config["detail"]}-步骤{step}.csv')
+                with open(path, 'rb') as source, open(out, 'wb') as target:
+                    target.write(source.read())
+                files.append(out)
+    final_xlsx = os.path.join(package_dir, '报表组-最终结果.xlsx')
+    export_xlsx_bundle(work_map, final_xlsx, progress)
+    files.append(final_xlsx)
+    zip_path = os.path.join(task['out_dir'], '报表组-步骤结果.zip')
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+        for path in files:
+            archive.write(path, os.path.basename(path))
+    return zip_path, os.path.basename(zip_path)
+
 def run_web_csv_step(task, step, progress=None):
     """网页报表任务的 CSV 分步入口；只在最后一步导出 XLSX。"""
     profile = task.get('report_profile', 'no_receivable')

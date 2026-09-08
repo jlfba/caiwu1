@@ -77,7 +77,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_report_task(filename, data, sheet_name, report_profile='no_receivable'):
+def create_report_task(filename, data, sheet_name, report_profile='bundle'):
     """创建报表组 Excel 处理任务。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
@@ -168,14 +168,21 @@ def _worker():
         try:
             if mode == '4step':
                 result = None; result_name = ''
-                first_step = task.get('step', 1)
-                for report_step in range(first_step, task.get('max_step', 10) + 1):
-                    task['step'] = report_step
-                    task['current'] = report_step
-                    task['message'] = '正在执行步骤 %d/%d' % (report_step, task.get('max_step', 10))
-                    task['logs'].append('[开始] 正在执行步骤 %d/%d' % (report_step, task.get('max_step', 10)))
-                    result, result_name = report_csv_cli.run_web_csv_step(task, report_step, progress)
+                if task.get('report_profile') == 'bundle':
+                    result, result_name = report_csv_cli.run_web_csv_bundle(task, progress)
                     task['input_path'] = result
+                    task['step'] = task.get('max_step', 10)
+                    task['current'] = task.get('max_step', 10)
+                    report_step = task.get('max_step', 10)
+                else:
+                    first_step = task.get('step', 1)
+                    for report_step in range(first_step, task.get('max_step', 10) + 1):
+                        task['step'] = report_step
+                        task['current'] = report_step
+                        task['message'] = '正在执行步骤 %d/%d' % (report_step, task.get('max_step', 10))
+                        task['logs'].append('[开始] 正在执行步骤 %d/%d' % (report_step, task.get('max_step', 10)))
+                        result, result_name = report_csv_cli.run_web_csv_step(task, report_step, progress)
+                        task['input_path'] = result
             elif mode == '4':
                 extension = os.path.splitext(pdfs[0])[1].lower()
                 output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
