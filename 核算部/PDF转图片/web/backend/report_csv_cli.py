@@ -19,8 +19,8 @@ REPORT_PROFILES = {
     },
     'no_salesperson_cost': {
         'detail': '无业务员成本明细', 'pivot': '无业务员成本明细透视表', 'zip': '无业务员成本明细-步骤结果.zip',
-        'category': '无业务员成本', 'unit': '业务成本单价', 'category_zero': '无业务员成本',
-        'required_extra': ('业务成本单价',),
+        'category': '无业务员成本', 'unit': '业务员成本单价', 'category_zero': '无业务员成本',
+        'required_extra': ('业务员成本单价',),
     },
 }
 
@@ -63,7 +63,7 @@ def read_sheet(path, sheet, csv_path, totals_path, profile='no_receivable'):
     w.close(); return header, idx
 def process_step(src, dst, log_path, step, header, idx, profile='no_receivable'):
     rules = {
-      1: (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1) if profile == 'no_receivable' else (lambda v: text(v[idx['业务成本单价']]) != '' and number(v[idx['业务成本单价']]) < 1),
+      1: (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1) if profile == 'no_receivable' else (lambda v: text(v[idx['业务员成本单价']]) != '' and number(v[idx['业务员成本单价']]) < 1),
       2: (lambda v: '签入' not in v[idx['操作状态']]) if profile == 'no_salesperson_cost' else (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1),
       3: lambda v: not any(k in text(v[idx['客户简称']]) for k in EXCLUDED),
       4: lambda v: '华南KA' not in text(v[idx['业务员']]),

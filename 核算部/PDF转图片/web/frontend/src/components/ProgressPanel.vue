@@ -43,7 +43,7 @@ const noReceivableStages = [
   '清理临时删除记录'
 ]
 const noSalespersonCostStages = [
-  '保留业务成本单价小于 1',
+  '保留业务员成本单价小于 1',
   '删除操作状态为签入的数据',
   '删除客户简称关键词',
   '删除业务员华南KA',
