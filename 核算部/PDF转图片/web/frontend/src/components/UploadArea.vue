@@ -57,13 +57,13 @@ async function readEntry(entry) {
 async function onDrop(event) {
   dragging.value = false
   const items = Array.from(event.dataTransfer.items || [])
-  if (props.allowDirectories && items.some((item) => item.webkitGetAsEntry?.()?.isDirectory)) {
-    const files = (await Promise.all(items.map((item) => {
-      const entry = item.webkitGetAsEntry?.()
-      return entry ? readEntry(entry) : []
-    }))).flat()
-    await handleFiles(files)
-    return
+  if (props.allowDirectories) {
+    const entries = items.map((item) => item.webkitGetAsEntry?.()).filter(Boolean)
+    if (entries.some((entry) => entry.isDirectory)) {
+      const files = (await Promise.all(entries.map(readEntry))).flat()
+      await handleFiles(files)
+      return
+    }
   }
   await handleFiles(event.dataTransfer.files)
 }
