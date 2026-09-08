@@ -19,8 +19,8 @@ REPORT_PROFILES = {
     },
     'no_salesperson_cost': {
         'detail': '无业务员成本明细', 'pivot': '无业务员成本明细透视表', 'zip': '无业务员成本明细-步骤结果.zip',
-        'category': '无业务员成本', 'unit': '业务员成本单价', 'category_zero': '无业务员成本',
-        'required_extra': ('业务员成本单价',),
+        'category': '业务员成本/实际成本', 'unit': '业务成本单价', 'category_zero': '业务员成本/实际成本',
+        'required_extra': ('业务成本单价', '业务员成本/实际成本'),
     },
 }
 
@@ -63,7 +63,7 @@ def read_sheet(path, sheet, csv_path, totals_path, profile='no_receivable'):
     w.close(); return header, idx
 def process_step(src, dst, log_path, step, header, idx, profile='no_receivable'):
     rules = {
-      1: (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1) if profile == 'no_receivable' else (lambda v: text(v[idx['业务员成本单价']]) != '' and number(v[idx['业务员成本单价']]) < 1),
+      1: (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1) if profile == 'no_receivable' else (lambda v: text(v[idx['业务成本单价']]) != '' and number(v[idx['业务成本单价']]) < 1),
       2: (lambda v: '签入' not in v[idx['操作状态']]) if profile == 'no_salesperson_cost' else (lambda v: text(v[idx['应收单价']]) != '' and number(v[idx['应收单价']]) <= 1),
       3: lambda v: not any(k in text(v[idx['客户简称']]) for k in EXCLUDED),
       4: lambda v: '华南KA' not in text(v[idx['业务员']]),
@@ -82,9 +82,22 @@ def process_step(src, dst, log_path, step, header, idx, profile='no_receivable')
     return kept, removed
 def add_category(src, dst, idx, profile='no_receivable'):
     with open(src, newline='', encoding='utf-8-sig') as fi, open(dst, 'w', newline='', encoding='utf-8-sig') as fo:
-        reader=csv.reader(fi); out=csv.writer(fo); h=next(reader); col = 48 if profile == 'no_receivable' else len(h); h = h + [''] * max(0, col + 1 - len(h)); h[col] = REPORT_PROFILES[profile]['category']; out.writerow(h)
+        reader=csv.reader(fi); out=csv.writer(fo); h=next(reader)
+        category_name = REPORT_PROFILES[profile]['category']
+        if profile == 'no_receivable':
+            col = 48
+            h = h + [''] * max(0, col + 1 - len(h))
+            h[col] = category_name
+        else:
+            if category_name not in h:
+                raise ValueError(f'缺少已有分类列：{category_name}')
+            col = h.index(category_name)
+        out.writerow(h)
         for v in reader:
-            price=number(v[idx[REPORT_PROFILES[profile]['unit']]]); amount=number(v[idx['应收金额']]); v = v + [''] * max(0, col + 1 - len(v)); v[col] = '金额异常' if amount>0 else (REPORT_PROFILES[profile]['category_zero'] if price==0 else ''); out.writerow(v)
+            price=number(v[idx[REPORT_PROFILES[profile]['unit']]])
+            v = v + [''] * max(0, len(h) - len(v))
+            v[col] = REPORT_PROFILES[profile]['category_zero'] if price == 0 else ('金额异常' if price > 0 else '')
+            out.writerow(v)
 def export_xlsx(csv_path, output, log_dir, totals_path, idx, progress=None, profile='no_receivable'):
     config = REPORT_PROFILES[profile]
     wb=Workbook(write_only=True); detail=wb.create_sheet(config['detail'])
@@ -308,7 +321,7 @@ def run_web_csv_bundle(task, progress=None):
         if current != final_csv:
             with open(current, 'rb') as source, open(final_csv, 'wb') as target:
                 target.write(source.read())
-        category_col = 48 if profile == 'no_receivable' else len(header)
+        category_col = header.index(REPORT_PROFILES[profile]['category']) if profile == 'no_salesperson_cost' else 48
         work_map[profile] = (final_csv, totals, idx, category_col)
     package_dir = os.path.join(task['out_dir'], '报表组步骤结果')
     os.makedirs(package_dir, exist_ok=True)
