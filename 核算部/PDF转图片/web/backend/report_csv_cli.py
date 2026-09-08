@@ -19,7 +19,7 @@ REPORT_PROFILES = {
     },
     'no_salesperson_cost': {
         'detail': '无业务员成本明细', 'pivot': '无业务员成本明细透视表', 'zip': '无业务员成本明细-步骤结果.zip',
-        'category': '业务员成本/实际成本', 'unit': '业务成本单价', 'category_zero': '业务员成本/实际成本',
+        'category': '业务员成本/实际成本', 'unit': '业务成本单价', 'category_zero': '无业务员成本',
         'required_extra': ('业务成本单价', '业务员成本/实际成本'),
     },
 }
