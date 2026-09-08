@@ -422,6 +422,50 @@ def _ordinary_party_fields(items, fields):
         fields["seller"] = find_name(header_y + 90, max(item.get("cy", 0) for item in ordered) + 10)
     return fields
 
+
+def _ordinary_native_fields(items):
+    """从普通发票 PDF 文字层直接取字段，避免完整电子票重复跑 OCR。"""
+    fields = {key: "未知" for key in ("date", "no", "buyer", "seller", "amount")}
+    if not items:
+        return fields
+    ordered = sorted(items, key=lambda item: (item.get("cy", 0), item.get("cx", 0)))
+    compact = lambda value: re.sub(r"\s+", "", str(value or ""))
+    lines = tool._group_detail_lines(ordered)
+
+    # 发票号码、开票日期：这类电子票的标签和值通常在同一横带。
+    for line in lines:
+        text = compact(line.get("text", ""))
+        if fields["no"] == "未知" and "发票号码" in text:
+            match = re.search(r"发票号码[：:]?([0-9A-Za-z]{6,})", text)
+            if match:
+                fields["no"] = match.group(1)
+        if fields["date"] == "未知" and "开票日期" in text:
+            match = re.search(r"开票日期[：:]?(20\d{2})年?(\d{1,2})月?(\d{1,2})日?", text)
+            if match:
+                fields["date"] = "%04d-%02d-%02d" % tuple(map(int, match.groups()))
+            else:
+                date_parts = [item.get("text", "") for item in line.get("items", [])]
+                match = re.search(r"(20\d{2})年?(\d{1,2})月?(\d{1,2})日?", "".join(date_parts))
+                if match:
+                    fields["date"] = "%04d-%02d-%02d" % tuple(map(int, match.groups()))
+
+    # 总金额优先取“价税合计”后的大写金额附近的数字，兼容小写金额。
+    total_mark = next((line for line in lines if "价税合计" in compact(line.get("text", ""))), None)
+    amount_candidates = []
+    if total_mark:
+        amount_candidates.extend(item.get("text", "") for item in total_mark.get("items", []))
+        base_y = total_mark.get("cy", 0)
+        amount_candidates.extend(item.get("text", "") for item in ordered
+                                 if abs(item.get("cy", 0) - base_y) <= 18)
+    amount_candidates.extend(item.get("text", "") for item in ordered if "小写" in item.get("text", ""))
+    amount_text = " ".join(amount_candidates)
+    amounts = re.findall(r"(?:[¥￥]\s*)?([0-9][0-9,]*\.\d{1,2})", amount_text)
+    if amounts:
+        fields["amount"] = amounts[-1].replace(",", "")
+
+    fields = _ordinary_party_fields(ordered, fields)
+    return fields
+
 def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
     def report(cur, total, message):
         if progress:
@@ -434,8 +478,9 @@ def process_shao_ordinary_invoice(pdf_paths, out_dir, progress=None):
             doc = tool.fitz.open(pdf)
             try:
                 for page_index, page in enumerate(doc):
-                    fields = native[page_index] if page_index < len(native) else {}
                     items = tool.pdf_native_items(pdf, page)
+                    native_fields = native[page_index] if page_index < len(native) else {}
+                    fields = tool._merge_invoice_fields(native_fields, _ordinary_native_fields(items))
                     summary_items = items
                     if not items or not tool._invoice_fields_complete(fields):
                         cache_dir = os.path.join(out_dir, "ordinary_cache")
