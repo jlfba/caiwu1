@@ -454,9 +454,9 @@ onUnmounted(() => {
       <div class="step-body">
         <div class="upload-pane">
           <h2 class="step-title">{{ effectiveMode === '6' && receiptSubtype !== 'invoice' ? '上传' + paymentLabel + '凭证' : '上传 PDF 文件' }}</h2>
-          <p class="step-sub">{{ effectiveMode === '6' && receiptSubtype !== 'invoice' ? '支持图片、PDF，也可以直接拖入文件夹' : ['2', '5'].includes(effectiveMode) ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
+          <p class="step-sub">{{ effectiveMode === '6' && receiptSubtype !== 'invoice' ? '支持图片、PDF，也可以直接拖入文件夹' : ['2', '5', '9'].includes(effectiveMode) ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
 
-          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="['2', '5', '6'].includes(effectiveMode)" :accept="effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'" :file-label="effectiveMode === '6' && receiptSubtype !== 'invoice' ? paymentLabel + '凭证' : 'PDF'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
+          <UploadArea :disabled="submitting" :count="files.length" :allow-directories="['2', '5', '6', '9'].includes(effectiveMode)" :accept="effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'" :file-label="effectiveMode === '6' && receiptSubtype !== 'invoice' ? paymentLabel + '凭证' : 'PDF'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
           <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
             <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
               <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
