@@ -103,14 +103,19 @@ def add_category(src, dst, idx, profile='no_receivable'):
             col = 48
             h = h + [''] * max(0, col + 1 - len(h))
             h[col] = category_name
-        else:
-            col = len(h)
-            h.append(category_name)
+        elif profile == 'no_salesperson_cost':
+            col = 48
+            h = h + [''] * max(0, col + 1 - len(h))
+            h[col] = category_name
         out.writerow(h)
         for v in reader:
             price=number(v[idx[REPORT_PROFILES[profile]['unit']]])
             v = v + [''] * max(0, len(h) - len(v))
-            v[col] = REPORT_PROFILES[profile]['category_zero'] if price == 0 else ('金额异常' if price > 0 else '')
+            if profile == 'no_salesperson_cost':
+                product = text(v[idx['销售产品']])
+                v[col] = '整柜' if '整柜' in product else ('私卡' if '私卡' in product else '散货')
+            else:
+                v[col] = REPORT_PROFILES[profile]['category_zero'] if price == 0 else ('金额异常' if price > 0 else '')
             out.writerow(v)
 def export_xlsx(csv_path, output, log_dir, totals_path, idx, progress=None, profile='no_receivable'):
     config = REPORT_PROFILES[profile]
@@ -295,7 +300,8 @@ def export_xlsx_bundle(work_map, output, progress=None):
             for n, row in enumerate(csv.reader(f)):
                 if n and len(row) >= 2:
                     totals[text(row[0])] = int(number(row[1]))
-        cats = [x for x in (config['category_zero'], '金额异常', '') if any(g[x] for g in groups.values())]
+        cats = (['整柜', '私卡', '散货'] if profile == 'no_salesperson_cost' else [config['category_zero'], '金额异常', ''])
+        cats = [x for x in cats if any(g[x] for g in groups.values())]
         pivot = wb.create_sheet(config['pivot'])
         pivot.append(['客户所属机构'] + [('空白' if not x else x) for x in cats] + ['合计', '总票数', '占比'])
         for org in sorted(groups):
@@ -336,7 +342,7 @@ def run_web_csv_bundle(task, progress=None):
         if current != final_csv:
             with open(current, 'rb') as source, open(final_csv, 'wb') as target:
                 target.write(source.read())
-        category_col = 48 if profile == 'no_receivable' else len(header)
+        category_col = 48
         work_map[profile] = (final_csv, totals, idx, category_col)
     package_dir = os.path.join(task['out_dir'], '报表组步骤结果')
     os.makedirs(package_dir, exist_ok=True)
