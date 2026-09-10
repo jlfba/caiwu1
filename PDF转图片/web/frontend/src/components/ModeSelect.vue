@@ -1,0 +1,15 @@
+<script setup>
+defineProps({ modelValue: String, disabled: Boolean })
+defineEmits(['update:modelValue'])
+</script>
+<template>
+  <div class="mode-select" role="radiogroup" aria-label="选择功能">
+    <button class="mode-tile standalone" :class="{ active: modelValue === 'receipt' }" type="button" :disabled="disabled" @click="$emit('update:modelValue', 'receipt')"><span class="tile-head"><span class="tile-title">收款组</span><span class="tile-check" :class="{ on: modelValue === 'receipt' }">✓</span></span><span class="tile-sub">发票识别与信息转 Excel</span><span class="tile-desc">按人员类型识别中文发票并生成对应表格。</span></button>
+    <button class="mode-tile standalone" :class="{ active: modelValue === '3' }" type="button" :disabled="disabled" @click="$emit('update:modelValue', '3')"><span class="tile-head"><span class="tile-title">付款组</span><span class="tile-check" :class="{ on: modelValue === '3' }">✓</span></span><span class="tile-sub">发票明细识别转 Excel</span><span class="tile-desc">识别英文发票的 INVOICE / 明细行，支持现有十三种发票版式。</span></button>
+    <button class="mode-tile standalone" :class="{ active: modelValue === '4' }" type="button" :disabled="disabled" @click="$emit('update:modelValue', '4')"><span class="tile-head"><span class="tile-title">报表组</span><span class="tile-check" :class="{ on: modelValue === '4' }">✓</span></span><span class="tile-sub">表格处理</span><span class="tile-desc">上传 Excel 报表，按规则清洗、整理和生成结果。</span></button>
+    <button class="mode-tile standalone" :class="{ active: modelValue === 'fund' }" type="button" :disabled="disabled" @click="$emit('update:modelValue', 'fund')"><span class="tile-head"><span class="tile-title">资金组</span><span class="tile-check" :class="{ on: modelValue === 'fund' }">✓</span></span><span class="tile-sub">表格处理</span><span class="tile-desc">上传 Excel 报表，按规则清洗、整理和生成结果。</span></button>
+  </div>
+</template>
+<style scoped>
+.mode-select{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mode-tile.standalone{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);overflow:hidden}.mode-tile.standalone.active{border-color:var(--primary);background:var(--primary-soft);box-shadow:var(--shadow-sm)}.mode-tile{width:100%;display:flex;flex-direction:column;gap:6px;align-items:stretch;text-align:left;padding:20px;background:transparent;border:0;cursor:pointer}.mode-tile:hover:not(:disabled){background:color-mix(in srgb,var(--primary-soft) 45%,transparent)}.mode-tile:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}.mode-tile:disabled{opacity:.6;cursor:not-allowed}.tile-head{display:flex;justify-content:space-between;align-items:center}.tile-title{font-size:17px;font-weight:800}.tile-check{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--border-strong);display:grid;place-items:center;color:transparent}.tile-check.on{background:var(--primary);border-color:var(--primary);color:#fff}.tile-sub{font-size:13px;font-weight:600;color:var(--text)}.tile-desc{font-size:12.5px;color:var(--text-soft);line-height:1.6}@media (max-width:640px){.mode-select{grid-template-columns:1fr}}
+</style>

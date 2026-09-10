@@ -9,7 +9,7 @@ import TemplateUpload from './components/TemplateUpload.vue'
 import ReportUpload from './components/ReportUpload.vue'
 import ProgressPanel from './components/ProgressPanel.vue'
 import ResultPanel from './components/ResultPanel.vue'
-import { createTask, createReportTask, continueReportTask, getTask, getWorksheets } from './api'
+import { createTask, createReportTask, createFundTask, continueReportTask, getTask, getWorksheets } from './api'
 
 const mode = ref('')
 const invType = ref('1')
@@ -38,6 +38,14 @@ const reportError = ref('')
 const reportLoading = ref(false)
 const reportUploadPercent = ref(0)
 const reportUploadDone = ref(false)
+
+const fundFile = ref(null)
+const fundSheets = ref([])
+const fundSheet = ref('')
+const fundError = ref('')
+const fundLoading = ref(false)
+const fundUploadPercent = ref(0)
+const fundUploadDone = ref(false)
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -87,6 +95,7 @@ const canSubmit = computed(
   () =>
     files.value.length > 0 &&
     mode.value !== '4' &&
+    mode.value !== 'fund' &&
     (mode.value !== 'receipt' || !!effectiveMode.value) &&
     !submitting.value &&
     (effectiveMode.value !== '1' || startCellValid.value) &&
@@ -103,6 +112,7 @@ watch(mode, (val, old) => {
     files.value = []
     clearTemplate()
     clearReportFile()
+    clearFundFile()
   }
 })
 
@@ -129,6 +139,62 @@ function clearReportFile() {
   reportLoading.value = false
   reportUploadPercent.value = 0
   reportUploadDone.value = false
+}
+
+function clearFundFile() {
+  fundFile.value = null
+  fundSheets.value = []
+  fundSheet.value = ''
+  fundError.value = ''
+  fundLoading.value = false
+  fundUploadPercent.value = 0
+  fundUploadDone.value = false
+}
+
+async function onFundSelected(file) {
+  fundFile.value = file
+  fundSheets.value = []
+  fundSheet.value = ''
+  fundError.value = ''
+  fundLoading.value = true
+  fundUploadPercent.value = 0
+  fundUploadDone.value = false
+  try {
+    fundSheets.value = await getWorksheets(file, (percent) => {
+      fundUploadPercent.value = percent
+      if (percent >= 100) fundUploadDone.value = true
+    })
+    fundSheet.value = fundSheets.value[0] || ''
+  } catch (e) {
+    fundError.value = e.message
+  } finally {
+    fundLoading.value = false
+  }
+}
+
+async function submitFund() {
+  if (!fundFile.value || !fundSheet.value || submitting.value) return
+  stopPolling()
+  stopElapsedTimer(false)
+  elapsedSeconds.value = 0
+  elapsedAccumulated = 0
+  status.value = 'processing'
+  current.value = 0
+  total.value = 5
+  message.value = '正在上传表格…'
+  error.value = ''
+  logs.value = []
+  filename.value = ''
+  try {
+    const data = await createFundTask(fundFile.value, fundSheet.value)
+    taskId.value = data.task_id
+    pollTimer = setInterval(poll, 1200)
+    poll()
+  } catch (e) {
+    status.value = 'error'
+    error.value = e.message
+    stopElapsedTimer()
+  }
 }
 
 function selectReportProfile(profile) {
@@ -338,7 +404,7 @@ async function poll() {
   logs.value = data.logs || []
   reportStep.value = data.step || 0
   reportMaxStep.value = data.max_step || 0
-  if (mode.value === '4' && Number.isFinite(data.elapsed_seconds)) {
+  if ((mode.value === '4' || mode.value === 'fund') && Number.isFinite(data.elapsed_seconds)) {
     elapsedSeconds.value = data.elapsed_seconds
   }
 
@@ -375,6 +441,7 @@ function reset() {
   files.value = []
   clearTemplate()
   clearReportFile()
+  clearFundFile()
 }
 
 onUnmounted(() => {
@@ -450,9 +517,9 @@ onUnmounted(() => {
     </section>
       </div>
 
-      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' }">
+      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' || mode === 'fund' }">
         <!-- 步骤 3/2：上传 PDF -->
-        <section v-if="mode !== '4' && (mode !== 'receipt' || effectiveMode)" class="step">
+        <section v-if="mode !== '4' && mode !== 'fund' && (mode !== 'receipt' || effectiveMode)" class="step">
       <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : mode === 'receipt' ? 4 : 2) }">
         <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
           <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
@@ -598,7 +665,7 @@ onUnmounted(() => {
         </div>
       </div>
         </section>
-        <section v-else class="step report-placeholder">
+        <section v-else-if="mode === '4'" class="step report-placeholder">
           <div class="step-body">
             <div class="report-pane">
               <h2 class="step-title">上传报表文件</h2>
@@ -635,6 +702,43 @@ onUnmounted(() => {
                 <a class="btn primary" :href="`/api/tasks/${taskId}/download`" :download="filename">下载步骤 {{ reportStep }} 结果</a>
                 <button class="btn ghost" type="button" @click="continueReport">继续第 {{ reportStep + 1 }} 步</button>
               </div>
+              <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
+            </div>
+          </div>
+        </section>
+        <section v-else-if="mode === 'fund'" class="step report-placeholder">
+          <div class="step-body">
+            <div class="report-pane">
+              <h2 class="step-title">上传报表文件</h2>
+              <p class="step-sub">拖入一个 Excel 表格，读取工作表后选择要处理的数据源</p>
+              <div class="report-upload">
+                <ReportUpload :disabled="submitting" @selected="onFundSelected" @cleared="clearFundFile" />
+              </div>
+              <div v-if="fundLoading" class="report-upload-progress" role="status">
+                <div class="report-upload-progress-head"><span>{{ fundUploadDone ? '上传完成，正在读取工作表…' : '正在上传表格…' }}</span><strong>{{ fundUploadPercent }}%</strong></div>
+                <div class="report-upload-track"><div class="report-upload-bar" :style="{ width: fundUploadPercent + '%' }"></div></div>
+              </div>
+              <p v-if="fundError" class="lo-error" role="alert">{{ fundError }}</p>
+              <div v-if="fundSheets.length" class="report-sheet-pick">
+                <span class="ts-label">选择需要处理的工作表</span>
+                <div class="sheet-btns" role="radiogroup" aria-label="选择资金工作表">
+                  <button v-for="sheet in fundSheets" :key="sheet" type="button" class="sheet-btn" :class="{ on: fundSheet === sheet }" :disabled="submitting" role="radio" :aria-checked="fundSheet === sheet" @click="fundSheet = sheet">{{ sheet }}</button>
+                </div>
+              </div>
+            </div>
+            <div class="report-action-pane">
+              <h2 class="step-title">生成资金组总表</h2>
+              <p class="step-sub">确认工作表后开始处理并生成资金汇总结果</p>
+              <div class="run-area">
+                <button class="btn-make" type="button" :disabled="!fundFile || !fundSheet || fundLoading || submitting" @click="submitFund">
+                  <span v-if="submitting" class="spinner" aria-hidden="true"></span>
+                  <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
+                </button>
+                <p class="run-hint">{{ fundSheet ? `已选择：${fundSheet}` : '请先上传并选择工作表' }}</p>
+              </div>
+            </div>
+            <div v-if="submitting || status === 'paused' || status === 'done' || status === 'error'" class="report-progress-wide">
+              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
           </div>
