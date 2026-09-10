@@ -344,28 +344,9 @@ def run_web_csv_bundle(task, progress=None):
                 target.write(source.read())
         category_col = 48
         work_map[profile] = (final_csv, totals, idx, category_col)
-    package_dir = os.path.join(task['out_dir'], '报表组步骤结果')
-    os.makedirs(package_dir, exist_ok=True)
-    files = []
-    for profile, info in work_map.items():
-        config = REPORT_PROFILES[profile]
-        work = os.path.dirname(info[0])
-        first_export_step = 1 if profile == 'no_receivable' else 2
-        for step in range(first_export_step, 10):
-            path = os.path.join(work, f'step{step}.csv')
-            if os.path.isfile(path):
-                out = os.path.join(package_dir, f'{config["detail"]}-步骤{step}.csv')
-                with open(path, 'rb') as source, open(out, 'wb') as target:
-                    target.write(source.read())
-                files.append(out)
-    final_xlsx = os.path.join(package_dir, '报表组-最终结果.xlsx')
+    final_xlsx = os.path.join(task['out_dir'], '报表组-最终结果.xlsx')
     export_xlsx_bundle(work_map, final_xlsx, progress)
-    files.append(final_xlsx)
-    zip_path = os.path.join(task['out_dir'], '报表组-步骤结果.zip')
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
-        for path in files:
-            archive.write(path, os.path.basename(path))
-    return zip_path, os.path.basename(zip_path)
+    return final_xlsx, os.path.basename(final_xlsx)
 
 def run_web_csv_step(task, step, progress=None):
     """网页报表任务的 CSV 分步入口；只在最后一步导出 XLSX。"""
@@ -406,7 +387,7 @@ def run_web_csv_step(task, step, progress=None):
     final = os.path.join(task['out_dir'], '无应收明细-最终总表.xlsx')
     final_csv = os.path.join(task['out_dir'], '无应收明细-最终测试.csv')
     package = export_step_package(work, task['out_dir'], os.path.join(work, 'totals.csv'), task['csv_idx'], progress, profile)
-    if progress: progress(1, 1, '步骤 10/10：已生成步骤 CSV 和最终 XLSX 结果包')
+    if progress: progress(1, 1, '步骤 10/10：已生成最终 XLSX')
     return package, os.path.basename(package)
 def main():
     p=argparse.ArgumentParser(description='报表组 CSV 高速终端版'); p.add_argument('input',nargs='?'); p.add_argument('-s','--sheet'); p.add_argument('-o','--output-dir'); p.add_argument('--no-pause',action='store_true'); a=p.parse_args()

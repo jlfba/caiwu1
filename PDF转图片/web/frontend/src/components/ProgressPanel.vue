@@ -52,7 +52,7 @@ const noSalespersonCostStages = [
   '删除整柜且应收金额大于10000',
   '按销售产品分类写入AW列“货物类型”（整柜/私卡/散货）',
   '生成无业务员成本明细透视表',
-  '整理步骤 CSV 并导出最终结果'
+  '导出最终结果'
 ]
 const reportStages = computed(() => props.reportProfile === 'no_salesperson_cost' ? noSalespersonCostStages : noReceivableStages)
 
