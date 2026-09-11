@@ -52,20 +52,23 @@ def process_fund(file1_path: str, file2_path: str, out_dir: str, progress) -> st
     # ── Step 1：读取收款审核表 ──────────────────────────────────────────────────
     wb1 = openpyxl.load_workbook(file1_path)
 
-    # 找工作表并提取日期后缀
+    # 从文件名提取日期后缀（YYMMDD），兼容"锦联中信对公收款审核表-260910.xlsx"等各种命名
+    basename = os.path.basename(file1_path)
+    m = re.search(r'(\d{6})', basename)
+    if not m:
+        raise ValueError(
+            f'无法从文件名中识别 6 位日期后缀（如 260910），当前文件名：{basename}'
+        )
+    date_suffix = m.group(1)
+
+    # 自动选工作表：优先找包含"收款审核"的表，否则取第一张
     target_sheet = None
-    date_suffix = None
     for name in wb1.sheetnames:
-        m = re.search(r'中信收款审核表-?(\d{6})', name)
-        if m:
+        if '收款' in name or '审核' in name:
             target_sheet = name
-            date_suffix = m.group(1)
             break
     if target_sheet is None:
-        raise ValueError(
-            '未找到名称含"中信收款审核表-YYMMDD"的工作表，'
-            f'当前工作表：{wb1.sheetnames}'
-        )
+        target_sheet = wb1.sheetnames[0]
 
     # 解析日期 YYMMDD → date
     yy, mm, dd = int(date_suffix[:2]), int(date_suffix[2:4]), int(date_suffix[4:6])
@@ -198,29 +201,24 @@ def process_fund(file1_path: str, file2_path: str, out_dir: str, progress) -> st
 
     progress(4, 5, '正在保存结果文件…')
 
-    # ── Step 4：保存 ──────────────────────────────────────────────────────────
-    out_name = f'资金核对结果-{date_suffix}.xlsx'
-    out_path = os.path.join(out_dir, out_name)
-    # 将中信对公的标色结果嵌入同一文件：以附加工作表方式复制
-    # 方案：将 ws_sys 的标色信息写回 wb2 然后保存为另一个文件也可以；
-    # 但业务上需要一个文件同时包含两张表，这里选择：
-    #   收款审核表工作簿（含临时表）为主文件，
-    #   并将"系统"标色后的数据追加为"中信对公-系统"工作表
-    if '中信对公-系统' in wb1.sheetnames:
-        del wb1['中信对公-系统']
-    ws_copy = wb1.create_sheet('中信对公-系统')
+    # ── Step 4：分别保存两个文件，打包成 ZIP 下载 ────────────────────────────
+    # wb1：收款审核表（含"资金核对"临时表）
+    name1 = f'收款审核表-资金核对-{date_suffix}.xlsx'
+    path1 = os.path.join(out_dir, name1)
+    wb1.save(path1)
 
-    # 复制系统表所有数据及标色
-    for r_idx, row in enumerate(ws_sys.iter_rows(), start=1):
-        for c_idx, cell in enumerate(row, start=1):
-            new_cell = ws_copy.cell(r_idx, c_idx, cell.value)
-            if cell.fill and cell.fill.fill_type == 'solid':
-                new_cell.fill = PatternFill(
-                    fill_type='solid',
-                    fgColor=cell.fill.fgColor.rgb if cell.fill.fgColor else 'FFFFFF'
-                )
+    # wb2：中信对公（系统表已标黄）
+    name2 = f'中信对公-标色-{date_suffix}.xlsx'
+    path2 = os.path.join(out_dir, name2)
+    wb2.save(path2)
 
-    wb1.save(out_path)
+    # 打包
+    import zipfile as _zf
+    zip_name = f'资金核对-{date_suffix}.zip'
+    zip_path = os.path.join(out_dir, zip_name)
+    with _zf.ZipFile(zip_path, 'w', _zf.ZIP_DEFLATED) as zf:
+        zf.write(path1, name1)
+        zf.write(path2, name2)
 
-    progress(5, 5, f'处理完成，输出：{out_name}')
-    return out_path
+    progress(5, 5, f'处理完成，输出：{zip_name}')
+    return zip_path
