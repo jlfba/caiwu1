@@ -39,13 +39,8 @@ const reportLoading = ref(false)
 const reportUploadPercent = ref(0)
 const reportUploadDone = ref(false)
 
-const fundFile = ref(null)
-const fundSheets = ref([])
-const fundSheet = ref('')
-const fundError = ref('')
-const fundLoading = ref(false)
-const fundUploadPercent = ref(0)
-const fundUploadDone = ref(false)
+const fundFile1 = ref(null)  // 收款审核表
+const fundFile2 = ref(null)  // 中信对公
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -142,38 +137,12 @@ function clearReportFile() {
 }
 
 function clearFundFile() {
-  fundFile.value = null
-  fundSheets.value = []
-  fundSheet.value = ''
-  fundError.value = ''
-  fundLoading.value = false
-  fundUploadPercent.value = 0
-  fundUploadDone.value = false
-}
-
-async function onFundSelected(file) {
-  fundFile.value = file
-  fundSheets.value = []
-  fundSheet.value = ''
-  fundError.value = ''
-  fundLoading.value = true
-  fundUploadPercent.value = 0
-  fundUploadDone.value = false
-  try {
-    fundSheets.value = await getWorksheets(file, (percent) => {
-      fundUploadPercent.value = percent
-      if (percent >= 100) fundUploadDone.value = true
-    })
-    fundSheet.value = fundSheets.value[0] || ''
-  } catch (e) {
-    fundError.value = e.message
-  } finally {
-    fundLoading.value = false
-  }
+  fundFile1.value = null
+  fundFile2.value = null
 }
 
 async function submitFund() {
-  if (!fundFile.value || !fundSheet.value || submitting.value) return
+  if (!fundFile1.value || !fundFile2.value || submitting.value) return
   stopPolling()
   stopElapsedTimer(false)
   elapsedSeconds.value = 0
@@ -186,7 +155,7 @@ async function submitFund() {
   logs.value = []
   filename.value = ''
   try {
-    const data = await createFundTask(fundFile.value, fundSheet.value)
+    const data = await createFundTask(fundFile1.value, fundFile2.value)
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -709,36 +678,94 @@ onUnmounted(() => {
         <section v-else-if="mode === 'fund'" class="step report-placeholder">
           <div class="step-body">
             <div class="report-pane">
-              <h2 class="step-title">上传报表文件</h2>
-              <p class="step-sub">拖入一个 Excel 表格，读取工作表后选择要处理的数据源</p>
-              <div class="report-upload">
-                <ReportUpload :disabled="submitting" @selected="onFundSelected" @cleared="clearFundFile" />
+              <h2 class="step-title">上传表格文件</h2>
+              <p class="step-sub">依次拖入两个 Excel 表格</p>
+
+              <div class="fund-upload-block">
+                <div class="fund-upload-label">
+                  <span class="fund-step-tag">1</span>
+                  <span class="ts-label">收款审核表</span>
+                  <span class="ts-tip">表名含"中信收款审核表-日期"</span>
+                </div>
+                <div class="fund-drop-zone"
+                  :class="{ 'fund-drop-active': fundFile1 }"
+                  @dragover.prevent
+                  @drop.prevent="e => { const f = e.dataTransfer.files[0]; if(f) fundFile1 = f }"
+                >
+                  <template v-if="!fundFile1">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
+                    <span class="fund-drop-hint">拖入文件，或</span>
+                    <label class="fund-pick-btn">
+                      点击选择
+                      <input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting"
+                        @change="e => { const f = e.target.files[0]; if(f) fundFile1 = f; e.target.value='' }" />
+                    </label>
+                  </template>
+                  <template v-else>
+                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    <span class="fund-file-name" :title="fundFile1.name">{{ fundFile1.name }}</span>
+                    <button class="file-remove" type="button" :disabled="submitting" @click="fundFile1 = null">✕</button>
+                  </template>
+                </div>
               </div>
-              <div v-if="fundLoading" class="report-upload-progress" role="status">
-                <div class="report-upload-progress-head"><span>{{ fundUploadDone ? '上传完成，正在读取工作表…' : '正在上传表格…' }}</span><strong>{{ fundUploadPercent }}%</strong></div>
-                <div class="report-upload-track"><div class="report-upload-bar" :style="{ width: fundUploadPercent + '%' }"></div></div>
-              </div>
-              <p v-if="fundError" class="lo-error" role="alert">{{ fundError }}</p>
-              <div v-if="fundSheets.length" class="report-sheet-pick">
-                <span class="ts-label">选择需要处理的工作表</span>
-                <div class="sheet-btns" role="radiogroup" aria-label="选择资金工作表">
-                  <button v-for="sheet in fundSheets" :key="sheet" type="button" class="sheet-btn" :class="{ on: fundSheet === sheet }" :disabled="submitting" role="radio" :aria-checked="fundSheet === sheet" @click="fundSheet = sheet">{{ sheet }}</button>
+
+              <div class="fund-upload-block" :class="{ 'fund-block-dim': !fundFile1 }">
+                <div class="fund-upload-label">
+                  <span class="fund-step-tag">2</span>
+                  <span class="ts-label">中信对公</span>
+                  <span class="ts-tip">需含"系统"工作表</span>
+                </div>
+                <div class="fund-drop-zone"
+                  :class="{ 'fund-drop-active': fundFile2 }"
+                  @dragover.prevent
+                  @drop.prevent="e => { if(!fundFile1) return; const f = e.dataTransfer.files[0]; if(f) fundFile2 = f }"
+                >
+                  <template v-if="!fundFile2">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
+                    <span class="fund-drop-hint">{{ fundFile1 ? '拖入文件，或' : '请先上传收款审核表' }}</span>
+                    <label v-if="fundFile1" class="fund-pick-btn">
+                      点击选择
+                      <input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting || !fundFile1"
+                        @change="e => { const f = e.target.files[0]; if(f) fundFile2 = f; e.target.value='' }" />
+                    </label>
+                  </template>
+                  <template v-else>
+                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    <span class="fund-file-name" :title="fundFile2.name">{{ fundFile2.name }}</span>
+                    <button class="file-remove" type="button" :disabled="submitting" @click="fundFile2 = null">✕</button>
+                  </template>
                 </div>
               </div>
             </div>
+
             <div class="report-action-pane">
-              <h2 class="step-title">生成资金组总表</h2>
-              <p class="step-sub">确认工作表后开始处理并生成资金汇总结果</p>
+              <h2 class="step-title">生成资金核对表</h2>
+              <p class="step-sub">匹配贷方发生额与收款金额，自动标色并输出核对结果文件</p>
+              <div class="fund-checklist">
+                <div class="fund-check-item" :class="{ done: fundFile1 }">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile1 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile1" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span>收款审核表</span>
+                </div>
+                <div class="fund-check-item" :class="{ done: fundFile2 }">
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile2 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile2" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span>中信对公</span>
+                </div>
+              </div>
               <div class="run-area">
-                <button class="btn-make" type="button" :disabled="!fundFile || !fundSheet || fundLoading || submitting" @click="submitFund">
+                <button class="btn-make" type="button" :disabled="!fundFile1 || !fundFile2 || submitting" @click="submitFund">
                   <span v-if="submitting" class="spinner" aria-hidden="true"></span>
                   <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
                 </button>
-                <p class="run-hint">{{ fundSheet ? `已选择：${fundSheet}` : '请先上传并选择工作表' }}</p>
+                <p class="run-hint">
+                  <template v-if="!fundFile1">请先上传收款审核表</template>
+                  <template v-else-if="!fundFile2">请上传中信对公</template>
+                  <template v-else>两个文件已就绪，可开始处理</template>
+                </p>
               </div>
             </div>
-            <div v-if="submitting || status === 'paused' || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
+
+            <div v-if="submitting || status === 'done' || status === 'error'" class="report-progress-wide">
+              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :elapsed-seconds="elapsedSeconds" />
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
           </div>
@@ -1577,4 +1604,93 @@ onUnmounted(() => {
   }
 }
 
+/* ── 资金组专用样式 ── */
+.fund-upload-block {
+  margin-top: 20px;
+  transition: opacity 0.2s;
+}
+.fund-block-dim {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.fund-upload-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.fund-step-tag {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.fund-drop-zone {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  min-height: 52px;
+  transition: border-color 0.16s, background 0.16s;
+}
+.fund-drop-zone.fund-drop-active {
+  border-style: solid;
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.fund-drop-zone:hover:not(.fund-drop-active) {
+  border-color: var(--primary);
+}
+.fund-drop-hint {
+  font-size: 13px;
+  color: var(--text-soft);
+}
+.fund-pick-btn {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-ink);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.fund-file-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fund-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 20px 0;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+.fund-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-soft);
+  transition: color 0.2s;
+}
+.fund-check-item.done {
+  color: var(--primary-ink);
+  font-weight: 600;
+}
 </style>

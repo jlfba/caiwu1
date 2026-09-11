@@ -13,6 +13,7 @@ import uuid
 import processor
 import report_processor
 import report_csv_cli
+import fund_processor
 
 _TMP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tmp')
 
@@ -74,6 +75,37 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
         _TASKS[task_id] = task
     _QUEUE.put((task_id, saved, mode, inv_type, layout, start_cell,
                 template_path, sheet_name))
+    return task_id
+
+
+def create_fund_task(filename1, data1, filename2, data2):
+    """创建资金组任务：收款审核表 + 中信对公。"""
+    task_id = _make_task_id()
+    task_dir = os.path.join(_TMP_ROOT, task_id)
+    in_dir   = os.path.join(task_dir, 'in')
+    out_dir  = os.path.join(task_dir, 'out')
+    os.makedirs(in_dir, exist_ok=True)
+    os.makedirs(out_dir, exist_ok=True)
+
+    safe1 = processor.sanitize_filename(filename1)
+    path1 = os.path.join(in_dir, 'fund1_' + safe1)
+    with open(path1, 'wb') as f:
+        f.write(data1)
+
+    safe2 = processor.sanitize_filename(filename2)
+    path2 = os.path.join(in_dir, 'fund2_' + safe2)
+    with open(path2, 'wb') as f:
+        f.write(data2)
+
+    task = {
+        'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
+        'status': 'pending', 'current': 0, 'total': 5,
+        'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
+        'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
+    }
+    with _LOCK:
+        _TASKS[task_id] = task
+    _QUEUE.put((task_id, [path1, path2], 'fund', '', 'v', 'A1', None, ''))
     return task_id
 
 
@@ -188,6 +220,9 @@ def _worker():
                 output = os.path.join(task['out_dir'], '无应收明细处理结果' + extension)
                 result = report_processor.process_report(
                     pdfs[0], sheet_name, output, progress)
+            elif mode == 'fund':
+                result = fund_processor.process_fund(
+                    pdfs[0], pdfs[1], task['out_dir'], progress)
             elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,
@@ -223,7 +258,7 @@ def _worker():
             task['message'] = '处理失败：%s' % e
             task['logs'].append('[失败] %s' % e)
         finally:
-            if mode == '4step' and task.get('processing_started_at') is not None:
+            if mode in ('4step', 'fund') and task.get('processing_started_at') is not None:
                 task['elapsed_seconds'] = task.get('elapsed_seconds', 0) + int(
                     time.time() - task['processing_started_at'])
                 task['processing_started_at'] = None

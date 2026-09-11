@@ -101,6 +101,23 @@ async def create_task(files: list[UploadFile] = File(...),
     return {'task_id': task_id, 'files': len(uploads)}
 
 
+@app.post('/api/fund-tasks')
+async def create_fund_task(
+        file1: UploadFile = File(...),
+        file2: UploadFile = File(...)):
+    """资金组：上传收款审核表(file1) + 中信对公(file2)，创建处理任务。"""
+    for f in (file1, file2):
+        if not (f.filename or '').lower().endswith(('.xlsx', '.xlsm')):
+            return JSONResponse(
+                {'detail': f'资金组仅支持 .xlsx / .xlsm 文件：{f.filename}'},
+                status_code=400)
+    task_id = tasks.create_fund_task(
+        file1.filename or 'fund1.xlsx', await file1.read(),
+        file2.filename or 'fund2.xlsx', await file2.read(),
+    )
+    return {'task_id': task_id}
+
+
 @app.post('/api/report-tasks')
 async def create_report_task(file: UploadFile = File(...),
                              sheet_name: str = Form(...),
