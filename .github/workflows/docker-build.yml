@@ -44,5 +44,6 @@ jobs:
           file: build-context/Dockerfile
           push: true
           tags: |
+            ghcr.io/jlfba/caiwu1:main
             ghcr.io/jlfba/caiwu1:latest
             ghcr.io/jlfba/caiwu1:${{ github.sha }}
