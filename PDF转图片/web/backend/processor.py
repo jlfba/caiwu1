@@ -9,6 +9,8 @@ import re
 import datetime
 import shutil
 import sys
+import tempfile
+import zipfile
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -276,7 +278,12 @@ def _find_payment_image_columns(ws):
 
 
 def _workbook_image_items(workbook_path, image_dir):
-    """提取目标支付图片，按工作表/行/图片列顺序返回记录。"""
+    """提取支付图片区域内的嵌入图片，按工作表/行/列顺序返回记录。
+
+    “水单/付款截图”是图片区域的起点，不代表图片一定只放在这一列。
+    很多原表会把同一行的多张截图横向放在其后多个列中，因此这里保留
+    起始列到结果区之前的所有图片。
+    """
     from openpyxl import load_workbook
     records = []
     wb = load_workbook(workbook_path, read_only=False, data_only=False)
@@ -285,6 +292,8 @@ def _workbook_image_items(workbook_path, image_dir):
             header_row, image_columns = _find_payment_image_columns(ws)
             if not image_columns:
                 continue
+            # 结果列从最后一个图片表头后空两列开始；图片区域到此为止。
+            image_end_column = max(image_columns) + 2
             for image_index, image in enumerate(getattr(ws, '_images', [])):
                 anchor = image.anchor
                 row = getattr(getattr(anchor, '_from', None), 'row', 0)
@@ -296,7 +305,7 @@ def _workbook_image_items(workbook_path, image_dir):
                     image_bytes = image._data()
                 if not image_bytes:
                     continue
-                if col + 1 not in image_columns:
+                if col + 1 < min(image_columns) or col + 1 > image_end_column:
                     continue
                 with open(image_path, 'wb') as file:
                     file.write(image_bytes)
@@ -309,6 +318,28 @@ def _workbook_image_items(workbook_path, image_dir):
         wb.close()
     records.sort(key=lambda item: (item['sheet_index'], item['row'], item['col'], item['image_index']))
     return records
+
+
+def _restore_original_workbook_images(original_path, output_path):
+    """恢复原始工作簿的图片包，避免 openpyxl 重写后图片关系串图。"""
+    fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1])
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(original_path, 'r') as source, zipfile.ZipFile(output_path, 'r') as generated, zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as merged:
+            original_image_parts = {name for name in source.namelist()
+                                    if name.startswith('xl/media/')
+                                    or name.startswith('xl/drawings/')
+                                    or name.startswith('xl/worksheets/_rels/')}
+            for item in generated.infolist():
+                if item.filename in original_image_parts:
+                    continue
+                merged.writestr(item, generated.read(item.filename))
+            for name in sorted(original_image_parts):
+                merged.writestr(name, source.read(name))
+        shutil.move(temp_path, output_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
@@ -401,6 +432,7 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
                     for cell in row:
                         cell.alignment = Alignment(vertical='top', wrap_text=True)
         wb.save(output)
+        _restore_original_workbook_images(workbook_paths[0], output)
     finally:
         wb.close()
     report(len(image_records), len(image_records), '原始表格已回写识别结果')

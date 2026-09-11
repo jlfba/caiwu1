@@ -9,6 +9,8 @@ import re
 import datetime
 import shutil
 import sys
+import tempfile
+import zipfile
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -318,6 +320,31 @@ def _workbook_image_items(workbook_path, image_dir):
     return records
 
 
+def _restore_original_workbook_images(original_path, output_path):
+    """恢复原始工作簿的图片包，避免 openpyxl 重写后图片关系串图。"""
+    # openpyxl 保存单元格数据时可能重新编号或复用图片关系。图片识别已经
+    # 使用独立提取文件完成，因此这里直接保留原工作簿的媒体、绘图锚点和
+    # 关系文件，只使用 openpyxl 生成的工作表单元格内容。
+    fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1])
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(original_path, 'r') as source, zipfile.ZipFile(output_path, 'r') as generated, zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as merged:
+            original_image_parts = {name for name in source.namelist()
+                                    if name.startswith('xl/media/')
+                                    or name.startswith('xl/drawings/')
+                                    or name.startswith('xl/worksheets/_rels/')}
+            for item in generated.infolist():
+                if item.filename in original_image_parts:
+                    continue
+                merged.writestr(item, generated.read(item.filename))
+            for name in sorted(original_image_parts):
+                merged.writestr(name, source.read(name))
+        shutil.move(temp_path, output_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
     """赵淑华发票识别：按“付款截图/水单”列识别嵌入支付图片并动态回写结果。"""
     from openpyxl import load_workbook
@@ -408,6 +435,7 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
                     for cell in row:
                         cell.alignment = Alignment(vertical='top', wrap_text=True)
         wb.save(output)
+        _restore_original_workbook_images(workbook_paths[0], output)
     finally:
         wb.close()
     report(len(image_records), len(image_records), '原始表格已回写识别结果')
