@@ -78,8 +78,8 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_fund_task(filename1, data1, filename2, data2):
-    """创建资金组任务：收款审核表 + 中信对公。"""
+def create_fund_task(filename1, data1, filename2, data2, fund_mode='receipt'):
+    """创建资金组任务：审核表(file1) + 中信对公(file2)，fund_mode: receipt/payment。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
     in_dir   = os.path.join(task_dir, 'in')
@@ -102,6 +102,7 @@ def create_fund_task(filename1, data1, filename2, data2):
         'status': 'pending', 'current': 0, 'total': 5,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
+        'fund_mode': fund_mode,
     }
     with _LOCK:
         _TASKS[task_id] = task
@@ -222,7 +223,8 @@ def _worker():
                     pdfs[0], sheet_name, output, progress)
             elif mode == 'fund':
                 result = fund_processor.process_fund(
-                    pdfs[0], pdfs[1], task['out_dir'], progress)
+                    pdfs[0], pdfs[1], task['out_dir'], progress,
+                    fund_mode=task.get('fund_mode', 'receipt'))
             elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,

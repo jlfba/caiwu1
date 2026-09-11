@@ -39,8 +39,9 @@ const reportLoading = ref(false)
 const reportUploadPercent = ref(0)
 const reportUploadDone = ref(false)
 
-const fundFile1 = ref(null)  // 收款审核表
+const fundFile1 = ref(null)  // 审核表
 const fundFile2 = ref(null)  // 中信对公
+const fundMode  = ref('receipt') // receipt | payment
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -139,6 +140,7 @@ function clearReportFile() {
 function clearFundFile() {
   fundFile1.value = null
   fundFile2.value = null
+  fundMode.value = 'receipt'
 }
 
 async function submitFund() {
@@ -155,7 +157,7 @@ async function submitFund() {
   logs.value = []
   filename.value = ''
   try {
-    const data = await createFundTask(fundFile1.value, fundFile2.value)
+    const data = await createFundTask(fundFile1.value, fundFile2.value, fundMode.value)
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -681,11 +683,17 @@ onUnmounted(() => {
               <h2 class="step-title">上传表格文件</h2>
               <p class="step-sub">依次拖入两个 Excel 表格</p>
 
+              <!-- 核对类型切换 -->
+              <div class="fund-mode-seg">
+                <button type="button" class="seg-btn" :class="{ on: fundMode === 'receipt' }" :disabled="submitting" @click="fundMode = 'receipt'; fundFile1 = null; fundFile2 = null">收款核对</button>
+                <button type="button" class="seg-btn" :class="{ on: fundMode === 'payment' }" :disabled="submitting" @click="fundMode = 'payment'; fundFile1 = null; fundFile2 = null">付款核对</button>
+              </div>
+
               <div class="fund-upload-block">
                 <div class="fund-upload-label">
                   <span class="fund-step-tag">1</span>
-                  <span class="ts-label">收款审核表</span>
-                  <span class="ts-tip">表名含"中信收款审核表-日期"</span>
+                  <span class="ts-label">{{ fundMode === 'receipt' ? '收款审核表' : '服务商付款审核表' }}</span>
+                  <span class="ts-tip">表名含日期后缀，如 260910</span>
                 </div>
                 <div class="fund-drop-zone"
                   :class="{ 'fund-drop-active': fundFile1 }"
@@ -739,12 +747,12 @@ onUnmounted(() => {
             </div>
 
             <div class="report-action-pane">
-              <h2 class="step-title">生成资金核对表</h2>
-              <p class="step-sub">匹配贷方发生额与收款金额，自动标色并输出核对结果文件</p>
+              <h2 class="step-title">{{ fundMode === 'receipt' ? '生成收款核对表' : '生成付款核对表' }}</h2>
+              <p class="step-sub">匹配{{ fundMode === 'receipt' ? '贷方发生额与收款金额' : '借方发生额与付款金额' }}，自动标色并输出核对结果文件</p>
               <div class="fund-checklist">
                 <div class="fund-check-item" :class="{ done: fundFile1 }">
                   <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile1 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile1" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  <span>收款审核表</span>
+                  <span>{{ fundMode === 'receipt' ? '收款审核表' : '服务商付款审核表' }}</span>
                 </div>
                 <div class="fund-check-item" :class="{ done: fundFile2 }">
                   <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile2 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile2" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1604,6 +1612,15 @@ onUnmounted(() => {
   }
 }
 
+.fund-mode-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  margin-bottom: 16px;
+}
 /* ── 资金组专用样式 ── */
 .fund-upload-block {
   margin-top: 20px;

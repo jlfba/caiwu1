@@ -104,16 +104,20 @@ async def create_task(files: list[UploadFile] = File(...),
 @app.post('/api/fund-tasks')
 async def create_fund_task(
         file1: UploadFile = File(...),
-        file2: UploadFile = File(...)):
-    """资金组：上传收款审核表(file1) + 中信对公(file2)，创建处理任务。"""
+        file2: UploadFile = File(...),
+        fund_mode: str = Form('receipt')):
+    """资金组：上传审核表(file1) + 中信对公(file2)，fund_mode: receipt/payment。"""
     for f in (file1, file2):
         if not (f.filename or '').lower().endswith(('.xlsx', '.xlsm')):
             return JSONResponse(
                 {'detail': f'资金组仅支持 .xlsx / .xlsm 文件：{f.filename}'},
                 status_code=400)
+    if fund_mode not in ('receipt', 'payment'):
+        return JSONResponse({'detail': 'fund_mode 无效，应为 receipt 或 payment'}, status_code=400)
     task_id = tasks.create_fund_task(
         file1.filename or 'fund1.xlsx', await file1.read(),
         file2.filename or 'fund2.xlsx', await file2.read(),
+        fund_mode=fund_mode,
     )
     return {'task_id': task_id}
 
