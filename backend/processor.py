@@ -276,7 +276,12 @@ def _find_payment_image_columns(ws):
 
 
 def _workbook_image_items(workbook_path, image_dir):
-    """提取目标支付图片，按工作表/行/图片列顺序返回记录。"""
+    """提取支付图片区域内的嵌入图片，按工作表/行/列顺序返回记录。
+
+    “水单/付款截图”是图片区域的起点，不代表图片一定只放在这一列。
+    很多原表会把同一行的多张截图横向放在其后多个列中，因此这里保留
+    起始列到结果区之前的所有图片。
+    """
     from openpyxl import load_workbook
     records = []
     wb = load_workbook(workbook_path, read_only=False, data_only=False)
@@ -285,6 +290,8 @@ def _workbook_image_items(workbook_path, image_dir):
             header_row, image_columns = _find_payment_image_columns(ws)
             if not image_columns:
                 continue
+            # 结果列从最后一个图片表头后空两列开始；图片区域到此为止。
+            image_end_column = max(image_columns) + 2
             for image_index, image in enumerate(getattr(ws, '_images', [])):
                 anchor = image.anchor
                 row = getattr(getattr(anchor, '_from', None), 'row', 0)
@@ -296,7 +303,7 @@ def _workbook_image_items(workbook_path, image_dir):
                     image_bytes = image._data()
                 if not image_bytes:
                     continue
-                if col + 1 not in image_columns:
+                if col + 1 < min(image_columns) or col + 1 > image_end_column:
                     continue
                 with open(image_path, 'wb') as file:
                     file.write(image_bytes)
