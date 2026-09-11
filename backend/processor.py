@@ -292,8 +292,8 @@ def _workbook_image_items(workbook_path, image_dir):
             header_row, image_columns = _find_payment_image_columns(ws)
             if not image_columns:
                 continue
-            # 结果列从最后一个图片表头后空两列开始；图片区域到此为止。
-            image_end_column = max(image_columns) + 2
+            # 结果固定从 R 列开始，水单/付款截图列到 Q 列之间都属于图片区域。
+            image_end_column = 17
             for image_index, image in enumerate(getattr(ws, '_images', [])):
                 anchor = image.anchor
                 row = getattr(getattr(anchor, '_from', None), 'row', 0)
