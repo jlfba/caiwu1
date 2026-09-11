@@ -375,8 +375,8 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
                 sheet_layouts[ws.title] = {
                     'header_row': header_row,
                     'image_columns': image_columns,
-                    # 最后一列后空两列，再开始写第一组三列。
-                    'output_start': max(image_columns) + 3,
+                    # 赵淑华表格统一从 R 列开始写识别结果，不再根据表头结束位置计算。
+                    'output_start': 18,
                 }
         if not sheet_layouts:
             raise RuntimeError('未找到“付款截图”或“水单”列')
