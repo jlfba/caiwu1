@@ -15,8 +15,9 @@ from datetime import date
 import openpyxl
 from openpyxl.styles import PatternFill
 
-_FILL_LIGHT_RED = PatternFill(fill_type='solid', fgColor='FFC7CE')
-_FILL_YELLOW    = PatternFill(fill_type='solid', fgColor='FFFF00')
+_FILL_LIGHT_RED   = PatternFill(fill_type='solid', fgColor='FFC7CE')
+_FILL_YELLOW      = PatternFill(fill_type='solid', fgColor='FFFF00')
+_FILL_LIGHT_GREEN = PatternFill(fill_type='solid', fgColor='C6EFCE')
 
 
 def _find_col(headers: list, name: str) -> int:
@@ -60,7 +61,7 @@ def _auto_sheet(wb, hints: list[str]) -> str:
 def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
                  ws_sys, col_日期: int, col_tx: int, tx_label: str,
                  target_date: date, tmp_sheet_name: str,
-                 sys_marked: set[int]):
+                 sys_marked: set[tuple[int, int]], sys_fill):
     """
     对一张审核表做匹配核对，结果写入临时工作表，并在 ws_sys 内标色。
     sys_marked: 已在系统表标色的行号集合（跨两次调用共享，防重复）
@@ -148,13 +149,14 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
         else:
             ws_tmp.cell(e_row, 6).fill = _FILL_YELLOW
 
-    # 系统表筛选行内标黄（共享 sys_marked 防跨两次误标）
+    # 系统表筛选行内标色（共享 sys_marked 防跨两次误标）
     matched_set = set(matched_amounts)
     for sys_row, sys_val in filtered_rows:
         v = _to_num(sys_val)
-        if v is not None and v in matched_set and sys_row not in sys_marked:
-            ws_sys.cell(sys_row, col_tx).fill = _FILL_YELLOW
-            sys_marked.add(sys_row)
+        mark_key = (sys_row, col_tx)
+        if v is not None and v in matched_set and mark_key not in sys_marked:
+            ws_sys.cell(sys_row, col_tx).fill = sys_fill
+            sys_marked.add(mark_key)
 
     return True, ''
 
@@ -183,13 +185,13 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
     col_贷方  = _find_col(headers_sys, '贷方发生额')
     col_借方  = _find_col(headers_sys, '借方发生额')
 
-    sys_marked: set[int] = set()  # 系统表已标色行（两次核对共享）
+    sys_marked: set[tuple[int, int]] = set()  # 系统表已标色单元格（两次核对共享）
 
     progress(3, 5, '正在核对收款数据…')
     ok1, warn1 = _process_one(
         wb1, '收款金额', ['收款', '审核'],
         ws_sys, col_日期, col_贷方, '贷方发生额',
-        target_date1, '资金核对-收款', sys_marked
+        target_date1, '资金核对-收款', sys_marked, _FILL_YELLOW
     )
     if not ok1:
         raise ValueError(f'收款核对失败：{warn1}')
@@ -201,7 +203,7 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
     ok2, warn2 = _process_one(
         wb2, '付款金额', ['付款', '审核'],
         ws_sys, col_日期, col_借方, '借方发生额',
-        target_date2, '资金核对-付款', sys_marked
+        target_date2, '资金核对-付款', sys_marked, _FILL_LIGHT_GREEN
     )
     if not ok2:
         raise ValueError(f'付款核对失败：{warn2}')
