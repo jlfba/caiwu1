@@ -257,13 +257,34 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
     return output
 
 
+def _find_payment_image_columns(ws):
+    """查找支付截图所在列，返回 (表头行号, 目标列号集合)。
+
+    表格模板不固定，因此只在前十行中寻找包含“付款截图”或“水单”的表头。
+    返回的列号为 openpyxl 使用的 1-based 列号。
+    """
+    labels = ('付款截图', '水单')
+    for row in range(1, min(ws.max_row, 10) + 1):
+        columns = set()
+        for cell in ws[row]:
+            value = re.sub(r'[\s\u3000:：]', '', str(cell.value or ''))
+            if any(label in value for label in labels):
+                columns.add(cell.column)
+        if columns:
+            return row, columns
+    return None, set()
+
+
 def _workbook_image_items(workbook_path, image_dir):
-    """提取工作簿中嵌入图片，返回按工作表/锚点顺序排列的图片记录。"""
+    """提取目标支付图片，按工作表/行/图片列顺序返回记录。"""
     from openpyxl import load_workbook
     records = []
     wb = load_workbook(workbook_path, read_only=False, data_only=False)
     try:
         for sheet_index, ws in enumerate(wb.worksheets):
+            header_row, image_columns = _find_payment_image_columns(ws)
+            if not image_columns:
+                continue
             for image_index, image in enumerate(getattr(ws, '_images', [])):
                 anchor = image.anchor
                 row = getattr(getattr(anchor, '_from', None), 'row', 0)
@@ -275,11 +296,15 @@ def _workbook_image_items(workbook_path, image_dir):
                     image_bytes = image._data()
                 if not image_bytes:
                     continue
+                if col + 1 not in image_columns:
+                    continue
                 with open(image_path, 'wb') as file:
                     file.write(image_bytes)
                 records.append({'sheet_index': sheet_index, 'sheet_name': ws.title,
-                                'row': row, 'col': col, 'path': image_path,
-                                'image_index': image_index})
+                                  'row': row, 'col': col, 'path': image_path,
+                                  'image_index': image_index,
+                                  'header_row': header_row,
+                                  'image_column': col + 1})
     finally:
         wb.close()
     records.sort(key=lambda item: (item['sheet_index'], item['row'], item['col'], item['image_index']))
@@ -287,7 +312,7 @@ def _workbook_image_items(workbook_path, image_dir):
 
 
 def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
-    """赵淑华发票识别：读取原始 Excel 单元格中的嵌入支付截图并回写 I-K 列。"""
+    """赵淑华发票识别：按“付款截图/水单”列识别嵌入支付图片并动态回写结果。"""
     from openpyxl import load_workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font
@@ -312,40 +337,69 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
     # 以首个工作簿为原表基础，保留所有单元格、筛选、格式和嵌入图片。
     wb = load_workbook(workbook_paths[0])
     try:
-        processed = 0
-        for record in image_records:
-            # 当前支持单个原始工作簿；图片记录按所在工作表和单元格定位。
-            if record['sheet_name'] not in wb.sheetnames:
-                continue
-            ws = wb[record['sheet_name']]
-            items = tool.ocr_lines(record['path'])
-            date_value, time_value, amount = _payment_extract(items, 'wechat')
-            # 统一兼容：先取“支付时间”，取不到再取“转账时间”；
-            # 金额由顶部负号金额提取，已去掉负号。
-            text = _wechat_items_text(items)
-            if '支付时间' in text:
-                date_value, time_value, amount = _payment_extract(items, 'alipay')
-            elif '货拉拉' in text:
-                date_value, time_value, amount = _payment_extract(items, 'huolala')
-            row = record['row'] + 1
-            ws.cell(row=row, column=9, value=date_value)
-            ws.cell(row=row, column=10, value=time_value)
-            ws.cell(row=row, column=11, value=amount)
-            processed += 1
-            report(processed, len(image_records), '正在识别表格图片 %d/%d' %
-                   (processed, len(image_records)))
+        sheet_layouts = {}
         for ws in wb.worksheets:
-            ws.cell(row=1, column=9, value='支付年月日')
-            ws.cell(row=1, column=10, value='支付时间')
-            ws.cell(row=1, column=11, value='金额')
-            for cell in ws[1][8:11]:
-                cell.font = Font(bold=True)
-            for row in ws.iter_rows(min_row=2, min_col=9, max_col=11):
-                for cell in row:
+            header_row, image_columns = _find_payment_image_columns(ws)
+            if image_columns:
+                sheet_layouts[ws.title] = {
+                    'header_row': header_row,
+                    'image_columns': image_columns,
+                    # 最后一列后空两列，再开始写第一组三列。
+                    'output_start': max(image_columns) + 3,
+                }
+        if not sheet_layouts:
+            raise RuntimeError('未找到“付款截图”或“水单”列')
+
+        row_images = {}
+        for record in image_records:
+            if record['sheet_name'] not in sheet_layouts:
+                continue
+            key = (record['sheet_name'], record['row'])
+            row_images.setdefault(key, []).append(record)
+        for records in row_images.values():
+            records.sort(key=lambda item: (item['col'], item['image_index']))
+
+        processed = 0
+        for (sheet_name, zero_row), records in sorted(row_images.items()):
+            ws = wb[sheet_name]
+            layout = sheet_layouts[sheet_name]
+            row = zero_row + 1
+            for image_index, record in enumerate(records):
+                items = tool.ocr_lines(record['path'])
+                date_value, time_value, amount = _payment_extract(items, 'wechat')
+                # 微信使用“转账时间”，支付宝/货拉拉使用“支付时间”。
+                text = _wechat_items_text(items)
+                if '支付时间' in text:
+                    date_value, time_value, amount = _payment_extract(items, 'alipay')
+                elif '货拉拉' in text:
+                    date_value, time_value, amount = _payment_extract(items, 'huolala')
+                start_col = layout['output_start'] + image_index * 3
+                ws.cell(row=row, column=start_col, value=date_value)
+                ws.cell(row=row, column=start_col + 1, value=time_value)
+                ws.cell(row=row, column=start_col + 2, value=amount)
+                processed += 1
+                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
+                       (processed, len(image_records)))
+
+        for sheet_name, layout in sheet_layouts.items():
+            ws = wb[sheet_name]
+            header_row = layout['header_row']
+            max_images = max((len(records) for (name, _), records in row_images.items()
+                              if name == sheet_name), default=0)
+            for image_index in range(max_images):
+                start_col = layout['output_start'] + image_index * 3
+                for offset, title in enumerate(('支付年月日', '支付时间', '金额')):
+                    cell = ws.cell(row=header_row, column=start_col + offset, value=title)
+                    cell.font = Font(bold=True)
                     cell.alignment = Alignment(vertical='top', wrap_text=True)
-            ws.column_dimensions['I'].width = 16
-            ws.column_dimensions['J'].width = 14
-            ws.column_dimensions['K'].width = 16
+                widths = (16, 14, 16)
+                for offset, width in enumerate(widths):
+                    ws.column_dimensions[ws.cell(row=1, column=start_col + offset).column_letter].width = width
+            if max_images:
+                for row in ws.iter_rows(min_row=header_row + 1, min_col=layout['output_start'],
+                                        max_col=layout['output_start'] + max_images * 3 - 1):
+                    for cell in row:
+                        cell.alignment = Alignment(vertical='top', wrap_text=True)
         wb.save(output)
     finally:
         wb.close()
