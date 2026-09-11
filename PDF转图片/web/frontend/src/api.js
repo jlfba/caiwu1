@@ -72,11 +72,11 @@ async function createReportTask(file, sheetName, reportProfile = 'bundle') {
   return data
 }
 
-async function createFundTask(file1, file2, fundMode = 'receipt') {
+async function createFundTask(file1, file2, file3) {
   const fd = new FormData()
   fd.append('file1', file1, file1.name)
   fd.append('file2', file2, file2.name)
-  fd.append('fund_mode', fundMode)
+  fd.append('file3', file3, file3.name)
   const res = await fetch('/api/fund-tasks', { method: 'POST', body: fd })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.detail || '创建资金任务失败')

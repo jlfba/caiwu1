@@ -39,9 +39,9 @@ const reportLoading = ref(false)
 const reportUploadPercent = ref(0)
 const reportUploadDone = ref(false)
 
-const fundFile1 = ref(null)  // 审核表
-const fundFile2 = ref(null)  // 中信对公
-const fundMode  = ref('receipt') // receipt | payment
+const fundFile1 = ref(null)  // 收款审核表
+const fundFile2 = ref(null)  // 服务商付款审核表
+const fundFile3 = ref(null)  // 中信对公
 
 const status = ref('idle') // idle | processing | done | error
 const taskId = ref('')
@@ -140,11 +140,11 @@ function clearReportFile() {
 function clearFundFile() {
   fundFile1.value = null
   fundFile2.value = null
-  fundMode.value = 'receipt'
+  fundFile3.value = null
 }
 
 async function submitFund() {
-  if (!fundFile1.value || !fundFile2.value || submitting.value) return
+  if (!fundFile1.value || !fundFile2.value || !fundFile3.value || submitting.value) return
   stopPolling()
   stopElapsedTimer(false)
   elapsedSeconds.value = 0
@@ -157,7 +157,7 @@ async function submitFund() {
   logs.value = []
   filename.value = ''
   try {
-    const data = await createFundTask(fundFile1.value, fundFile2.value, fundMode.value)
+    const data = await createFundTask(fundFile1.value, fundFile2.value, fundFile3.value)
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -681,94 +681,71 @@ onUnmounted(() => {
           <div class="step-body">
             <div class="report-pane">
               <h2 class="step-title">上传表格文件</h2>
-              <p class="step-sub">依次拖入两个 Excel 表格</p>
-
-              <!-- 核对类型切换 -->
-              <div class="fund-mode-seg">
-                <button type="button" class="seg-btn" :class="{ on: fundMode === 'receipt' }" :disabled="submitting" @click="fundMode = 'receipt'; fundFile1 = null; fundFile2 = null">收款核对</button>
-                <button type="button" class="seg-btn" :class="{ on: fundMode === 'payment' }" :disabled="submitting" @click="fundMode = 'payment'; fundFile1 = null; fundFile2 = null">付款核对</button>
-              </div>
+              <p class="step-sub">依次拖入三个 Excel 表格，一次完成收款与付款核对</p>
 
               <div class="fund-upload-block">
                 <div class="fund-upload-label">
                   <span class="fund-step-tag">1</span>
-                  <span class="ts-label">{{ fundMode === 'receipt' ? '收款审核表' : '服务商付款审核表' }}</span>
+                  <span class="ts-label">收款审核表</span>
                   <span class="ts-tip">表名含日期后缀，如 260910</span>
                 </div>
-                <div class="fund-drop-zone"
-                  :class="{ 'fund-drop-active': fundFile1 }"
-                  @dragover.prevent
-                  @drop.prevent="e => { const f = e.dataTransfer.files[0]; if(f) fundFile1 = f }"
-                >
+                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile1 }" @dragover.prevent @drop.prevent="e => { const f = e.dataTransfer.files[0]; if (f) fundFile1 = f }">
                   <template v-if="!fundFile1">
                     <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
                     <span class="fund-drop-hint">拖入文件，或</span>
-                    <label class="fund-pick-btn">
-                      点击选择
-                      <input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting"
-                        @change="e => { const f = e.target.files[0]; if(f) fundFile1 = f; e.target.value='' }" />
-                    </label>
+                    <label class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile1 = f; e.target.value = '' }" /></label>
                   </template>
                   <template v-else>
                     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    <span class="fund-file-name" :title="fundFile1.name">{{ fundFile1.name }}</span>
-                    <button class="file-remove" type="button" :disabled="submitting" @click="fundFile1 = null">✕</button>
+                    <span class="fund-file-name" :title="fundFile1.name">{{ fundFile1.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile1 = null">✕</button>
                   </template>
                 </div>
               </div>
 
               <div class="fund-upload-block" :class="{ 'fund-block-dim': !fundFile1 }">
-                <div class="fund-upload-label">
-                  <span class="fund-step-tag">2</span>
-                  <span class="ts-label">中信对公</span>
-                  <span class="ts-tip">需含"系统"工作表</span>
-                </div>
-                <div class="fund-drop-zone"
-                  :class="{ 'fund-drop-active': fundFile2 }"
-                  @dragover.prevent
-                  @drop.prevent="e => { if(!fundFile1) return; const f = e.dataTransfer.files[0]; if(f) fundFile2 = f }"
-                >
+                <div class="fund-upload-label"><span class="fund-step-tag">2</span><span class="ts-label">服务商付款审核表</span><span class="ts-tip">表名含日期后缀，如 260910</span></div>
+                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile2 }" @dragover.prevent @drop.prevent="e => { if (!fundFile1) return; const f = e.dataTransfer.files[0]; if (f) fundFile2 = f }">
                   <template v-if="!fundFile2">
                     <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
                     <span class="fund-drop-hint">{{ fundFile1 ? '拖入文件，或' : '请先上传收款审核表' }}</span>
-                    <label v-if="fundFile1" class="fund-pick-btn">
-                      点击选择
-                      <input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting || !fundFile1"
-                        @change="e => { const f = e.target.files[0]; if(f) fundFile2 = f; e.target.value='' }" />
-                    </label>
+                    <label v-if="fundFile1" class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile2 = f; e.target.value = '' }" /></label>
                   </template>
                   <template v-else>
                     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    <span class="fund-file-name" :title="fundFile2.name">{{ fundFile2.name }}</span>
-                    <button class="file-remove" type="button" :disabled="submitting" @click="fundFile2 = null">✕</button>
+                    <span class="fund-file-name" :title="fundFile2.name">{{ fundFile2.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile2 = null">✕</button>
+                  </template>
+                </div>
+              </div>
+
+              <div class="fund-upload-block" :class="{ 'fund-block-dim': !fundFile2 }">
+                <div class="fund-upload-label"><span class="fund-step-tag">3</span><span class="ts-label">中信对公</span><span class="ts-tip">需含“系统”工作表</span></div>
+                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile3 }" @dragover.prevent @drop.prevent="e => { if (!fundFile2) return; const f = e.dataTransfer.files[0]; if (f) fundFile3 = f }">
+                  <template v-if="!fundFile3">
+                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
+                    <span class="fund-drop-hint">{{ fundFile2 ? '拖入文件，或' : '请先上传服务商付款审核表' }}</span>
+                    <label v-if="fundFile2" class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile3 = f; e.target.value = '' }" /></label>
+                  </template>
+                  <template v-else>
+                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
+                    <span class="fund-file-name" :title="fundFile3.name">{{ fundFile3.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile3 = null">✕</button>
                   </template>
                 </div>
               </div>
             </div>
 
             <div class="report-action-pane">
-              <h2 class="step-title">{{ fundMode === 'receipt' ? '生成收款核对表' : '生成付款核对表' }}</h2>
-              <p class="step-sub">匹配{{ fundMode === 'receipt' ? '贷方发生额与收款金额' : '借方发生额与付款金额' }}，自动标色并输出核对结果文件</p>
+              <h2 class="step-title">生成资金核对表</h2>
+              <p class="step-sub">先处理收款审核表，再处理服务商付款审核表；中信对公只需上传一次</p>
               <div class="fund-checklist">
-                <div class="fund-check-item" :class="{ done: fundFile1 }">
-                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile1 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile1" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  <span>{{ fundMode === 'receipt' ? '收款审核表' : '服务商付款审核表' }}</span>
-                </div>
-                <div class="fund-check-item" :class="{ done: fundFile2 }">
-                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none"><circle cx="8" cy="8" r="7" :stroke="fundFile2 ? 'var(--primary)' : 'var(--border-strong)'" stroke-width="1.5"/><path v-if="fundFile2" d="M5 8.5l2 2L11 5" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  <span>中信对公</span>
-                </div>
+                <div class="fund-check-item" :class="{ done: fundFile1 }"><span class="fund-check-icon">{{ fundFile1 ? '✓' : '○' }}</span><span>收款审核表</span></div>
+                <div class="fund-check-item" :class="{ done: fundFile2 }"><span class="fund-check-icon">{{ fundFile2 ? '✓' : '○' }}</span><span>服务商付款审核表</span></div>
+                <div class="fund-check-item" :class="{ done: fundFile3 }"><span class="fund-check-icon">{{ fundFile3 ? '✓' : '○' }}</span><span>中信对公（系统）</span></div>
               </div>
               <div class="run-area">
-                <button class="btn-make" type="button" :disabled="!fundFile1 || !fundFile2 || submitting" @click="submitFund">
-                  <span v-if="submitting" class="spinner" aria-hidden="true"></span>
-                  <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
+                <button class="btn-make" type="button" :disabled="!fundFile1 || !fundFile2 || !fundFile3 || submitting" @click="submitFund">
+                  <span v-if="submitting" class="spinner" aria-hidden="true"></span><span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
                 </button>
-                <p class="run-hint">
-                  <template v-if="!fundFile1">请先上传收款审核表</template>
-                  <template v-else-if="!fundFile2">请上传中信对公</template>
-                  <template v-else>两个文件已就绪，可开始处理</template>
-                </p>
+                <p class="run-hint"><template v-if="!fundFile1">请先上传收款审核表</template><template v-else-if="!fundFile2">请上传服务商付款审核表</template><template v-else-if="!fundFile3">请上传中信对公</template><template v-else>三个文件已就绪，可开始处理</template></p>
               </div>
             </div>
 

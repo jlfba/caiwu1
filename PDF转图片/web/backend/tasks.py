@@ -78,8 +78,8 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_fund_task(filename1, data1, filename2, data2, fund_mode='receipt'):
-    """创建资金组任务：审核表(file1) + 中信对公(file2)，fund_mode: receipt/payment。"""
+def create_fund_task(filename1, data1, filename2, data2, filename3, data3):
+    """创建资金组任务：收款审核表(1) + 付款审核表(2) + 中信对公(3)。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
     in_dir   = os.path.join(task_dir, 'in')
@@ -87,26 +87,23 @@ def create_fund_task(filename1, data1, filename2, data2, fund_mode='receipt'):
     os.makedirs(in_dir, exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
 
-    safe1 = processor.sanitize_filename(filename1)
-    path1 = os.path.join(in_dir, 'fund1_' + safe1)
-    with open(path1, 'wb') as f:
-        f.write(data1)
-
-    safe2 = processor.sanitize_filename(filename2)
-    path2 = os.path.join(in_dir, 'fund2_' + safe2)
-    with open(path2, 'wb') as f:
-        f.write(data2)
+    paths = []
+    for i, (fn, data) in enumerate([(filename1, data1), (filename2, data2), (filename3, data3)], 1):
+        safe = processor.sanitize_filename(fn)
+        p = os.path.join(in_dir, f'fund{i}_' + safe)
+        with open(p, 'wb') as f:
+            f.write(data)
+        paths.append(p)
 
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
         'status': 'pending', 'current': 0, 'total': 5,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
-        'fund_mode': fund_mode,
     }
     with _LOCK:
         _TASKS[task_id] = task
-    _QUEUE.put((task_id, [path1, path2], 'fund', '', 'v', 'A1', None, ''))
+    _QUEUE.put((task_id, paths, 'fund', '', 'v', 'A1', None, ''))
     return task_id
 
 
@@ -223,8 +220,7 @@ def _worker():
                     pdfs[0], sheet_name, output, progress)
             elif mode == 'fund':
                 result = fund_processor.process_fund(
-                    pdfs[0], pdfs[1], task['out_dir'], progress,
-                    fund_mode=task.get('fund_mode', 'receipt'))
+                    pdfs[0], pdfs[1], pdfs[2], task['out_dir'], progress)
             elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,
