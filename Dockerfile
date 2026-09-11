@@ -7,9 +7,9 @@
 FROM node:20-alpine AS frontend
 WORKDIR /build
 # 先装依赖再拷源码，利用 Docker 层缓存
-COPY web/frontend/package.json web/frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
-COPY web/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # ---------- 阶段 2：运行后端（FastAPI + OCR） ----------
@@ -26,14 +26,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖
-COPY web/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 # pdf转图片.py 放容器根目录 /（backend/processor.py 上溯 3 级 = /）
 COPY pdf转图片.py /pdf转图片.py
 
 # 后端代码（结构对齐 master：/app/backend/）
-COPY web/backend/ backend/
+COPY backend/ backend/
 
 # 前端构建产物（阶段 1，结构对齐 master：/app/frontend/dist/）
 COPY --from=frontend /build/dist frontend/dist/
