@@ -78,8 +78,9 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_fund_task(filename1, data1, filename2, data2, filename3, data3):
-    """创建资金组任务：收款审核表(1) + 付款审核表(2) + 中信对公(3)。"""
+def create_fund_task(filename1, data1, filename2, data2, filename3, data3,
+                     filename4, data4):
+    """创建资金组任务：收款、付款、中信对公和银行账号管理流水四表核对。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
     in_dir   = os.path.join(task_dir, 'in')
@@ -88,7 +89,9 @@ def create_fund_task(filename1, data1, filename2, data2, filename3, data3):
     os.makedirs(out_dir, exist_ok=True)
 
     paths = []
-    for i, (fn, data) in enumerate([(filename1, data1), (filename2, data2), (filename3, data3)], 1):
+    for i, (fn, data) in enumerate([
+            (filename1, data1), (filename2, data2),
+            (filename3, data3), (filename4, data4)], 1):
         safe = processor.sanitize_filename(fn)
         p = os.path.join(in_dir, f'fund{i}_' + safe)
         with open(p, 'wb') as f:
@@ -97,7 +100,7 @@ def create_fund_task(filename1, data1, filename2, data2, filename3, data3):
 
     task = {
         'id': task_id, 'dir': task_dir, 'out_dir': out_dir,
-        'status': 'pending', 'current': 0, 'total': 5,
+        'status': 'pending', 'current': 0, 'total': 6,
         'message': '等待处理…', 'filename': '', 'error': '', 'logs': [],
         'created': time.time(), 'elapsed_seconds': 0, 'processing_started_at': None,
     }
@@ -220,7 +223,7 @@ def _worker():
                     pdfs[0], sheet_name, output, progress)
             elif mode == 'fund':
                 result = fund_processor.process_fund(
-                    pdfs[0], pdfs[1], pdfs[2], task['out_dir'], progress)
+                    pdfs[0], pdfs[1], pdfs[2], pdfs[3], task['out_dir'], progress)
             elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,

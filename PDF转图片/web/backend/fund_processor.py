@@ -11,6 +11,7 @@ import os
 import re
 import zipfile
 from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -18,6 +19,7 @@ from openpyxl.styles import PatternFill
 _FILL_LIGHT_RED   = PatternFill(fill_type='solid', fgColor='FFC7CE')
 _FILL_YELLOW      = PatternFill(fill_type='solid', fgColor='FFFF00')
 _FILL_LIGHT_GREEN = PatternFill(fill_type='solid', fgColor='C6EFCE')
+_FILL_BLUE        = PatternFill(fill_type='solid', fgColor='9DC3E6')
 
 
 def _find_col(headers: list, name: str) -> int:
@@ -29,6 +31,31 @@ def _find_col(headers: list, name: str) -> int:
 
 def _to_num(val) -> float | None:
     if val is None:
+        return None
+
+
+def _money_key(val):
+    """Return a two-decimal Decimal key for stable monetary matching."""
+    if val is None or str(val).strip() == '':
+        return None
+    try:
+        return Decimal(str(val).replace(',', '').strip()).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _cell_date(val):
+    """Normalize an Excel date/datetime/text cell to a date object."""
+    if val is None:
+        return None
+    if hasattr(val, 'date'):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    try:
+        return date.fromisoformat(str(val).strip().replace('/', '-')[:10])
+    except ValueError:
         return None
     try:
         return float(val)
@@ -161,21 +188,118 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
     return True, ''
 
 
-def process_fund(file1_path: str, file2_path: str, file3_path: str,
+def _tax_amount(note):
+    """Extract the amount written after the final tax-point equals sign."""
+    if note is None:
+        return None
+    match = re.search(r'税点s*[=:：]s*([+-]?[d,]+(?:.d+)?)', str(note))
+    return _money_key(match.group(1)) if match else None
+
+
+def _process_bank_account_flow(wb_flow, ws_sys, target_date: date,
+                               sys_marked: set[tuple[int, int]]):
+    """Match non-sales bank-account flow income/expense rows to the system sheet."""
+    ws = wb_flow[_auto_sheet(wb_flow, ['银行账号管理流水', '流水'])]
+    headers = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
+    col_type = _find_col(headers, '费用类型')
+    col_income = _find_col(headers, '收入')
+    col_expense = _find_col(headers, '支出')
+    col_note = _find_col(headers, '备注')
+    col_result = next((i + 1 for i, header in enumerate(headers)
+                       if str(header).strip() == '查找结果'), None)
+    if col_result is None:
+        col_result = ws.max_column + 1
+        ws.cell(1, col_result, '查找结果')
+
+    sys_headers = [ws_sys.cell(1, c).value for c in range(1, ws_sys.max_column + 1)]
+    col_date = _find_col(sys_headers, '交易日期')
+    col_credit = _find_col(sys_headers, '贷方发生额')
+    col_debit = _find_col(sys_headers, '借方发生额')
+    system_rows = [r for r in range(2, ws_sys.max_row + 1)
+                   if _cell_date(ws_sys.cell(r, col_date).value) == target_date]
+    if not system_rows:
+        raise ValueError(f'系统表中未找到 {target_date} 的交易日期数据')
+
+    used_credit, used_debit = set(), set()
+
+    def match(amount, column, used_rows, fill):
+        if amount is None:
+            return False
+        for row in system_rows:
+            if row in used_rows:
+                continue
+            if _money_key(ws_sys.cell(row, column).value) == amount:
+                ws_sys.cell(row, column).fill = fill
+                sys_marked.add((row, column))
+                used_rows.add(row)
+                return True
+        return False
+
+    processed = 0
+    for row in range(2, ws.max_row + 1):
+        fee_type = str(ws.cell(row, col_type).value or '').strip()
+        if fee_type in ('销售收入', '销售成本'):
+            continue
+        income = _money_key(ws.cell(row, col_income).value)
+        expense = _money_key(ws.cell(row, col_expense).value)
+        note = str(ws.cell(row, col_note).value or '')
+        is_void = '作废' in note
+
+        if income not in (None, Decimal('0.00')):
+            processed += 1
+            if is_void:
+                ws.cell(row, col_result, '忽略')
+            elif '税点' in note:
+                amount = _tax_amount(note)
+                if match(amount, col_credit, used_credit, _FILL_YELLOW):
+                    ws.cell(row, col_result, '已找到')
+                else:
+                    ws.cell(row, col_result, '未找到')
+                    for cell in ws[row]:
+                        cell.fill = _FILL_BLUE
+            elif fee_type == '其他收入':
+                if match(income, col_credit, used_credit, _FILL_YELLOW):
+                    ws.cell(row, col_result, '已找到')
+                else:
+                    ws.cell(row, col_result, '未找到')
+                    for cell in ws[row]:
+                        cell.fill = _FILL_BLUE
+            else:
+                ws.cell(row, col_result, '人工处理')
+
+        if expense not in (None, Decimal('0.00')):
+            processed += 1
+            if is_void:
+                ws.cell(row, col_result, '忽略')
+            elif '美金转账手续费' in note:
+                for cell in ws[row]:
+                    cell.fill = _FILL_LIGHT_GREEN
+                ws.cell(row, col_result, '人工处理')
+            elif match(expense, col_debit, used_debit, _FILL_LIGHT_GREEN):
+                ws.cell(row, col_result, '已找到')
+            else:
+                ws.cell(row, col_result, '未找到')
+                for cell in ws[row]:
+                    cell.fill = _FILL_BLUE
+    return processed
+
+
+def process_fund(file1_path: str, file2_path: str, file3_path: str, file4_path: str,
                  out_dir: str, progress) -> str:
     """
     主处理入口。
     file1_path: 收款审核表
     file2_path: 服务商付款审核表
     file3_path: 中信对公
+    file4_path: 银行账号管理流水
     返回输出 ZIP 文件路径。
     """
-    progress(1, 5, '正在读取收款审核表…')
+    progress(1, 6, '正在读取收款审核表…')
     wb1 = openpyxl.load_workbook(file1_path)
     date_suffix1 = _extract_date(file1_path)
     target_date1 = _parse_date(date_suffix1)
 
-    progress(2, 5, '正在读取中信对公系统表…')
+    progress(2, 6, '正在读取中信对公系统表…')
     wb3 = openpyxl.load_workbook(file3_path)
     if '系统' not in wb3.sheetnames:
         raise ValueError(f'中信对公文件中未找到"系统"工作表，当前工作表：{wb3.sheetnames}')
@@ -187,7 +311,7 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
 
     sys_marked: set[tuple[int, int]] = set()  # 系统表已标色单元格（两次核对共享）
 
-    progress(3, 5, '正在核对收款数据…')
+    progress(3, 6, '正在核对收款数据…')
     ok1, warn1 = _process_one(
         wb1, '收款金额', ['收款', '审核'],
         ws_sys, col_日期, col_贷方, '贷方发生额',
@@ -196,7 +320,7 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
     if not ok1:
         raise ValueError(f'收款核对失败：{warn1}')
 
-    progress(4, 5, '正在核对付款数据…')
+    progress(4, 6, '正在核对付款数据…')
     wb2 = openpyxl.load_workbook(file2_path)
     date_suffix2 = _extract_date(file2_path)
     target_date2 = _parse_date(date_suffix2)
@@ -208,7 +332,13 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
     if not ok2:
         raise ValueError(f'付款核对失败：{warn2}')
 
-    progress(5, 5, '正在保存并打包结果…')
+    progress(5, 6, '正在核对银行账号管理流水…')
+    wb4 = openpyxl.load_workbook(file4_path)
+    date_suffix4 = _extract_date(file4_path)
+    target_date4 = _parse_date(date_suffix4)
+    _process_bank_account_flow(wb4, ws_sys, target_date4, sys_marked)
+
+    progress(6, 6, '正在保存并打包结果…')
 
     name1 = f'收款审核表-资金核对-{date_suffix1}.xlsx'
     path1 = os.path.join(out_dir, name1)
@@ -222,11 +352,16 @@ def process_fund(file1_path: str, file2_path: str, file3_path: str,
     path3 = os.path.join(out_dir, name3)
     wb3.save(path3)
 
+    name4 = f'银行账号管理流水-核对-{date_suffix4}.xlsx'
+    path4 = os.path.join(out_dir, name4)
+    wb4.save(path4)
+
     zip_name = f'资金核对-{date_suffix1}.zip'
     zip_path = os.path.join(out_dir, zip_name)
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.write(path1, name1)
         zf.write(path2, name2)
         zf.write(path3, name3)
+        zf.write(path4, name4)
 
     return zip_path

@@ -105,9 +105,10 @@ async def create_task(files: list[UploadFile] = File(...),
 async def create_fund_task(
         file1: UploadFile = File(...),
         file2: UploadFile = File(...),
-        file3: UploadFile = File(...)):
-    """资金组：收款审核表(file1) + 服务商付款审核表(file2) + 中信对公(file3)。"""
-    for f in (file1, file2, file3):
+        file3: UploadFile = File(...),
+        file4: UploadFile = File(...)):
+    """资金组：收款、付款、中信对公和银行账号管理流水四表核对。"""
+    for f in (file1, file2, file3, file4):
         if not (f.filename or '').lower().endswith(('.xlsx', '.xlsm')):
             return JSONResponse(
                 {'detail': f'资金组仅支持 .xlsx / .xlsm 文件：{f.filename}'},
@@ -116,6 +117,7 @@ async def create_fund_task(
         file1.filename or 'fund1.xlsx', await file1.read(),
         file2.filename or 'fund2.xlsx', await file2.read(),
         file3.filename or 'fund3.xlsx', await file3.read(),
+        file4.filename or 'fund4.xlsx', await file4.read(),
     )
     return {'task_id': task_id}
 
