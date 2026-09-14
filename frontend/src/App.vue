@@ -1149,6 +1149,10 @@ onUnmounted(() => {
   left: -16px;
 }
 
+.workflow-right .step-body {
+  padding-left: 24px;
+}
+
 .step-dot.cur {
   border-color: var(--primary);
   color: var(--primary);
@@ -1579,6 +1583,9 @@ onUnmounted(() => {
   }
   .workflow-right .step-dot {
     display: none;
+  }
+  .workflow-right .step-body {
+    padding-left: 0;
   }
   .workflow-right .step-body {
     animation-delay: 0.16s;
