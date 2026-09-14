@@ -620,6 +620,7 @@ onUnmounted(() => {
           :current="current"
           :total="total"
           :message="message"
+          :logs="logs"
           :elapsed-seconds="mode !== '3' ? elapsedSeconds : -1"
         />
 
@@ -750,7 +751,7 @@ onUnmounted(() => {
             </div>
 
             <div v-if="submitting || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :elapsed-seconds="elapsedSeconds" />
+              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
               <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
             </div>
           </div>

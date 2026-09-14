@@ -89,15 +89,14 @@ const elapsedText = computed(() => {
     <div class="track" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
       <div class="bar" :style="{ width: percent + '%' }"></div>
     </div>
-    <p v-if="!isReportFlow" class="pp-msg">{{ message }}</p>
-    <div v-if="isReportFlow" class="pp-terminal" aria-label="处理日志">
+    <div class="pp-terminal" aria-label="处理日志">
       <div class="pp-terminal-head"><span>全部处理日志</span><span>{{ logs.length }} 条</span></div>
       <div ref="terminalBody" class="pp-terminal-body">
         <p class="terminal-current">[当前状态] {{ message || '等待处理状态…' }}</p>
-        <p v-for="(stage, index) in reportStages" :key="`stage-${stage}`" :class="`terminal-stage stage-${stageState(index)}`">
+        <p v-for="(stage, index) in (isReportFlow ? reportStages : [])" :key="`stage-${stage}`" :class="`terminal-stage stage-${stageState(index)}`">
           [步骤 {{ index + 1 }}/{{ reportStages.length }}] {{ stage }} — {{ stageState(index) === 'done' ? '已完成' : stageState(index) === 'active' ? '进行中' : '待处理' }}
         </p>
-        <p class="terminal-divider">---------------- 实时记录 ----------------</p>
+        <p v-if="isReportFlow" class="terminal-divider">---------------- 实时记录 ----------------</p>
         <p v-for="(line, index) in logs" :key="`${index}-${line}`">{{ line }}</p>
         <p v-if="!logs.length" class="pp-terminal-empty">等待后端日志…</p>
       </div>
