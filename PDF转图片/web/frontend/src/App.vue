@@ -871,6 +871,10 @@ onUnmounted(() => {
   height: auto;
 }
 
+.workflow-right.processing-active .action-pane {
+  overflow: visible;
+}
+
 .workflow-right.report-active > .step:first-child {
   flex: none;
   overflow: visible;
