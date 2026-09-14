@@ -7,8 +7,9 @@ const props = defineProps({
   total: { type: Number, default: 0 },
   message: { type: String, default: '' },
   elapsedSeconds: { type: Number, default: -1 },
-  logs: { type: Array, default: () => [] }
-  ,reportProfile: { type: String, default: 'no_receivable' }
+  logs: { type: Array, default: () => [] },
+  reportProfile: { type: String, default: 'no_receivable' },
+  reportFlow: { type: Boolean, default: false }
 })
 
 const terminalBody = ref(null)
@@ -56,7 +57,8 @@ const noSalespersonCostStages = [
 ]
 const reportStages = computed(() => props.reportProfile === 'no_salesperson_cost' ? noSalespersonCostStages : noReceivableStages)
 
-const isReportFlow = computed(() => props.total >= 9)
+// 图片识别任务也可能一次处理几十、上百张；不能再根据 total 判断报表流程。
+const isReportFlow = computed(() => props.reportFlow)
 
 function stageState(index) {
   if (props.current > index + 1) return 'done'

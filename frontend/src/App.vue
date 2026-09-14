@@ -668,7 +668,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div v-if="submitting || status === 'paused' || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" :report-profile="reportProfile" />
+              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" :report-profile="reportProfile" :report-flow="true" />
               <div v-if="status === 'paused'" class="report-step-actions">
                 <a class="btn primary" :href="`/api/tasks/${taskId}/download`" :download="filename">下载步骤 {{ reportStep }} 结果</a>
                 <button class="btn ghost" type="button" @click="continueReport">继续第 {{ reportStep + 1 }} 步</button>
