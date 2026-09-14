@@ -1144,6 +1144,11 @@ onUnmounted(() => {
   transition: all 0.3s var(--ease-out);
 }
 
+/* 右侧上传卡片的步骤图标放在卡片内部，避免越过边框 */
+.workflow-right .step-dot {
+  left: -16px;
+}
+
 .step-dot.cur {
   border-color: var(--primary);
   color: var(--primary);
