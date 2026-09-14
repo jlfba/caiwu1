@@ -488,7 +488,7 @@ onUnmounted(() => {
     </section>
       </div>
 
-      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' || mode === 'fund' }">
+      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' || mode === 'fund', 'processing-active': submitting || status === 'done' || status === 'error' }">
         <!-- 步骤 3/2：上传 PDF -->
         <section v-if="mode !== '4' && mode !== 'fund' && (mode !== 'receipt' || effectiveMode)" class="step">
       <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : mode === 'receipt' ? 4 : 2) }">
@@ -856,6 +856,21 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.workflow-right.processing-active {
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.workflow-right.processing-active > .step:first-child {
+  flex: none;
+  overflow: visible;
+}
+
+.workflow-right.processing-active > .step > .step-body {
+  height: auto;
+}
+
 .workflow-right.report-active > .step:first-child {
   flex: none;
   overflow: visible;
@@ -912,7 +927,7 @@ onUnmounted(() => {
   padding-top: 22px;
   border-top: 1px dashed var(--border-strong);
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .action-pane > .make-section:first-child {
