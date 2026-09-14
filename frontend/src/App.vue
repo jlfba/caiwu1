@@ -1536,7 +1536,7 @@ onUnmounted(() => {
   }
   .report-progress-wide > :deep(.pp-terminal-body) {
     min-height: 0;
-    max-height: none;
+    max-height: min(48vh, 420px);
   }
   .action-pane {
     margin-top: 28px;

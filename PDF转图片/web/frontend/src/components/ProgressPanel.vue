@@ -274,4 +274,12 @@ const elapsedText = computed(() => {
 .pp-terminal-body .terminal-stage.stage-done { color: #b6ccc9 !important; }
 .pp-terminal-body .terminal-divider { color: #4f6b72; }
 .pp-terminal-body .terminal-divider::before { content: ''; }
+
+@media (max-width: 960px) {
+  /* 小屏时日志必须在卡片内滚动，不能随着记录增多把底部挤出视口。 */
+  .pp-terminal-body {
+    min-height: 0;
+    max-height: min(48vh, 420px);
+  }
+}
 </style>
