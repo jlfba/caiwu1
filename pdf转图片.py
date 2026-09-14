@@ -1863,34 +1863,47 @@ def _split_container(desc):
     return desc, desc.split(' ', 1)[0]
 
 
-def _max_table(lines, header_line):
-    """MAXPORTLINK 六列明细表 #|Product or service|Description|Qty|Rate|Amount。
-    价格行（Qty/Rate/Amount 含数字）为一行起始，其后 Description 续行并入（空格拼接）。
-    返回每行 [product, desc, qty, rate, amount]；柜号发票级由上层单独提取，
-    Rate/Amount 保留货币符号原样。"""
+def _max_table_layout(header_line):
     def hdr(key):
         for w in header_line['items']:
             if _compact_text(w['text']) == key:
                 return w
         return None
-
-    prod_hdr = hdr('PRODUCT')
-    desc_hdr = hdr('DESCRIPTION')
-    qty_hdr = hdr('QTY')
-    rate_hdr = hdr('RATE')
-    amt_hdr = hdr('AMOUNT')
-    if prod_hdr is None or desc_hdr is None or qty_hdr is None or rate_hdr is None or amt_hdr is None:
-        return []
-    prod_left = prod_hdr['cx'] - prod_hdr['w'] / 2
-    desc_left = desc_hdr['cx'] - desc_hdr['w'] / 2
-    qty_left = qty_hdr['cx'] - qty_hdr['w'] / 2
-    # Qty/Rate/Amount 右对齐：按词右边缘分类，边界取相邻表头右边缘中点
-    # （长金额如 $384.0471673 中心会落到 Qty 区间，按中心分类会错列）
+    prod_hdr = hdr('PRODUCT') if header_line is not None else True
+    desc_hdr = hdr('DESCRIPTION') if header_line is not None else True
+    qty_hdr = hdr('QTY') if header_line is not None else True
+    rate_hdr = hdr('RATE') if header_line is not None else True
+    amt_hdr = hdr('AMOUNT') if header_line is not None else True
+    if any(x is None for x in (prod_hdr, desc_hdr, qty_hdr, rate_hdr, amt_hdr)):
+        return None
     qty_right = qty_hdr['cx'] + qty_hdr['w'] / 2
     rate_right = rate_hdr['cx'] + rate_hdr['w'] / 2
     amt_right = amt_hdr['cx'] + amt_hdr['w'] / 2
-    right_bounds = [(qty_right + rate_right) / 2,
-                    (rate_right + amt_right) / 2, float('inf')]
+    return {
+        'prod_left': prod_hdr['cx'] - prod_hdr['w'] / 2,
+        'desc_left': desc_hdr['cx'] - desc_hdr['w'] / 2,
+        'qty_left': qty_hdr['cx'] - qty_hdr['w'] / 2,
+        'right_bounds': [(qty_right + rate_right) / 2,
+                         (rate_right + amt_right) / 2, float('inf')],
+        'header_bottom': max(w['cy'] + w['h'] / 2 for w in header_line['items']),
+    }
+
+
+def _max_table(lines, header_line=None, table_layout=None, continuation=False):
+    """MAXPORTLINK 六列明细表 #|Product or service|Description|Qty|Rate|Amount。
+    价格行（Qty/Rate/Amount 含数字）为一行起始，其后 Description 续行并入（空格拼接）。
+    返回每行 [product, desc, qty, rate, amount]；柜号发票级由上层单独提取，
+    Rate/Amount 保留货币符号原样。"""
+    if table_layout is None and header_line is not None:
+        table_layout = _max_table_layout(header_line)
+    if table_layout is None:
+        return []
+    prod_left = table_layout['prod_left']
+    desc_left = table_layout['desc_left']
+    qty_left = table_layout['qty_left']
+    # Qty/Rate/Amount 右对齐：按词右边缘分类，边界取相邻表头右边缘中点
+    # （长金额如 $384.0471673 中心会落到 Qty 区间，按中心分类会错列）
+    right_bounds = table_layout['right_bounds']
 
     def classify(item):
         cx = item['cx']
@@ -1905,10 +1918,14 @@ def _max_table(lines, header_line):
             return 3  # rate
         return 4  # amount
 
-    header_bottom = max(w['cy'] + w['h'] / 2 for w in header_line['items'])
+    header_bottom = (table_layout['header_bottom']
+                     if header_line is not None else float('-inf'))
     rows, cur = [], None
     stop_words = ('SUBTOTAL', 'TOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'DUE',
                   'REGISTRATION')
+    if continuation:
+        stop_words += ('CHEQUES', 'MAILTO', 'CHASE', 'SWIFT', 'ROUTTING',
+                       'ADDRESS', 'TOKEN')
     for ln in lines:
         if ln['cy'] <= header_bottom + 2:
             continue
@@ -1934,7 +1951,7 @@ def _max_table(lines, header_line):
     return result
 
 
-def extract_max_portlink_page(items):
+def extract_max_portlink_page(items, table_layout=None):
     """MAX萨凡纳（MAXPORTLINK）发票单页：Ship to / 邮编 / Invoice details 第一行 / 柜号 字段 + 五列表。
     返回 ({ship_to, postal, invoice_no, container}, [[product, desc, qty, rate, amount], ...])。
     柜号为发票级：取本页明细 Description 首词（第一个非空）。"""
@@ -1949,7 +1966,9 @@ def extract_max_portlink_page(items):
             header_line = ln
             break
     if header_line is None:
-        return {}, []
+        if table_layout is None:
+            return {}, []
+        return {}, _max_table(lines, table_layout=table_layout, continuation=True)
     header_cy = header_line['cy']
     field_lines = [ln for ln in lines if ln['cy'] < header_cy - 2]
     fields = {}
@@ -1959,6 +1978,7 @@ def extract_max_portlink_page(items):
     anchor, label_line = _jz_label(field_lines, 'INVOICEDETAILS', 'INVOICE')
     fields['invoice_no'] = _max_invoice_details_first(field_lines, header_cy, anchor, label_line)
     rows = _max_table(lines, header_line)
+    fields['_table_layout'] = _max_table_layout(header_line)
     for r in rows:
         _, container = _split_container(r[1])
         if container:
@@ -1967,7 +1987,7 @@ def extract_max_portlink_page(items):
     return fields, rows
 
 
-def _extract_max_from_pdfs(pdf_paths):
+def _extract_max_from_pdfs(pdf_paths, continue_without_header=False):
     """MAX 系列发票（MAX萨凡纳/MAX纽约同布局）通用批量识别。
     续页继承上页字段值；柜号/邮编为发票级字段，填充该发票全部行。"""
     all_rows, pages, skipped = [], 0, 0
@@ -1982,9 +2002,15 @@ def _extract_max_from_pdfs(pdf_paths):
             for page_no, page in enumerate(doc, 1):
                 pages += 1
                 items = _detail_page_items(pdf_path, page, page_no)
-                fields, rows = extract_max_portlink_page(items)
+                fields, rows = extract_max_portlink_page(
+                    items,
+                    table_layout=(last.get('_table_layout')
+                                  if continue_without_header else None))
+                table_layout = fields.pop('_table_layout', None)
                 merged = dict(last)
                 merged.update({k: v for k, v in fields.items() if v and v != '未知'})
+                if table_layout is not None:
+                    merged['_table_layout'] = table_layout
                 last = merged
                 for r in rows:
                     all_rows.append([merged.get('ship_to', '未知'),
@@ -2011,7 +2037,7 @@ def extract_max_ny_from_pdfs(pdf_paths):
 
 def extract_aa_from_pdfs(pdf_paths):
     """批量识别 AA（TX-AA LOGISTICS）发票（同 MAX萨凡纳 布局）。"""
-    return _extract_max_from_pdfs(pdf_paths)
+    return _extract_max_from_pdfs(pdf_paths, continue_without_header=True)
 
 
 def _max_invoice_mode(pdf_paths, name):
