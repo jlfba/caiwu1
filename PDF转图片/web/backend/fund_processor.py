@@ -32,6 +32,10 @@ def _find_col(headers: list, name: str) -> int:
 def _to_num(val) -> float | None:
     if val is None:
         return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
 
 
 def _money_key(val):
@@ -56,10 +60,6 @@ def _cell_date(val):
     try:
         return date.fromisoformat(str(val).strip().replace('/', '-')[:10])
     except ValueError:
-        return None
-    try:
-        return float(val)
-    except (TypeError, ValueError):
         return None
 
 
