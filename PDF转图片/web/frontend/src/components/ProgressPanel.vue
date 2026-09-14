@@ -111,6 +111,7 @@ const elapsedText = computed(() => {
   border-radius: var(--radius);
   padding: 20px 22px;
   animation: fade 0.3s var(--ease-out);
+  min-height: 0;
 }
 
 @keyframes fade {
@@ -251,6 +252,7 @@ const elapsedText = computed(() => {
 
 .pp-terminal {
   margin-top: 16px;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #263842;
   border-radius: 10px;
@@ -262,7 +264,7 @@ const elapsedText = computed(() => {
   display: flex; justify-content: space-between; padding: 9px 12px;
   border-bottom: 1px solid #263842; color: #8bcfc6; font-size: 11px; font-weight: 700;
 }
-.pp-terminal-body { max-height: min(52vh, 520px); min-height: 300px; overflow-y: auto; padding: 12px 14px; scrollbar-width: thin; }
+.pp-terminal-body { max-height: min(52vh, 520px); min-height: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px; scrollbar-width: thin; }
 .pp-terminal-body p { margin: 0 0 6px; color: #c8e2df; font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .pp-terminal-body p::before { content: '> '; color: #5bd0bd; }
 .pp-terminal-empty { color: #78919a !important; }

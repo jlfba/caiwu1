@@ -890,9 +890,11 @@ onUnmounted(() => {
 }
 
 .action-pane {
-  overflow-y: auto;
+  overflow: hidden;
   padding: 0 4px 8px 0;
-  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .upload-pane > :deep(.dropzone-wrap) {
@@ -909,6 +911,8 @@ onUnmounted(() => {
   margin-top: 26px;
   padding-top: 22px;
   border-top: 1px dashed var(--border-strong);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .action-pane > .make-section:first-child {
