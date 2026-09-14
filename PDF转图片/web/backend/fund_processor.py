@@ -101,6 +101,8 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
 
     col_金额 = _find_col(headers, amount_col_name)
     col_备注 = _find_col(headers, '备注')
+    col_result = 19
+    ws.cell(1, col_result, '查找结果')
 
     # 删合计行（仅金额列有值，其余空）
     last_r = ws.max_row
@@ -160,24 +162,39 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
             a_map.setdefault(v, []).append(r)
 
     a_marked: set[int] = set()
-    matched_amounts: list[float] = []
+    matched_a_rows: set[int] = set()
 
     for i, _ in enumerate(filtered_rows):
         e_row = i + 2
         e_val = _to_num(ws_tmp.cell(e_row, 5).value)
         if e_val is not None and e_val in a_map:
             ws_tmp.cell(e_row, 6, e_val)
-            matched_amounts.append(e_val)
             for a_row in a_map[e_val]:
                 if a_row not in a_marked:
                     ws_tmp.cell(a_row, 1).fill = _FILL_LIGHT_RED
                     a_marked.add(a_row)
+                    matched_a_rows.add(a_row)
                     break
         else:
             ws_tmp.cell(e_row, 6).fill = _FILL_YELLOW
 
     # 系统表筛选行内标色（共享 sys_marked 防跨两次误标）
-    matched_set = set(matched_amounts)
+    for a_row in range(2, len(data_rows) + 2):
+        amount = _to_num(ws.cell(a_row, col_金额).value)
+        if amount is None:
+            ws.cell(a_row, col_result, '')
+        elif a_row in matched_a_rows:
+            ws.cell(a_row, col_result, '已找到')
+        else:
+            ws.cell(a_row, col_result, '未找到')
+            for cell in ws[a_row]:
+                if cell.column != col_result:
+                    cell.fill = _FILL_BLUE
+
+    matched_set = {
+        _to_num(ws_tmp.cell(a_row, 1).value)
+        for a_row in matched_a_rows
+    }
     for sys_row, sys_val in filtered_rows:
         v = _to_num(sys_val)
         mark_key = (sys_row, col_tx)
