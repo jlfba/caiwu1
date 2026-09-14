@@ -1085,6 +1085,10 @@ onUnmounted(() => {
   display: none;
 }
 
+.workflow-right > .step:first-child {
+  overflow: visible;
+}
+
 .workflow-right > .step:last-child {
   flex: 1 1 auto;
 }
