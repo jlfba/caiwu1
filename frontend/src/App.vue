@@ -454,25 +454,6 @@ onUnmounted(() => {
 
     <!-- 2. 右侧主工作区容器 -->
     <div class="main-viewport">
-      <!-- 步骤流程指示条 (步骤 1 / 步骤 2) -->
-      <div class="step-indicator-bar">
-        <div class="step-badge is-active">
-          <span class="step-num">1</span>
-          <div class="step-info">
-            <span class="step-name">选择功能</span>
-            <span class="step-desc">根据要处理的内容选择模式</span>
-          </div>
-        </div>
-        <div class="step-connector"></div>
-        <div class="step-badge" :class="{ 'is-active': mode }">
-          <span class="step-num">2</span>
-          <div class="step-info">
-            <span class="step-name">上传文件并制作</span>
-            <span class="step-desc">上传文件后系统自动识别处理生成结果</span>
-          </div>
-        </div>
-      </div>
-
       <!-- 核心工作区双栏布局 (左栏: 功能选择+子选项 / 右栏: 上传+制作) -->
       <div class="workspace-grid" :class="{ 'single-col': mode === '4' || mode === 'fund' || (!receiptPerson && mode === 'receipt') }">
         <!-- 左栏：模式对应的细项配置（如发票类型、人员、排版模板） -->
@@ -489,7 +470,6 @@ onUnmounted(() => {
           <!-- 子选项：收款组选人员 / 付款组选发票类型 -->
           <div class="sub-config-box">
             <div class="sub-config-head">
-              <span class="sub-config-tag">人员 / 版式</span>
               <span class="sub-config-title">{{ mode === 'receipt' ? '选择经办人员' : '选择发票类型（13种）' }}</span>
             </div>
 
@@ -511,7 +491,6 @@ onUnmounted(() => {
           <!-- 收款组人员子类型选择 -->
           <div v-if="mode === 'receipt' && (receiptPerson === '赵淑华' || receiptPerson === '邵梅琳')" class="sub-config-box">
             <div class="sub-config-head">
-              <span class="sub-config-tag">发票分类</span>
               <span class="sub-config-title">选择具体发票/凭证格式</span>
             </div>
             <ReceiptSubtypeSelect
@@ -524,7 +503,6 @@ onUnmounted(() => {
           <!-- 收款组谢莉丽可选模板设置 -->
           <div v-if="effectiveMode === '1'" class="sub-config-box template-box">
             <div class="sub-config-head">
-              <span class="sub-config-tag">模板与排版</span>
               <span class="sub-config-title">插入已有表格（可选）</span>
             </div>
             <TemplateUpload
