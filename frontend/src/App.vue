@@ -556,21 +556,6 @@ onUnmounted(() => {
               <input v-model="startCell" class="cell-input" :class="{ invalid: !startCellValid }" placeholder="A1" />
             </div>
           </div>
-
-          <!-- 底部帮助提示小栏 -->
-          <div class="helper-banner">
-            <div class="helper-icon">💡</div>
-            <div class="helper-text">
-              <strong>不知道选哪个？</strong>
-              <span>可以先查看帮助文档，或联系财务管理员获取建议。</span>
-            </div>
-            <button class="helper-link-btn" type="button" @click="currentNav = 'help'">
-              查看帮助
-              <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
-                <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </button>
-          </div>
         </section>
 
         <!-- 右栏：文件上传与操作卡片 -->
@@ -678,20 +663,6 @@ onUnmounted(() => {
               </div>
             </div>
           </template>
-
-          <!-- 文件安全保障标签 -->
-          <div class="security-card">
-            <div class="security-icon">
-              <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
-                <path d="M10 2l6 2.5v5c0 4.5-2.8 7.5-6 8.5-3.2-1-6-4-6-8.5v-5L10 2z" fill="#008765" fill-opacity="0.15" stroke="#008765" stroke-width="1.6"/>
-                <path d="M7.5 9.5l2 2 3.5-3.5" stroke="#008765" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <div class="security-text">
-              <strong>文件安全有保障</strong>
-              <span>文件仅在本次任务中临时处理，处理完成后自动清理，确保数据安全。</span>
-            </div>
-          </div>
 
           <!-- 开始制作主操作按钮 -->
           <div class="action-footer">
