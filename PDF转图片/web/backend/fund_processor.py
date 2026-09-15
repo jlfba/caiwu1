@@ -221,7 +221,7 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
     for i, (_, val) in enumerate(filtered_rows, start=2):
         ws_tmp.cell(i, 5, val)
 
-    # 备注有“运费 + 税点”时，优先以水单总额核对；否则使用审核金额。
+    # 备注有“开票税点=水单总额”或“运费 + 税点”时，优先以水单总额核对；否则使用审核金额。
     # 负数收款金额不参与贷方匹配，须以绝对值在借方发生额中单独核对。
     a_map: dict[Decimal, list[int]] = {}
     negative_amounts: dict[Decimal, list[int]] = {}
@@ -230,7 +230,7 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
         if match_negative_as_debit and raw_amount is not None and raw_amount < 0:
             negative_amounts.setdefault(abs(raw_amount), []).append(r)
             continue
-        v = _freight_tax_total(note) or raw_amount
+        v = _invoice_tax_total(note) or _freight_tax_total(note) or raw_amount
         if v is not None:
             a_map.setdefault(v, []).append(r)
 
@@ -303,7 +303,9 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
                     cell.fill = _FILL_BLUE
 
     matched_set = {
-        _freight_tax_total(data_rows[a_row - 2][1]) or _money_key(data_rows[a_row - 2][0])
+        _invoice_tax_total(data_rows[a_row - 2][1])
+        or _freight_tax_total(data_rows[a_row - 2][1])
+        or _money_key(data_rows[a_row - 2][0])
         for a_row in matched_a_rows
     }
     for sys_row, sys_val in filtered_rows:
@@ -321,6 +323,14 @@ def _tax_amount(note):
     if note is None:
         return None
     match = re.search(r'税点\s*[=:：]?\s*([+-]?\d[\d,]*(?:\.\d+)?)', str(note))
+    return _money_key(match.group(1)) if match else None
+
+
+def _invoice_tax_total(note):
+    """Extract the stated total after “开票税点=” / “开票税点：”."""
+    if note is None:
+        return None
+    match = re.search(r'开票税点\s*[=:：]\s*([+-]?\d[\d,]*(?:\.\d+)?)', str(note))
     return _money_key(match.group(1)) if match else None
 
 
