@@ -64,6 +64,7 @@ const message = ref('')
 const filename = ref('')
 const error = ref('')
 const logs = ref([])
+const activityLogs = ref([])
 const reportStep = ref(0)
 const reportMaxStep = ref(0)
 const elapsedSeconds = ref(0)
@@ -72,6 +73,8 @@ let pollTimer = null
 let elapsedTimer = null
 let elapsedStartedAt = 0
 let elapsedAccumulated = 0
+let activityLogId = 0
+let syncedTaskLogs = new Set()
 
 const submitting = computed(() => status.value === 'processing')
 const startCellValid = computed(() => /^[A-Za-z]{1,3}\d{1,7}$/.test(startCell.value))
@@ -90,6 +93,26 @@ const canSubmit = computed(() => {
     (effectiveMode.value !== '1' || !templateFile.value || selectedSheet.value)
   )
 })
+
+function formatLogTime(value = new Date()) {
+  return value.toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function addActivityLog(content, level = 'info') {
+  activityLogs.value.push({ id: ++activityLogId, time: formatLogTime(), content, level })
+}
+
+function exportActivityLogs() {
+  const content = activityLogs.value.length
+    ? activityLogs.value.map(item => `[${item.time}] ${item.content}`).join('\r\n')
+    : '暂无处理日志'
+  const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `财务工具-处理日志-${new Date().toISOString().slice(0, 10)}.txt`
+  link.click()
+  URL.revokeObjectURL(url)
+}
 
 // 监听模式变化
 watch(mode, (val, old) => {
@@ -147,6 +170,7 @@ function selectFundFiles(fileList) {
   fundFile2.value = fList.find(f => /服务商付款/.test(f.name)) || null
   fundFile4.value = fList.find(f => /流水/.test(f.name)) || null
   fundFile3.value = fList.find(f => /对公/.test(f.name) && !/流水/.test(f.name)) || null
+  addActivityLog(`资金组已选择 ${fList.length} 个 Excel 文件${fundFile3.value ? '，已识别中信对公表' : '，未识别中信对公表'}`, fundFile3.value ? 'success' : 'warning')
 }
 
 const fundFileSlots = computed(() => [
@@ -168,7 +192,9 @@ async function submitFund() {
   message.value = '正在上传表格…'
   error.value = ''
   logs.value = []
+  syncedTaskLogs = new Set()
   filename.value = ''
+  addActivityLog('开始提交资金组核对任务')
   try {
     // 只上传已经自动识别出的原始 File 对象，避免拖拽事件或响应式数据混入 FormData。
     const uploadFiles = [fundFile1.value, fundFile2.value, fundFile3.value, fundFile4.value]
@@ -178,11 +204,13 @@ async function submitFund() {
     }
     const data = await createFundTask(uploadFiles)
     taskId.value = data.task_id
+    addActivityLog(`资金组任务已创建：${data.task_id}`, 'success')
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
     status.value = 'error'
     error.value = e.message
+    addActivityLog(`资金组任务提交失败：${e.message}`, 'error')
     stopElapsedTimer()
   }
 }
@@ -220,15 +248,19 @@ async function submitReport() {
   message.value = '正在上传表格…'
   error.value = ''
   logs.value = []
+  syncedTaskLogs = new Set()
   filename.value = ''
   try {
+    addActivityLog('开始提交报表处理任务')
     const data = await createReportTask(reportFile.value, reportSheet.value, 'bundle')
     taskId.value = data.task_id
+    addActivityLog(`报表任务已创建：${data.task_id}`, 'success')
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
     status.value = 'error'
     error.value = e.message
+    addActivityLog(`报表任务提交失败：${e.message}`, 'error')
     stopElapsedTimer()
   }
 }
@@ -238,6 +270,7 @@ async function continueReport() {
   status.value = 'processing'
   message.value = '正在继续处理…'
   try {
+    addActivityLog('开始提交文件处理任务')
     await continueReportTask(taskId.value)
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -358,11 +391,13 @@ async function submit() {
       sheetName: effectiveMode.value === '1' ? selectedSheet.value : ''
     })
     taskId.value = data.task_id
+    addActivityLog(`处理任务已创建：${data.task_id}`, 'success')
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
     status.value = 'error'
     error.value = e.message
+    addActivityLog(`处理任务提交失败：${e.message}`, 'error')
     stopElapsedTimer()
   }
 }
@@ -383,6 +418,14 @@ async function poll() {
   total.value = data.total || 0
   message.value = data.message || ''
   logs.value = data.logs || []
+  for (const taskLog of logs.value) {
+    const text = String(taskLog)
+    const key = `${taskId.value}:${text}`
+    if (!syncedTaskLogs.has(key)) {
+      syncedTaskLogs.add(key)
+      addActivityLog(text, text.includes('失败') || text.includes('错误') ? 'error' : 'info')
+    }
+  }
   reportStep.value = data.step || 0
   reportMaxStep.value = data.max_step || 0
   if ((mode.value === '4' || mode.value === 'fund') && Number.isFinite(data.elapsed_seconds)) {
@@ -392,6 +435,7 @@ async function poll() {
   if (data.status === 'done') {
     filename.value = data.filename || ''
     status.value = 'done'
+    addActivityLog(`任务完成：${filename.value || '结果文件已生成'}`, 'success')
     stopPolling()
     stopElapsedTimer()
   } else if (data.status === 'paused') {
@@ -401,6 +445,7 @@ async function poll() {
   } else if (data.status === 'error') {
     error.value = data.error || data.message || '处理失败'
     status.value = 'error'
+    addActivityLog(`任务处理失败：${error.value}`, 'error')
     stopPolling()
     stopElapsedTimer()
   }
@@ -456,6 +501,28 @@ onUnmounted(() => {
         <div class="sidebar-section-title">工作组别</div>
         <ModeSelect v-model="mode" :disabled="submitting" />
       </div>
+
+      <section class="activity-log-panel" aria-label="处理日志">
+        <div class="activity-log-head">
+          <div>
+            <span class="sidebar-section-title">处理日志</span>
+            <span class="activity-log-count">{{ activityLogs.length }} 条</span>
+          </div>
+          <button
+            type="button"
+            class="activity-log-export"
+            :disabled="!activityLogs.length"
+            @click="exportActivityLogs"
+          >导出</button>
+        </div>
+        <div class="activity-log-list" role="log" aria-live="polite">
+          <p v-if="!activityLogs.length" class="activity-log-empty">任务状态会记录在这里</p>
+          <div v-for="item in activityLogs" :key="item.id" class="activity-log-item" :class="`is-${item.level}`">
+            <time>{{ item.time }}</time>
+            <span>{{ item.content }}</span>
+          </div>
+        </div>
+      </section>
     </aside>
 
     <!-- 2. 右侧主工作区容器 -->
@@ -757,6 +824,96 @@ onUnmounted(() => {
   letter-spacing: 0.5px;
   padding: 0 4px;
 }
+
+.activity-log-panel {
+  margin-top: 8px;
+  min-height: 0;
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  padding: 13px 10px 10px;
+  border: 1px solid #dbe9e3;
+  border-radius: var(--radius-m);
+  background: #f7fbf9;
+}
+
+.activity-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 10px;
+}
+
+.activity-log-head > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.activity-log-count {
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.activity-log-export {
+  border: 0;
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--primary-ink);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.activity-log-export:hover:not(:disabled) {
+  background: var(--primary-soft);
+}
+
+.activity-log-export:disabled {
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+
+.activity-log-list {
+  min-height: 112px;
+  overflow-y: auto;
+  padding: 2px 3px 2px 1px;
+  border-top: 1px solid #e6f0ec;
+}
+
+.activity-log-empty {
+  margin: 16px 5px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.activity-log-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 49px minmax(0, 1fr);
+  gap: 6px;
+  padding: 7px 5px;
+  border-bottom: 1px solid #edf4f0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.activity-log-item time {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.activity-log-item span {
+  overflow-wrap: anywhere;
+}
+
+.activity-log-item.is-success span { color: #087d5c; }
+.activity-log-item.is-warning span { color: #9a6700; }
+.activity-log-item.is-error span { color: #bd3c3c; }
 
 .workspace-grid.single-col {
   grid-template-columns: minmax(0, 1fr);
