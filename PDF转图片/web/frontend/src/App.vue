@@ -450,22 +450,6 @@ onUnmounted(() => {
         <div class="sidebar-section-title">工作组别</div>
         <ModeSelect v-model="mode" :disabled="submitting" />
       </div>
-
-      <!-- 侧边栏底部插画卡片 -->
-      <div class="sidebar-banner">
-        <div class="banner-illus">
-          <svg viewBox="0 0 72 64" width="72" height="64" fill="none">
-            <rect x="8" y="12" width="44" height="48" rx="6" fill="#d7eee5" stroke="#9ed8c3" stroke-width="1.5" transform="rotate(-6 8 12)"/>
-            <rect x="18" y="8" width="44" height="48" rx="6" fill="#ffffff" stroke="#bce6da" stroke-width="1.5"/>
-            <circle cx="34" cy="24" r="8" fill="#e6f6f1"/>
-            <path d="M31 24l2 2 4-4" stroke="#008765" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-            <rect x="26" y="36" width="28" height="3" rx="1.5" fill="#d5e8e1"/>
-            <rect x="26" y="43" width="18" height="3" rx="1.5" fill="#d5e8e1"/>
-          </svg>
-        </div>
-        <div class="banner-title">让财务处理更简单</div>
-        <div class="banner-sub">高效 · 准确 · 安全</div>
-      </div>
     </aside>
 
     <!-- 2. 右侧主工作区容器 -->
