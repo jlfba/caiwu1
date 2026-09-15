@@ -502,31 +502,23 @@ onUnmounted(() => {
         <ModeSelect v-model="mode" :disabled="submitting" />
       </div>
 
-      <section class="activity-log-panel" aria-label="处理日志">
-        <div class="activity-log-head">
-          <div>
-            <span class="sidebar-section-title">处理日志</span>
-            <span class="activity-log-count">{{ activityLogs.length }} 条</span>
-          </div>
-          <button
-            type="button"
-            class="activity-log-export"
-            :disabled="!activityLogs.length"
-            @click="exportActivityLogs"
-          >导出</button>
-        </div>
-        <div class="activity-log-list" role="log" aria-live="polite">
-          <p v-if="!activityLogs.length" class="activity-log-empty">任务状态会记录在这里</p>
-          <div v-for="item in activityLogs" :key="item.id" class="activity-log-item" :class="`is-${item.level}`">
-            <time>{{ item.time }}</time>
-            <span>{{ item.content }}</span>
-          </div>
-        </div>
-      </section>
+      <button
+        type="button"
+        class="sidebar-log-link"
+        :class="{ 'is-active': currentNav === 'logs' }"
+        @click="currentNav = 'logs'"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+          <path d="M7 3.5h7l3 3V20a.5.5 0 01-.5.5h-9A.5.5 0 017 20V3.5zM10 10h4M10 14h4M10 18h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>处理日志</span>
+        <b v-if="activityLogs.length">{{ activityLogs.length }}</b>
+      </button>
     </aside>
 
     <!-- 2. 右侧主工作区容器 -->
     <div class="main-viewport">
+      <template v-if="currentNav === 'home'">
       <!-- 步骤流程指示条 (步骤 1 / 步骤 2) -->
       <div class="step-indicator-bar">
         <div class="step-badge is-active">
@@ -783,6 +775,30 @@ onUnmounted(() => {
           />
         </section>
       </div>
+      </template>
+
+      <section v-else class="log-page">
+        <header class="log-page-head">
+          <div>
+            <p class="log-page-kicker">任务留痕</p>
+            <h1>处理日志</h1>
+            <p>本页面会话内的所有任务状态、步骤和异常记录。</p>
+          </div>
+          <div class="log-page-actions">
+            <button type="button" class="log-back-btn" @click="currentNav = 'home'">返回工作台</button>
+            <button type="button" class="log-export-btn" :disabled="!activityLogs.length" @click="exportActivityLogs">导出日志</button>
+          </div>
+        </header>
+        <div class="log-page-summary">共 {{ activityLogs.length }} 条记录</div>
+        <div class="log-page-list" role="log" aria-live="polite">
+          <p v-if="!activityLogs.length" class="activity-log-empty">尚无处理记录。开始上传或制作后，任务过程会显示在这里。</p>
+          <div v-for="item in activityLogs" :key="item.id" class="log-page-item" :class="`is-${item.level}`">
+            <time>{{ item.time }}</time>
+            <span class="log-page-dot"></span>
+            <p>{{ item.content }}</p>
+          </div>
+        </div>
+      </section>
     </div>
   </div>
 </template>
@@ -825,62 +841,40 @@ onUnmounted(() => {
   padding: 0 4px;
 }
 
-.activity-log-panel {
-  margin-top: 8px;
-  min-height: 0;
-  display: flex;
-  flex: 1 1 220px;
-  flex-direction: column;
-  padding: 13px 10px 10px;
-  border: 1px solid #dbe9e3;
-  border-radius: var(--radius-m);
-  background: #f7fbf9;
-}
-
-.activity-log-head {
+.sidebar-log-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 2px 10px;
-}
-
-.activity-log-head > div {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.activity-log-count {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.activity-log-export {
-  border: 0;
-  padding: 4px 7px;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--primary-ink);
-  font-size: 11px;
+  gap: 9px;
+  width: 100%;
+  margin-top: auto;
+  padding: 10px 12px;
+  border: 1px solid #dbe9e3;
+  border-radius: var(--radius-s);
+  background: #f7fbf9;
+  color: var(--text-secondary);
+  font-size: 12.5px;
   font-weight: 700;
   cursor: pointer;
+  text-align: left;
 }
 
-.activity-log-export:hover:not(:disabled) {
+.sidebar-log-link:hover,
+.sidebar-log-link.is-active {
+  border-color: #b8ded0;
   background: var(--primary-soft);
+  color: var(--primary-ink);
 }
 
-.activity-log-export:disabled {
-  color: var(--text-faint);
-  cursor: not-allowed;
-}
-
-.activity-log-list {
-  min-height: 112px;
-  overflow-y: auto;
-  padding: 2px 3px 2px 1px;
-  border-top: 1px solid #e6f0ec;
+.sidebar-log-link b {
+  min-width: 18px;
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 99px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
 }
 
 .activity-log-empty {
@@ -890,30 +884,118 @@ onUnmounted(() => {
   line-height: 1.6;
 }
 
-.activity-log-item {
-  position: relative;
-  display: grid;
-  grid-template-columns: 49px minmax(0, 1fr);
-  gap: 6px;
-  padding: 7px 5px;
-  border-bottom: 1px solid #edf4f0;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
+.log-page {
+  max-width: 960px;
+  margin: 22px auto 0;
+  padding: clamp(22px, 4vw, 42px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--card-shadow);
 }
 
-.activity-log-item time {
+.log-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-page-kicker {
+  margin: 0 0 7px;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.log-page h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(24px, 3vw, 32px);
+  letter-spacing: -.04em;
+}
+
+.log-page-head p:not(.log-page-kicker) {
+  margin: 8px 0 0;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.log-page-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.log-back-btn, .log-export-btn {
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.log-back-btn {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.log-export-btn {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.log-export-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.log-page-summary {
+  margin: 20px 0 10px;
   color: var(--text-faint);
+  font-size: 12px;
+}
+
+.log-page-list {
+  max-height: calc(100vh - 270px);
+  min-height: 240px;
+  overflow: auto;
+  border-top: 1px solid #eaf1ee;
+}
+
+.log-page-item {
+  display: grid;
+  grid-template-columns: 62px 10px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 15px 5px;
+  border-bottom: 1px solid #edf3f0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.log-page-item time {
+  color: var(--text-faint);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
-.activity-log-item span {
-  overflow-wrap: anywhere;
+.log-page-item p { margin: 0; overflow-wrap: anywhere; }
+
+.log-page-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: #aabcb5;
 }
 
-.activity-log-item.is-success span { color: #087d5c; }
-.activity-log-item.is-warning span { color: #9a6700; }
-.activity-log-item.is-error span { color: #bd3c3c; }
+.log-page-item.is-success .log-page-dot { background: #0c9a6f; }
+.log-page-item.is-warning .log-page-dot { background: #c38314; }
+.log-page-item.is-error .log-page-dot { background: #d45151; }
 
 .workspace-grid.single-col {
   grid-template-columns: minmax(0, 1fr);
