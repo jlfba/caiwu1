@@ -170,7 +170,13 @@ async function submitFund() {
   logs.value = []
   filename.value = ''
   try {
-    const data = await createFundTask(fundFiles.value)
+    // 只上传已经自动识别出的原始 File 对象，避免拖拽事件或响应式数据混入 FormData。
+    const uploadFiles = [fundFile1.value, fundFile2.value, fundFile3.value, fundFile4.value]
+      .filter(file => file instanceof File)
+    if (!uploadFiles.includes(fundFile3.value)) {
+      throw new Error('中信对公文件无效，请重新选择 Excel 文件')
+    }
+    const data = await createFundTask(uploadFiles)
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()

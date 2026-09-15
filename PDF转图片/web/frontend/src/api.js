@@ -72,12 +72,14 @@ async function createReportTask(file, sheetName, reportProfile = 'bundle') {
   return data
 }
 
-async function createFundTask(file1, file2, file3, file4) {
+async function createFundTask(files) {
   const fd = new FormData()
-  fd.append('file1', file1, file1.name)
-  fd.append('file2', file2, file2.name)
-  fd.append('file3', file3, file3.name)
-  fd.append('file4', file4, file4.name)
+  for (const file of files) {
+    if (!(file instanceof Blob)) {
+      throw new Error('上传文件无效，请重新选择 Excel 文件')
+    }
+    fd.append('files', file, file.name || '资金核对表.xlsx')
+  }
   const res = await fetch('/api/fund-tasks', { method: 'POST', body: fd })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.detail || '创建资金任务失败')
