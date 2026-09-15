@@ -84,6 +84,11 @@ def _extract_date(file_path: str) -> str:
     return m.group(1)
 
 
+def _original_upload_name(file_path: str) -> str:
+    """Remove the internal fund upload prefix while preserving the user's filename."""
+    return re.sub(r'^fund\d+_', '', os.path.basename(file_path), count=1)
+
+
 def identify_fund_files(file_paths):
     """Identify fund workbooks by filename keywords; only the public-account workbook is required."""
     rules = {
@@ -779,23 +784,23 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
 
     output_files = []
     if wb1:
-        name1 = os.path.basename(file1_path)
+        name1 = _original_upload_name(file1_path)
         path1 = os.path.join(out_dir, name1)
         wb1.save(path1)
         output_files.append((path1, name1))
     if wb2:
-        name2 = os.path.basename(file2_path)
+        name2 = _original_upload_name(file2_path)
         path2 = os.path.join(out_dir, name2)
         wb2.save(path2)
         output_files.append((path2, name2))
 
-    name3 = os.path.basename(file3_path)
+    name3 = _original_upload_name(file3_path)
     path3 = os.path.join(out_dir, name3)
     _save_system_workbook_preserving_template(file3_path, wb3, path3, rmb_payload, sys_marked)
     output_files.append((path3, name3))
 
     if wb4:
-        name4 = os.path.basename(file4_path)
+        name4 = _original_upload_name(file4_path)
         path4 = os.path.join(out_dir, name4)
         wb4.save(path4)
         output_files.append((path4, name4))
