@@ -131,6 +131,29 @@ def _auto_sheet(wb, hints: list[str]) -> str:
     return wb.sheetnames[0]
 
 
+def _is_summary_row(ws, row: int) -> bool:
+    """Identify a total row without relying on a fixed column layout."""
+    values = [ws.cell(row, col).value for col in range(1, ws.max_column + 1)]
+    text_values = [str(value).strip() for value in values
+                   if value is not None and str(value).strip()]
+    if any(any(word in value for word in ('合计', '总计', '汇总')) for value in text_values):
+        return True
+
+    # Some source exports put only numeric totals in the final row, without a “合计” label.
+    # A normal transaction always contains at least one descriptive text, date, account or reference value.
+    has_number = False
+    for value in values:
+        if value is None or str(value).strip() == '':
+            continue
+        if _money_key(value) is not None:
+            has_number = True
+            continue
+        if isinstance(value, (date, datetime)):
+            return False
+        return False
+    return has_number
+
+
 def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
                  ws_sys, col_日期: int, col_tx: int, tx_label: str,
                  target_date: date, tmp_sheet_name: str,
@@ -152,13 +175,9 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
     col_result = 19
     ws.cell(1, col_result, '查找结果')
 
-    # 删合计行（仅金额列有值，其余空）
-    last_r = ws.max_row
-    if last_r >= 2:
-        last_vals = {c: ws.cell(last_r, c).value for c in range(1, ws.max_column + 1)}
-        non_empty = {c for c, v in last_vals.items() if v is not None and str(v).strip() != ''}
-        if non_empty and non_empty.issubset({col_金额}):
-            ws.delete_rows(last_r)
+    # 末尾合计行不属于待核对业务数据；删除后不会生成“未找到”。
+    while ws.max_row >= 2 and _is_summary_row(ws, ws.max_row):
+        ws.delete_rows(ws.max_row)
 
     # 收集数据行
     data_rows = [(ws.cell(r, col_金额).value, ws.cell(r, col_备注).value)
@@ -362,6 +381,8 @@ def _process_bank_account_flow(wb_flow, ws_sys, target_date: date,
 
     processed = 0
     for row in range(2, ws.max_row + 1):
+        if _is_summary_row(ws, row):
+            continue
         note = str(ws.cell(row, col_note).value or '')
         # 先于费用类型筛选处理：无论所属费用类型，均记作作废且不参与核对。
         if '修改付款' in note or '作废' in note:
@@ -431,6 +452,9 @@ def _append_bank_flow_to_rmb(wb_flow, wb_system):
     col_result = _find_col(headers, '查找结果')
     source_rows = []
     for row in range(2, last_flow_row + 1):
+        # 合计行仅作源表统计，不参与人民币追加。
+        if _is_summary_row(flow_ws, row):
+            continue
         values = [flow_ws.cell(row, col).value for col in range(1, flow_ws.max_column + 1)]
         unmatched = str(flow_ws.cell(row, col_result).value or '').strip() == '未找到'
         income = _money_key(flow_ws.cell(row, col_income).value)
