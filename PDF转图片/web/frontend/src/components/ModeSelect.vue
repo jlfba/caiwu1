@@ -11,5 +11,17 @@ defineEmits(['update:modelValue'])
   </div>
 </template>
 <style scoped>
-.mode-select{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.mode-tile.standalone{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--radius);overflow:hidden}.mode-tile.standalone.active{border-color:var(--primary);background:var(--primary-soft);box-shadow:var(--shadow-sm)}.mode-tile{width:100%;display:flex;flex-direction:column;gap:6px;align-items:stretch;text-align:left;padding:20px;background:transparent;border:0;cursor:pointer}.mode-tile:hover:not(:disabled){background:color-mix(in srgb,var(--primary-soft) 45%,transparent)}.mode-tile:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}.mode-tile:disabled{opacity:.6;cursor:not-allowed}.tile-head{display:flex;justify-content:space-between;align-items:center}.tile-title{font-size:17px;font-weight:800}.tile-check{width:22px;height:22px;border-radius:50%;border:1.5px solid var(--border-strong);display:grid;place-items:center;color:transparent}.tile-check.on{background:var(--primary);border-color:var(--primary);color:#fff}.tile-sub{font-size:13px;font-weight:600;color:var(--text)}.tile-desc{font-size:12.5px;color:var(--text-soft);line-height:1.6}@media (max-width:640px){.mode-select{grid-template-columns:1fr}}
+.mode-select { display: grid; gap: 7px; }
+.mode-tile.standalone { background: transparent; border: 1px solid transparent; border-radius: 12px; overflow: hidden; }
+.mode-tile.standalone.active { border-color: color-mix(in srgb, var(--primary) 24%, var(--border)); background: var(--primary-soft); box-shadow: none; }
+.mode-tile { width: 100%; display: flex; flex-direction: column; gap: 3px; align-items: stretch; text-align: left; padding: 13px 14px; background: transparent; border: 0; cursor: pointer; }
+.mode-tile:hover:not(:disabled) { background: color-mix(in srgb, var(--primary-soft) 55%, transparent); }
+.mode-tile:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.mode-tile:disabled { opacity: .6; cursor: not-allowed; }
+.tile-head { display: flex; justify-content: space-between; align-items: center; }
+.tile-title { font-size: 15px; font-weight: 800; }
+.tile-check { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--border-strong); display: grid; place-items: center; color: transparent; font-size: 11px; }
+.tile-check.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tile-sub { font-size: 11.5px; font-weight: 600; color: var(--text-soft); }
+.tile-desc { display: none; }
 </style>
