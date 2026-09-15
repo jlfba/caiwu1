@@ -80,6 +80,7 @@ function onDragLeave() {
 
 <template>
   <div class="dropzone-wrap">
+    <!-- 设计图拖拽区 -->
     <div
       class="dropzone"
       :class="{ dragging, disabled }"
@@ -109,39 +110,72 @@ function onDragLeave() {
         hidden
         @change="onPick"
       />
-      <span class="dz-icon">
-        <svg viewBox="0 0 40 40" width="40" height="40" fill="none" aria-hidden="true">
-          <circle cx="20" cy="20" r="19" stroke="var(--primary-soft)" stroke-width="2" />
-          <path d="M20 27V13M13.5 19.5L20 13l6.5 6.5" stroke="var(--primary)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M12 29h16" stroke="var(--border-strong)" stroke-width="2.4" stroke-linecap="round" />
+
+      <!-- 绿色圆形上传云朵/向上箭头图标 -->
+      <div class="upload-icon-circle">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" aria-hidden="true">
+          <path d="M12 15V7M8.5 10.5L12 7l3.5 3.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M7 17h10" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-opacity="0.8" />
         </svg>
-      </span>
-      <p class="dz-title">{{ allowDirectories ? '拖入 ' + fileLabel + ' 或文件夹' : '拖入 ' + fileLabel + '，或点击选择文件' }}</p>
-      <p class="dz-hint">{{ allowDirectories ? '支持文件夹递归识别 · 仅接受 ' + accept : '支持多选 · 仅接受 ' + accept }}</p>
-      <button v-if="allowDirectories" class="folder-picker" type="button" :disabled="disabled" @click.stop="openFolderPicker">选择文件夹</button>
+      </div>
+
+      <p class="dz-title">拖入 {{ fileLabel }} 文件，或点击选择文件</p>
+      <p class="dz-subtitle">支持多选，单个文件不超过 20MB</p>
+
+      <button class="dz-select-btn" type="button" :disabled="disabled" @click.stop="openPicker">
+        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+          <path d="M10 4v8m-3-3l3-3 3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M4 14h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span>选择文件</span>
+      </button>
+
+      <button v-if="allowDirectories" class="folder-picker" type="button" :disabled="disabled" @click.stop="openFolderPicker">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none">
+          <path d="M2 4.5A1.5 1.5 0 013.5 3h2.88a1.5 1.5 0 011.06.44L8.5 4.5H13A1.5 1.5 0 0114.5 6v6.5a1.5 1.5 0 01-1.5 1.5h-9.5A1.5 1.5 0 012 12.5v-8z" stroke="currentColor" stroke-width="1.3"/>
+        </svg>
+        选择文件夹
+      </button>
+
+      <!-- 或 — 格式支持标签 -->
+      <div class="divider-line">
+        <span>— 或 —</span>
+      </div>
+
+      <div class="file-format-badge">
+        <div class="badge-icon">
+          <span class="badge-ext">PDF</span>
+          <span class="badge-dot">.pdf</span>
+        </div>
+        <div class="badge-info">
+          <span class="badge-type">仅支持 {{ fileLabel }} 格式</span>
+          <span class="badge-sub">可同时上传多个文件</span>
+        </div>
+      </div>
     </div>
 
+    <!-- 已选文件列表 -->
     <div v-if="$slots.default && count" class="file-list-shell">
       <div class="file-list-head">
-        <span class="file-count">已选 {{ count }} 个{{ fileLabel }}</span>
-        <button
-          class="file-list-toggle"
-          type="button"
-          :aria-expanded="expanded"
-          @click="expanded = !expanded"
-        >
-          {{ expanded ? '收起列表' : '展开列表' }}
-          <svg class="toggle-icon" :class="{ expanded }" viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
-            <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
+        <span class="file-count">已选 <b>{{ count }}</b> 个文件</span>
+        <div class="head-actions">
+          <button
+            class="file-list-toggle"
+            type="button"
+            :aria-expanded="expanded"
+            @click="expanded = !expanded"
+          >
+            {{ expanded ? '收起列表' : '展开查看' }}
+            <svg class="toggle-icon" :class="{ expanded }" viewBox="0 0 16 16" width="14" height="14" fill="none">
+              <path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="clear-all" type="button" @click="emit('clear')">清空全部</button>
+        </div>
       </div>
       <div v-show="expanded" class="file-list">
         <slot />
       </div>
-      <button v-if="count" class="clear-all" type="button" @click="emit('clear')">
-        清空全部
-      </button>
     </div>
   </div>
 </template>
@@ -154,35 +188,29 @@ function onDragLeave() {
 }
 
 .dropzone {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 42px 24px 38px;
+  padding: 32px 20px 24px;
   border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-m);
   background: var(--surface);
   cursor: pointer;
-  transition: border-color 0.2s var(--ease-out), background 0.2s var(--ease-out),
-    transform 0.2s var(--ease-out);
+  transition: all 0.2s var(--ease-smooth);
 }
 
-.dropzone:hover {
+.dropzone:hover:not(.disabled) {
   border-color: var(--primary);
-  background: var(--surface-2);
+  background: var(--surface-hover);
 }
 
 .dropzone.dragging {
   border-color: var(--primary);
   border-style: solid;
   background: var(--primary-soft);
-  transform: scale(1.006);
-}
-
-.dropzone:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  transform: scale(1.004);
 }
 
 .dropzone.disabled {
@@ -190,15 +218,21 @@ function onDragLeave() {
   pointer-events: none;
 }
 
-.dz-icon {
-  margin-bottom: 10px;
-  display: grid;
-  place-items: center;
-  transition: transform 0.25s var(--ease-out);
+/* 绿色上传圆形图标 */
+.upload-icon-circle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 4px 14px var(--primary-shadow);
+  margin-bottom: 12px;
+  transition: transform 0.2s ease;
 }
 
-.dropzone:hover .dz-icon,
-.dropzone.dragging .dz-icon {
+.dropzone:hover .upload-icon-circle {
   transform: translateY(-2px);
 }
 
@@ -206,77 +240,172 @@ function onDragLeave() {
   margin: 0;
   font-size: 15px;
   font-weight: 700;
+  color: var(--text);
+  text-align: center;
 }
 
-.dz-hint {
-  margin: 2px 0 0;
-  font-size: 12.5px;
+.dz-subtitle {
+  margin: 4px 0 16px;
+  font-size: 12px;
   color: var(--text-faint);
+  text-align: center;
+}
+
+/* 选择文件主按钮 */
+.dz-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 24px;
+  border: 1.5px solid var(--primary);
+  background: #fff;
+  color: var(--primary);
+  border-radius: var(--radius-pill);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.dz-select-btn:hover:not(:disabled) {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 4px 12px var(--primary-shadow);
 }
 
 .folder-picker {
   margin-top: 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-size: 11.5px;
   cursor: pointer;
+  transition: all 0.15s ease;
 }
 
-.file-list-shell {
-  position: relative;
-  overflow: hidden;
+.folder-picker:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+/* 分割线 */
+.divider-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 18px 0 14px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* 格式支持卡片 */
+.file-format-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-s);
+}
+
+.badge-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: #fdf2f2;
+  border: 1px solid #fed7d7;
+  border-radius: 6px;
+  line-height: 1;
+}
+
+.badge-ext {
+  font-size: 9px;
+  font-weight: 800;
+  color: #e53e3e;
+}
+
+.badge-dot {
+  font-size: 8px;
+  color: #e53e3e;
+  opacity: 0.8;
+}
+
+.badge-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+}
+
+.badge-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.badge-sub {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* 已选文件列表卡片 */
+.file-list-shell {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
   background: var(--surface);
+  overflow: hidden;
 }
 
 .file-list-head {
-  min-height: 52px;
-  padding: 4px 104px 4px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .file-count {
-  color: var(--text-muted);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--text-secondary);
 }
 
-.file-list {
+.file-count b {
+  color: var(--primary);
+}
+
+.head-actions {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: clamp(180px, 30vh, 300px);
-  padding: 10px;
-  overflow-y: auto;
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: 12px;
 }
 
 .file-list-toggle,
 .clear-all {
-  min-height: 44px;
   border: none;
   background: transparent;
-  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
+  border-radius: 4px;
 }
 
 .file-list-toggle {
-  padding: 0 10px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   color: var(--primary);
-  font-size: 12.5px;
-  font-weight: 700;
-  transition: background 0.15s var(--ease-out);
 }
 
 .file-list-toggle:hover {
@@ -284,7 +413,7 @@ function onDragLeave() {
 }
 
 .toggle-icon {
-  transition: transform 0.2s var(--ease-out);
+  transition: transform 0.2s ease;
 }
 
 .toggle-icon.expanded {
@@ -292,13 +421,7 @@ function onDragLeave() {
 }
 
 .clear-all {
-  position: absolute;
-  top: 4px;
-  right: 8px;
   color: var(--text-faint);
-  font-size: 12.5px;
-  padding: 0 10px;
-  transition: color 0.15s var(--ease-out), background 0.15s var(--ease-out);
 }
 
 .clear-all:hover {
@@ -306,27 +429,12 @@ function onDragLeave() {
   background: var(--danger-soft);
 }
 
-.file-list-toggle:focus-visible,
-.clear-all:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-
-@media (max-width: 560px) {
-  .file-list-head {
-    min-height: 96px;
-    padding: 8px 10px 52px;
-  }
-
-  .file-list-toggle {
-    position: absolute;
-    bottom: 4px;
-    left: 8px;
-  }
-
-  .clear-all {
-    top: auto;
-    bottom: 4px;
-  }
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  padding: 10px;
+  overflow-y: auto;
 }
 </style>

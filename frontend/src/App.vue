@@ -11,25 +11,36 @@ import ProgressPanel from './components/ProgressPanel.vue'
 import ResultPanel from './components/ResultPanel.vue'
 import { createTask, createReportTask, createFundTask, continueReportTask, getTask, getWorksheets } from './api'
 
-const mode = ref('')
+// 当前导航视图 (首页 / 历史记录 / 帮助中心)
+const currentNav = ref('home')
+
+// 功能选择与状态
+const mode = ref('receipt')
 const invType = ref('1')
-const receiptPerson = ref('')
+const receiptPerson = ref('谢莉丽')
 const receiptSubtype = ref('')
 const files = ref([])
+
 const receiptModes = { '谢莉丽': '1', '赵淑华': '2', '邵梅琳': '5' }
 const paymentLabel = computed(() => receiptSubtype.value === 'alipay' ? '支付宝' : receiptSubtype.value === 'huolala' ? '货拉拉' : '微信')
-const effectiveMode = computed(() => mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice'
-  ? receiptModes[receiptPerson.value]
-  : mode.value === 'receipt' && ['wechat', 'alipay', 'huolala'].includes(receiptSubtype.value) ? '6'
- : mode.value === 'receipt' && receiptSubtype.value === 'ordinary_invoice' ? '9'
-  : mode.value === 'receipt' && receiptSubtype.value === 'ordinary_invoice' ? '9'
-  : mode.value === 'receipt' ? (receiptModes[receiptPerson.value] || '') : mode.value)
-const layoutDir = ref('v') // 收款组排版方向：v 纵向 | h 横向
-const startCell = ref('A1') // 收款组起始格
-const templateFile = ref(null) // 收款组可选表格模板
-const sheets = ref([]) // 模板的工作表列表
-const selectedSheet = ref('') // 选中的工作表
+
+const effectiveMode = computed(() => {
+  if (mode.value === 'receipt') {
+    if (receiptPerson.value === '赵淑华' && receiptSubtype.value === 'invoice') return receiptModes[receiptPerson.value]
+    if (['wechat', 'alipay', 'huolala'].includes(receiptSubtype.value)) return '6'
+    if (receiptSubtype.value === 'ordinary_invoice') return '9'
+    return receiptModes[receiptPerson.value] || '1'
+  }
+  return mode.value
+})
+
+const layoutDir = ref('v')
+const startCell = ref('A1')
+const templateFile = ref(null)
+const sheets = ref([])
+const selectedSheet = ref('')
 const sheetError = ref('')
+
 const reportFile = ref(null)
 const reportProfile = ref('bundle')
 const reportSheets = ref([])
@@ -39,11 +50,13 @@ const reportLoading = ref(false)
 const reportUploadPercent = ref(0)
 const reportUploadDone = ref(false)
 
-const fundFile1 = ref(null)  // 收款审核表
-const fundFile2 = ref(null)  // 服务商付款审核表
-const fundFile3 = ref(null)  // 中信对公
+const fundFile1 = ref(null)
+const fundFile2 = ref(null)
+const fundFile3 = ref(null)
+const fundFile4 = ref(null)
+const fundFiles = ref([])
 
-const status = ref('idle') // idle | processing | done | error
+const status = ref('idle') // idle | processing | done | error | paused
 const taskId = ref('')
 const current = ref(0)
 const total = ref(0)
@@ -60,48 +73,30 @@ let elapsedTimer = null
 let elapsedStartedAt = 0
 let elapsedAccumulated = 0
 
-const steps = computed(() => {
-  const list = [
-    { key: 'mode', no: 1, label: '选择功能' },
-    { key: 'type', no: 2, label: '选择人员', visible: mode.value === '3' || mode.value === 'receipt' },
-    { key: 'subtype', no: 3, label: '发票类型', visible: mode.value === 'receipt' },
-    { key: 'upload', no: 3, label: '上传 PDF' },
-    { key: 'run', no: 4, label: '制作' }
-  ]
-  if (mode.value !== '3' && mode.value !== 'receipt') list[2].no = 2
-  if (mode.value !== '3' && mode.value !== 'receipt') list[3].no = 3
-  if (mode.value === 'receipt') list[3].no = 4
-  let stepNo = 0
-  for (const s of list) {
-    if (s.visible) s.cur = ++stepNo
-  }
-  return list
-})
-
-const currentStep = computed(() => {
-  if (!mode.value) return 1
-  if (mode.value === 'receipt' && receiptPerson.value === '赵淑华' && receiptSubtype.value) return 3
-  if (mode.value === '3' || mode.value === 'receipt') return 2
-  return 3
-})
-
 const submitting = computed(() => status.value === 'processing')
 const startCellValid = computed(() => /^[A-Za-z]{1,3}\d{1,7}$/.test(startCell.value))
-const canSubmit = computed(
-  () =>
+
+const canSubmit = computed(() => {
+  if (submitting.value) return false
+  if (mode.value === '4') {
+    return !!(reportFile.value && reportSheet.value && !reportLoading.value)
+  }
+  if (mode.value === 'fund') {
+    return !!fundFile3.value
+  }
+  return (
     files.value.length > 0 &&
-    mode.value !== '4' &&
-    mode.value !== 'fund' &&
-    (mode.value !== 'receipt' || !!effectiveMode.value) &&
-    !submitting.value &&
     (effectiveMode.value !== '1' || startCellValid.value) &&
     (effectiveMode.value !== '1' || !templateFile.value || selectedSheet.value)
-)
+  )
+})
 
-// 切换功能模式或发票类型时清空已上传文件，避免旧文件混入生成导致识别不到
+// 监听模式变化
 watch(mode, (val, old) => {
   if (val !== old && !submitting.value) {
-    if (val !== 'receipt') {
+    if (val === 'receipt') {
+      if (!receiptPerson.value) receiptPerson.value = '谢莉丽'
+    } else {
       receiptPerson.value = ''
       receiptSubtype.value = ''
     }
@@ -141,23 +136,41 @@ function clearFundFile() {
   fundFile1.value = null
   fundFile2.value = null
   fundFile3.value = null
+  fundFile4.value = null
+  fundFiles.value = []
 }
 
+function selectFundFiles(fileList) {
+  const fList = Array.from(fileList || []).filter(f => /\.(xlsx|xlsm)$/i.test(f.name))
+  fundFiles.value = fList
+  fundFile1.value = fList.find(f => /收款审核/.test(f.name)) || null
+  fundFile2.value = fList.find(f => /服务商付款/.test(f.name)) || null
+  fundFile4.value = fList.find(f => /流水/.test(f.name)) || null
+  fundFile3.value = fList.find(f => /对公/.test(f.name) && !/流水/.test(f.name)) || null
+}
+
+const fundFileSlots = computed(() => [
+  ['收款审核表', fundFile1.value],
+  ['服务商付款审核表', fundFile2.value],
+  ['中信对公', fundFile3.value],
+  ['银行账号管理流水', fundFile4.value]
+])
+
 async function submitFund() {
-  if (!fundFile1.value || !fundFile2.value || !fundFile3.value || submitting.value) return
+  if (!fundFiles.value.length || !fundFile3.value || submitting.value) return
   stopPolling()
   stopElapsedTimer(false)
   elapsedSeconds.value = 0
   elapsedAccumulated = 0
   status.value = 'processing'
   current.value = 0
-  total.value = 5
+  total.value = 6
   message.value = '正在上传表格…'
   error.value = ''
   logs.value = []
   filename.value = ''
   try {
-    const data = await createFundTask(fundFile1.value, fundFile2.value, fundFile3.value)
+    const data = await createFundTask(fundFiles.value)
     taskId.value = data.task_id
     pollTimer = setInterval(poll, 1200)
     poll()
@@ -166,11 +179,6 @@ async function submitFund() {
     error.value = e.message
     stopElapsedTimer()
   }
-}
-
-function selectReportProfile(profile) {
-  if (submitting.value) return
-  reportProfile.value = profile
 }
 
 async function onReportSelected(file) {
@@ -197,7 +205,6 @@ async function onReportSelected(file) {
 async function submitReport() {
   if (!reportFile.value || !reportSheet.value || submitting.value) return
   stopPolling()
-  // 报表分步任务的耗时由后端累计，避免暂停和轮询时序造成前端漏计。
   stopElapsedTimer(false)
   elapsedSeconds.value = 0
   elapsedAccumulated = 0
@@ -208,7 +215,6 @@ async function submitReport() {
   error.value = ''
   logs.value = []
   filename.value = ''
-  logs.value = []
   try {
     const data = await createReportTask(reportFile.value, reportSheet.value, 'bundle')
     taskId.value = data.task_id
@@ -230,12 +236,10 @@ async function continueReport() {
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
-    status.value = 'error'; error.value = e.message
+    status.value = 'error'
+    error.value = e.message
   }
 }
-watch(invType, (val, old) => {
-  if (val !== old && mode.value === '3' && !submitting.value) files.value = []
-})
 
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B'
@@ -319,15 +323,15 @@ function startElapsedTimer() {
   }, 1000)
 }
 
-function resumeElapsedTimer() {
-  if (elapsedTimer) return
-  elapsedStartedAt = Date.now()
-  elapsedTimer = setInterval(() => {
-    elapsedSeconds.value = elapsedAccumulated + Math.floor((Date.now() - elapsedStartedAt) / 1000)
-  }, 1000)
-}
-
 async function submit() {
+  if (mode.value === '4') {
+    submitReport()
+    return
+  }
+  if (mode.value === 'fund') {
+    submitFund()
+    return
+  }
   if (!canSubmit.value) return
   stopPolling()
   startElapsedTimer()
@@ -422,1309 +426,1124 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header class="masthead">
-    <div class="brand">
-      <span class="brand-mark">
-        <svg viewBox="0 0 32 32" width="30" height="30" fill="none" aria-hidden="true">
-          <rect x="4" y="2.5" width="24" height="27" rx="5" fill="var(--primary-soft)" />
-          <path d="M9 9h14M9 14h14M9 19h9" stroke="var(--primary-strong)" stroke-width="2.4" stroke-linecap="round" />
-          <path d="M20 22.5l4 4 6-6" stroke="var(--primary)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </span>
-      <span class="brand-text">
-        <span class="brand-name">财务内部工具</span>
-        <span class="brand-sub">发票识别转表、表格处理</span>
-      </span>
-    </div>
-  </header>
+  <div class="layout-app">
+    <!-- 1. 左侧竖向导航栏 -->
+    <aside class="sidebar-nav">
+      <!-- 顶部 Logo 品牌 -->
+      <div class="nav-brand">
+        <div class="brand-icon">
+          <!-- 绿白折叠叶子/纸张图标 -->
+          <svg viewBox="0 0 32 32" width="24" height="24" fill="none">
+            <path d="M7 6a3 3 0 013-3h12a3 3 0 013 3v13.5a6.5 6.5 0 01-6.5 6.5H10a3 3 0 01-3-3V6z" fill="#008765"/>
+            <path d="M12 9h8M12 14h6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+            <path d="M7 20a6 6 0 006 6h5.5A6.5 6.5 0 0112 19.5V14H7v6z" fill="#2eb88a" fill-opacity="0.9"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-title">财务内部工具</span>
+          <span class="brand-desc">发票识别 · 表格处理</span>
+        </div>
+      </div>
 
-  <main class="workspace">
-    <div class="workflow-grid">
-      <div class="workflow-column workflow-left">
-        <div class="rail" aria-hidden="true"></div>
-
-        <!-- 步骤 1：选择功能 -->
-    <section class="step">
-      <span class="step-dot" :class="{ done: mode, cur: currentStep === 1 }">
-        <svg v-if="mode" viewBox="0 0 16 16" width="14" height="14" fill="none">
-          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <template v-else>1</template>
-      </span>
-      <div class="step-body">
-        <h2 class="step-title">选择功能</h2>
-        <p class="step-sub">根据要处理的内容选择模式</p>
+      <!-- 工作组别模式选择 -->
+      <div class="sidebar-section">
+        <div class="sidebar-section-title">工作组别</div>
         <ModeSelect v-model="mode" :disabled="submitting" />
       </div>
-    </section>
+    </aside>
 
-    <!-- 步骤 2：选择人员/付款组发票类型 -->
-    <section v-if="mode === '3' || mode === 'receipt'" class="step">
-      <span class="step-dot" :class="{ done: false, cur: currentStep === 2 }">
-        <svg v-if="currentStep > 2" viewBox="0 0 16 16" width="14" height="14" fill="none">
-          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <template v-else>2</template>
-      </span>
-      <div class="step-body">
-        <h2 class="step-title">{{ mode === 'receipt' ? '选择人员' : '选择发票类型' }}</h2>
-        <ReceiptTypeSelect v-if="mode === 'receipt'" v-model="receiptPerson" :disabled="submitting" />
-        <InvoiceTypeSelect v-else v-model="invType" :disabled="submitting" />
-      </div>
-    </section>
-
-    <!-- 步骤 3：选择收款组人员对应类型 -->
-    <section v-if="mode === 'receipt' && (receiptPerson === '赵淑华' || receiptPerson === '邵梅琳')" class="step">
-      <span class="step-dot" :class="{ done: receiptSubtype, cur: currentStep === 3 }">
-        <svg v-if="receiptSubtype" viewBox="0 0 16 16" width="14" height="14" fill="none">
-          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <template v-else>3</template>
-      </span>
-      <div class="step-body">
-        <h2 class="step-title">选择发票类型</h2>
-        <ReceiptSubtypeSelect v-model="receiptSubtype" :person="receiptPerson" :disabled="submitting" />
-      </div>
-    </section>
+    <!-- 2. 右侧主工作区容器 -->
+    <div class="main-viewport">
+      <!-- 步骤流程指示条 (步骤 1 / 步骤 2) -->
+      <div class="step-indicator-bar">
+        <div class="step-badge is-active">
+          <span class="step-num">1</span>
+          <div class="step-info">
+            <span class="step-name">选择功能</span>
+            <span class="step-desc">根据要处理的内容选择模式</span>
+          </div>
+        </div>
+        <div class="step-connector"></div>
+        <div class="step-badge" :class="{ 'is-active': mode }">
+          <span class="step-num">2</span>
+          <div class="step-info">
+            <span class="step-name">上传文件并制作</span>
+            <span class="step-desc">上传文件后系统自动识别处理生成结果</span>
+          </div>
+        </div>
       </div>
 
-      <div class="workflow-column workflow-right" :class="{ 'report-active': mode === '4' || mode === 'fund', 'processing-active': submitting || status === 'done' || status === 'error' }">
-        <!-- 步骤 3/2：上传 PDF -->
-        <section v-if="mode !== '4' && mode !== 'fund' && (mode !== 'receipt' || effectiveMode)" class="step">
-      <span class="step-dot" :class="{ done: files.length > 0, cur: currentStep === (mode === '3' ? 3 : mode === 'receipt' ? 4 : 2) }">
-        <svg v-if="files.length > 0" viewBox="0 0 16 16" width="14" height="14" fill="none">
-          <path d="M3 8.5l3.2 3L13 4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-        <template v-else>{{ mode === '3' ? 3 : mode === 'receipt' ? 4 : 2 }}</template>
-      </span>
-      <div class="step-body">
-        <div class="upload-pane">
-          <h2 class="step-title">{{ effectiveMode === '2' ? '上传原始表格' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? '上传' + paymentLabel + '凭证' : '上传 PDF 文件' }}</h2>
-           <p class="step-sub">{{ effectiveMode === '2' ? '支持 PDF，或 Excel 表格中的支付截图' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? '支持图片、PDF，也可以直接拖入文件夹' : ['1', '5', '9'].includes(effectiveMode) ? '支持多选或拖入文件夹，自动收集其中的 PDF' : '支持多选，一次拖入全部发票' }}</p>
+      <!-- 核心工作区双栏布局 (左栏: 功能选择+子选项 / 右栏: 上传+制作) -->
+      <div class="workspace-grid" :class="{ 'single-col': mode === '4' || mode === 'fund' || (!receiptPerson && mode === 'receipt') }">
+        <!-- 左栏：模式对应的细项配置（如发票类型、人员、排版模板） -->
+        <section v-if="mode === 'receipt' || mode === '3'" class="left-section-card">
+          <div class="section-head">
+            <h2 class="section-title">
+              {{ mode === 'receipt' ? '收款组配置' : '付款组发票类型' }}
+            </h2>
+            <p class="section-subtitle">
+              {{ mode === 'receipt' ? '选择对应人员及发票分类' : '选择当前要处理的英文发票版式' }}
+            </p>
+          </div>
 
-           <UploadArea :disabled="submitting" :count="files.length" :allow-directories="['1', '5', '6', '9'].includes(effectiveMode)" :accept="effectiveMode === '2' ? '.pdf,.xlsx,.xlsm' : effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'" :file-label="effectiveMode === '2' ? 'PDF 或 Excel 表格' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? paymentLabel + '凭证' : 'PDF'" @add="addFiles" @remove="removeFile" @clear="clearFiles">
-          <div v-for="(f, i) in files" :key="f.name + i" class="file-row">
-            <svg viewBox="0 0 20 20" width="17" height="17" fill="none" class="file-glyph" aria-hidden="true">
-              <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
-              <path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
-              <path d="M8.5 11h4M8.5 14h4" stroke="var(--primary)" stroke-width="1.6" stroke-linecap="round" />
-            </svg>
-            <span class="file-name" :title="f.name">{{ f.name }}</span>
-            <span class="file-size">{{ formatSize(f.size) }}</span>
-            <button
-              class="file-remove"
-              type="button"
+          <!-- 子选项：收款组选人员 / 付款组选发票类型 -->
+          <div class="sub-config-box">
+            <div class="sub-config-head">
+              <span class="sub-config-tag">人员 / 版式</span>
+              <span class="sub-config-title">{{ mode === 'receipt' ? '选择经办人员' : '选择发票类型（13种）' }}</span>
+            </div>
+
+            <!-- 收款组人员选择 -->
+            <ReceiptTypeSelect
+              v-if="mode === 'receipt'"
+              v-model="receiptPerson"
               :disabled="submitting"
-              :aria-label="'移除 ' + f.name"
-              @click="removeFile(i)"
-            >✕</button>
-          </div>
-          </UploadArea>
+            />
 
-          <div v-if="effectiveMode === '1'" class="template-section">
-          <div class="ts-head">
-            <span class="ts-label">插入已有表格（可选）</span>
-            <span class="ts-tip">不传模板则自动生成新表格</span>
-          </div>
-          <TemplateUpload
-            :disabled="submitting"
-            @selected="onTemplateSelected"
-            @cleared="clearTemplate"
-          />
-          <div v-if="templateFile && !sheetError" class="sheet-pick">
-            <span class="lo-label">选择工作表</span>
-            <div class="sheet-btns" role="radiogroup" aria-label="选择工作表">
-              <button
-                v-for="s in sheets"
-                :key="s"
-                type="button"
-                class="sheet-btn"
-                :class="{ on: selectedSheet === s }"
-                :disabled="submitting"
-                @click="selectedSheet = s"
-              >{{ s }}</button>
-            </div>
-          </div>
-          <p v-if="sheetError" class="lo-error">{{ sheetError }}</p>
-          </div>
-        </div>
-
-        <div class="action-pane">
-
-        <div v-if="effectiveMode === '1'" class="layout-options">
-          <div class="ts-head">
-            <span class="ts-label">排版位置</span>
-            <span class="ts-tip">图片在表格里的排布方式</span>
-          </div>
-          <div class="lo-row">
-            <div class="lo-field">
-              <span class="lo-label">排版方向</span>
-              <div class="seg" role="radiogroup" aria-label="排版方向">
-                <button
-                  type="button"
-                  class="seg-btn"
-                  :class="{ on: layoutDir === 'v' }"
-                  @click="layoutDir = 'v'"
-                >纵向</button>
-                <button
-                  type="button"
-                  class="seg-btn"
-                  :class="{ on: layoutDir === 'h' }"
-                  @click="layoutDir = 'h'"
-                >横向</button>
-              </div>
-            </div>
-            <div class="lo-field">
-              <label class="lo-label" for="start-cell">起始位置</label>
-              <input
-                id="start-cell"
-                v-model="startCell"
-                class="cell-input"
-                :class="{ invalid: !startCellValid }"
-                spellcheck="false"
-              />
-              <span v-if="!startCellValid" class="lo-error">请输入如 A1、C5 的格位置</span>
-            </div>
-          </div>
-          <p class="lo-hint">
-            <template v-if="layoutDir === 'v'">纵向：图片沿列向下排，字段标在图片右侧</template>
-            <template v-else>横向：图片沿行向右排，字段标在图片下方</template>
-          </p>
-        </div>
-
-          <div class="make-section">
-            <h2 class="step-title">制作</h2>
-            <p class="step-sub">{{ effectiveMode === '5' ? '仅提取字段，不生成或插入图片；完成后直接下载表格' : effectiveMode === '6' ? '识别日期、时分秒和金额，并把原凭证放入附图列' : '后端处理完成后，表格会直接从浏览器下载' }}</p>
-
-        <div class="run-area">
-          <button
-            class="btn-make"
-            type="button"
-            :disabled="!canSubmit"
-            @click="submit"
-          >
-            <span v-if="submitting" class="spinner" aria-hidden="true"></span>
-            <span>{{ submitting ? '正在制作…' : '开始制作' }}</span>
-          </button>
-          <p class="run-hint">
-            <template v-if="files.length">
-              已选 <b>{{ files.length }}</b> 个文件
-            </template>
-            <template v-else>请先上传 PDF</template>
-          </p>
-        </div>
-
-        <ProgressPanel
-          v-if="submitting"
-          :status="'processing'"
-          :current="current"
-          :total="total"
-          :message="message"
-          :logs="logs"
-          :elapsed-seconds="mode !== '3' ? elapsedSeconds : -1"
-        />
-
-            <ResultPanel
-          v-if="status === 'done' || status === 'error'"
-          :status="status"
-          :task-id="taskId"
-          :filename="filename"
-          :error="error"
-          :elapsed-seconds="mode !== '3' ? elapsedSeconds : -1"
-          @reset="reset"
+            <!-- 付款组发票类型选择 -->
+            <InvoiceTypeSelect
+              v-else-if="mode === '3'"
+              v-model="invType"
+              :disabled="submitting"
             />
           </div>
-        </div>
-      </div>
-        </section>
-        <section v-else-if="mode === '4'" class="step report-placeholder">
-          <div class="step-body">
-            <div class="report-pane">
-              <h2 class="step-title">上传报表文件</h2>
-              <p class="step-sub">拖入一个 Excel 表格，读取工作表后选择要处理的数据源</p>
-              <div class="report-upload">
-                <ReportUpload :disabled="submitting" @selected="onReportSelected" @cleared="clearReportFile" />
-              </div>
-              <div v-if="reportLoading" class="report-upload-progress" role="status">
-                <div class="report-upload-progress-head"><span>{{ reportUploadDone ? '上传完成，正在读取工作表…' : '正在上传表格…' }}</span><strong>{{ reportUploadPercent }}%</strong></div>
-                <div class="report-upload-track"><div class="report-upload-bar" :style="{ width: reportUploadPercent + '%' }"></div></div>
-              </div>
-              <p v-if="reportError" class="lo-error" role="alert">{{ reportError }}</p>
-              <div v-if="reportSheets.length" class="report-sheet-pick">
-                <span class="ts-label">选择需要处理的工作表</span>
-                <div class="sheet-btns" role="radiogroup" aria-label="选择报表工作表">
-                  <button v-for="sheet in reportSheets" :key="sheet" type="button" class="sheet-btn" :class="{ on: reportSheet === sheet }" :disabled="submitting" role="radio" :aria-checked="reportSheet === sheet" @click="reportSheet = sheet">{{ sheet }}</button>
-                </div>
+
+          <!-- 收款组人员子类型选择 -->
+          <div v-if="mode === 'receipt' && (receiptPerson === '赵淑华' || receiptPerson === '邵梅琳')" class="sub-config-box">
+            <div class="sub-config-head">
+              <span class="sub-config-tag">发票分类</span>
+              <span class="sub-config-title">选择具体发票/凭证格式</span>
+            </div>
+            <ReceiptSubtypeSelect
+              v-model="receiptSubtype"
+              :person="receiptPerson"
+              :disabled="submitting"
+            />
+          </div>
+
+          <!-- 收款组谢莉丽可选模板设置 -->
+          <div v-if="effectiveMode === '1'" class="sub-config-box template-box">
+            <div class="sub-config-head">
+              <span class="sub-config-tag">模板与排版</span>
+              <span class="sub-config-title">插入已有表格（可选）</span>
+            </div>
+            <TemplateUpload
+              :disabled="submitting"
+              @selected="onTemplateSelected"
+              @cleared="clearTemplate"
+            />
+            <div v-if="templateFile && !sheetError" class="sheet-pick-group">
+              <span class="opt-label">选择工作表：</span>
+              <div class="sheet-chips">
+                <button
+                  v-for="s in sheets"
+                  :key="s"
+                  type="button"
+                  class="sheet-chip"
+                  :class="{ on: selectedSheet === s }"
+                  :disabled="submitting"
+                  @click="selectedSheet = s"
+                >{{ s }}</button>
               </div>
             </div>
-            <div class="report-action-pane">
-              <h2 class="step-title">生成报表组总表</h2>
-              <p class="step-sub">确认工作表后同时生成无应收明细和无业务员成本明细</p>
-              <div class="run-area">
-                <button class="btn-make" type="button" :disabled="!reportFile || !reportSheet || reportLoading || submitting" @click="submitReport">
-                  <span v-if="submitting" class="spinner" aria-hidden="true"></span>
-                  <span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
-                </button>
-                <p class="run-hint">{{ reportSheet ? `已选择：${reportSheet}` : '请先上传并选择工作表' }}</p>
+            <div class="layout-dir-row">
+              <span class="opt-label">排版方向：</span>
+              <div class="seg-btn-group">
+                <button type="button" class="seg-btn" :class="{ on: layoutDir === 'v' }" @click="layoutDir = 'v'">纵向排布</button>
+                <button type="button" class="seg-btn" :class="{ on: layoutDir === 'h' }" @click="layoutDir = 'h'">横向排布</button>
               </div>
-            </div>
-            <div v-if="submitting || status === 'paused' || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting || status === 'paused'" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" :report-profile="reportProfile" :report-flow="true" />
-              <div v-if="status === 'paused'" class="report-step-actions">
-                <a class="btn primary" :href="`/api/tasks/${taskId}/download`" :download="filename">下载步骤 {{ reportStep }} 结果</a>
-                <button class="btn ghost" type="button" @click="continueReport">继续第 {{ reportStep + 1 }} 步</button>
-              </div>
-              <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
+              <span class="opt-label ml-4">起始格：</span>
+              <input v-model="startCell" class="cell-input" :class="{ invalid: !startCellValid }" placeholder="A1" />
             </div>
           </div>
+
+          <!-- 底部帮助提示小栏 -->
+          <div class="helper-banner">
+            <div class="helper-icon">💡</div>
+            <div class="helper-text">
+              <strong>不知道选哪个？</strong>
+              <span>可以先查看帮助文档，或联系财务管理员获取建议。</span>
+            </div>
+            <button class="helper-link-btn" type="button" @click="currentNav = 'help'">
+              查看帮助
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none">
+                <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
         </section>
-        <section v-else-if="mode === 'fund'" class="step report-placeholder">
-          <div class="step-body">
-            <div class="report-pane">
-              <h2 class="step-title">上传表格文件</h2>
-              <p class="step-sub">依次拖入三个 Excel 表格，一次完成收款与付款核对</p>
 
-              <div class="fund-upload-block">
-                <div class="fund-upload-label">
-                  <span class="fund-step-tag">1</span>
-                  <span class="ts-label">收款审核表</span>
-                  <span class="ts-tip">表名含日期后缀，如 260910</span>
-                </div>
-                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile1 }" @dragover.prevent @drop.prevent="e => { const f = e.dataTransfer.files[0]; if (f) fundFile1 = f }">
-                  <template v-if="!fundFile1">
-                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
-                    <span class="fund-drop-hint">拖入文件，或</span>
-                    <label class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile1 = f; e.target.value = '' }" /></label>
-                  </template>
-                  <template v-else>
-                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    <span class="fund-file-name" :title="fundFile1.name">{{ fundFile1.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile1 = null">✕</button>
-                  </template>
-                </div>
+        <!-- 右栏：文件上传与操作卡片 -->
+        <section class="right-section-card">
+          <!-- 1. 发票/普通文件上传视图 -->
+          <template v-if="mode !== '4' && mode !== 'fund'">
+            <div class="section-head">
+              <h2 class="section-title">
+                {{ effectiveMode === '2' ? '上传原始表格 / 凭证' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? '上传 ' + paymentLabel + ' 凭证' : '上传 PDF 文件' }}
+              </h2>
+              <p class="section-subtitle">
+                {{ effectiveMode === '2' ? '支持 PDF，或 Excel 表格中的支付截图' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? '支持图片、PDF，也可以直接拖入文件夹' : '支持多选，一次拖入全部发票，系统将自动识别并处理' }}
+              </p>
+            </div>
+
+            <!-- 上传组件 -->
+            <UploadArea
+              :disabled="submitting"
+              :count="files.length"
+              :allow-directories="['1', '5', '6', '9'].includes(effectiveMode)"
+              :accept="effectiveMode === '2' ? '.pdf,.xlsx,.xlsm' : effectiveMode === '6' ? '.pdf,.png,.jpg,.jpeg' : '.pdf'"
+              :file-label="effectiveMode === '2' ? 'PDF 或 Excel 表格' : effectiveMode === '6' && receiptSubtype !== 'invoice' ? paymentLabel + '凭证' : 'PDF'"
+              @add="addFiles"
+              @remove="removeFile"
+              @clear="clearFiles"
+            >
+              <div v-for="(f, i) in files" :key="f.name + i" class="file-item-row">
+                <svg viewBox="0 0 20 20" width="16" height="16" fill="none" class="file-icon">
+                  <path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
+                  <path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round" />
+                </svg>
+                <span class="f-name" :title="f.name">{{ f.name }}</span>
+                <span class="f-size">{{ formatSize(f.size) }}</span>
+                <button class="f-remove" type="button" :disabled="submitting" @click="removeFile(i)">✕</button>
               </div>
+            </UploadArea>
+          </template>
 
-              <div class="fund-upload-block" :class="{ 'fund-block-dim': !fundFile1 }">
-                <div class="fund-upload-label"><span class="fund-step-tag">2</span><span class="ts-label">服务商付款审核表</span><span class="ts-tip">表名含日期后缀，如 260910</span></div>
-                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile2 }" @dragover.prevent @drop.prevent="e => { if (!fundFile1) return; const f = e.dataTransfer.files[0]; if (f) fundFile2 = f }">
-                  <template v-if="!fundFile2">
-                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
-                    <span class="fund-drop-hint">{{ fundFile1 ? '拖入文件，或' : '请先上传收款审核表' }}</span>
-                    <label v-if="fundFile1" class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile2 = f; e.target.value = '' }" /></label>
-                  </template>
-                  <template v-else>
-                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    <span class="fund-file-name" :title="fundFile2.name">{{ fundFile2.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile2 = null">✕</button>
-                  </template>
-                </div>
+          <!-- 2. 报表组上传视图 -->
+          <template v-else-if="mode === '4'">
+            <div class="section-head">
+              <h2 class="section-title">上传报表文件</h2>
+              <p class="section-subtitle">拖入 Excel 表格，读取工作表后生成无应收与无业务员成本总表</p>
+            </div>
+
+            <ReportUpload :disabled="submitting" @selected="onReportSelected" @cleared="clearReportFile" />
+
+            <div v-if="reportLoading" class="report-loading-box">
+              <div class="loading-head">
+                <span>{{ reportUploadDone ? '正在读取工作表…' : '正在上传表格…' }}</span>
+                <strong>{{ reportUploadPercent }}%</strong>
               </div>
-
-              <div class="fund-upload-block" :class="{ 'fund-block-dim': !fundFile2 }">
-                <div class="fund-upload-label"><span class="fund-step-tag">3</span><span class="ts-label">中信对公</span><span class="ts-tip">需含“系统”工作表</span></div>
-                <div class="fund-drop-zone" :class="{ 'fund-drop-active': fundFile3 }" @dragover.prevent @drop.prevent="e => { if (!fundFile2) return; const f = e.dataTransfer.files[0]; if (f) fundFile3 = f }">
-                  <template v-if="!fundFile3">
-                    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" aria-hidden="true"><path d="M12 16V8m0 0-3 3m3-3 3 3" stroke="var(--primary)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="3" width="18" height="18" rx="5" stroke="var(--border-strong)" stroke-width="1.5"/></svg>
-                    <span class="fund-drop-hint">{{ fundFile2 ? '拖入文件，或' : '请先上传服务商付款审核表' }}</span>
-                    <label v-if="fundFile2" class="fund-pick-btn">点击选择<input type="file" accept=".xlsx,.xlsm" style="display:none" :disabled="submitting" @change="e => { const f = e.target.files[0]; if (f) fundFile3 = f; e.target.value = '' }" /></label>
-                  </template>
-                  <template v-else>
-                    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" class="file-glyph" aria-hidden="true"><path d="M6 2h5l4 4v12H6V2z" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/><path d="M11 2v4h4" stroke="var(--primary)" stroke-width="1.6" stroke-linejoin="round"/></svg>
-                    <span class="fund-file-name" :title="fundFile3.name">{{ fundFile3.name }}</span><button class="file-remove" type="button" :disabled="submitting" @click="fundFile3 = null">✕</button>
-                  </template>
-                </div>
+              <div class="loading-track">
+                <div class="loading-bar" :style="{ width: reportUploadPercent + '%' }"></div>
               </div>
             </div>
 
-            <div class="report-action-pane">
-              <h2 class="step-title">生成资金核对表</h2>
-              <p class="step-sub">先处理收款审核表，再处理服务商付款审核表；中信对公只需上传一次</p>
-              <div class="fund-checklist">
-                <div class="fund-check-item" :class="{ done: fundFile1 }"><span class="fund-check-icon">{{ fundFile1 ? '✓' : '○' }}</span><span>收款审核表</span></div>
-                <div class="fund-check-item" :class="{ done: fundFile2 }"><span class="fund-check-icon">{{ fundFile2 ? '✓' : '○' }}</span><span>服务商付款审核表</span></div>
-                <div class="fund-check-item" :class="{ done: fundFile3 }"><span class="fund-check-icon">{{ fundFile3 ? '✓' : '○' }}</span><span>中信对公（系统）</span></div>
-              </div>
-              <div class="run-area">
-                <button class="btn-make" type="button" :disabled="!fundFile1 || !fundFile2 || !fundFile3 || submitting" @click="submitFund">
-                  <span v-if="submitting" class="spinner" aria-hidden="true"></span><span>{{ submitting ? '正在处理…' : '确认并开始处理' }}</span>
-                </button>
-                <p class="run-hint"><template v-if="!fundFile1">请先上传收款审核表</template><template v-else-if="!fundFile2">请上传服务商付款审核表</template><template v-else-if="!fundFile3">请上传中信对公</template><template v-else>三个文件已就绪，可开始处理</template></p>
+            <p v-if="reportError" class="form-error">{{ reportError }}</p>
+
+            <div v-if="reportSheets.length" class="sheet-select-box">
+              <span class="opt-label">选择要处理的工作表：</span>
+              <div class="sheet-chips">
+                <button
+                  v-for="sheet in reportSheets"
+                  :key="sheet"
+                  type="button"
+                  class="sheet-chip"
+                  :class="{ on: reportSheet === sheet }"
+                  :disabled="submitting"
+                  @click="reportSheet = sheet"
+                >{{ sheet }}</button>
               </div>
             </div>
+          </template>
 
-            <div v-if="submitting || status === 'done' || status === 'error'" class="report-progress-wide">
-              <ProgressPanel v-if="submitting" :status="'processing'" :current="current" :total="total" :message="message" :logs="logs" :elapsed-seconds="elapsedSeconds" />
-              <ResultPanel v-if="status === 'done' || status === 'error'" :status="status" :task-id="taskId" :filename="filename" :error="error" :elapsed-seconds="elapsedSeconds" @reset="reset" />
+          <!-- 3. 资金组表格上传视图 -->
+          <template v-else-if="mode === 'fund'">
+            <div class="section-head">
+              <h2 class="section-title">上传资金核对表格</h2>
+              <p class="section-subtitle">拖入已有表格，按文件名自动识别对公、收款审核、服务商付款与银行流水</p>
+            </div>
+
+            <div class="fund-drag-box" :class="{ ready: fundFile3 }" @dragover.prevent @drop.prevent="e => selectFundFiles(e.dataTransfer.files)">
+              <div class="fund-drag-icon">
+                <svg viewBox="0 0 24 24" width="28" height="28" fill="none">
+                  <path d="M12 15V7M8.5 10.5L12 7l3.5 3.5" stroke="var(--primary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+                  <rect x="3" y="3" width="18" height="18" rx="4" stroke="var(--border-strong)" stroke-width="1.5"/>
+                </svg>
+              </div>
+              <div class="fund-drag-text">
+                <strong>拖入资金组 Excel 文件</strong>
+                <span>对公表必传，收款、付款、银行账号管理流水按需提供</span>
+              </div>
+              <label class="fund-btn-browse">
+                点击选择文件
+                <input type="file" accept=".xlsx,.xlsm" multiple hidden :disabled="submitting" @change="e => { selectFundFiles(e.target.files); e.target.value = '' }" />
+              </label>
+            </div>
+
+            <div class="fund-file-chips">
+              <div v-for="([label, file]) in fundFileSlots" :key="label" class="fund-chip" :class="{ found: file }">
+                <span class="fund-chip-status">{{ file ? '✓' : '·' }}</span>
+                <span class="fund-chip-label">{{ label }}</span>
+                <span class="fund-chip-val" :title="file ? file.name : ''">{{ file ? file.name : '未识别' }}</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- 文件安全保障标签 -->
+          <div class="security-card">
+            <div class="security-icon">
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="none">
+                <path d="M10 2l6 2.5v5c0 4.5-2.8 7.5-6 8.5-3.2-1-6-4-6-8.5v-5L10 2z" fill="#008765" fill-opacity="0.15" stroke="#008765" stroke-width="1.6"/>
+                <path d="M7.5 9.5l2 2 3.5-3.5" stroke="#008765" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="security-text">
+              <strong>文件安全有保障</strong>
+              <span>文件仅在本次任务中临时处理，处理完成后自动清理，确保数据安全。</span>
             </div>
           </div>
+
+          <!-- 开始制作主操作按钮 -->
+          <div class="action-footer">
+            <button
+              class="primary-start-btn"
+              type="button"
+              :disabled="!canSubmit"
+              @click="submit"
+            >
+              <span v-if="submitting" class="btn-spinner"></span>
+              <span>{{ submitting ? '正在处理中…' : '开始制作' }}</span>
+              <svg v-if="!submitting" viewBox="0 0 20 20" width="18" height="18" fill="none">
+                <path d="M4 10h12M11 5l5 5-5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- 进度监控面板 -->
+          <ProgressPanel
+            v-if="submitting || status === 'paused'"
+            :status="'processing'"
+            :current="current"
+            :total="total"
+            :message="message"
+            :logs="logs"
+            :elapsed-seconds="elapsedSeconds"
+            :report-profile="reportProfile"
+            :report-flow="mode === '4'"
+          />
+
+          <!-- 报表组单步暂停继续按钮 -->
+          <div v-if="status === 'paused'" class="paused-action-row">
+            <a class="btn-step-download" :href="`/api/tasks/${taskId}/download`" :download="filename">下载第 {{ reportStep }} 步结果</a>
+            <button class="btn-step-continue" type="button" @click="continueReport">继续下一步</button>
+          </div>
+
+          <!-- 完成或失败结果面板 -->
+          <ResultPanel
+            v-if="status === 'done' || status === 'error'"
+            :status="status"
+            :task-id="taskId"
+            :filename="filename"
+            :error="error"
+            :elapsed-seconds="elapsedSeconds"
+            @reset="reset"
+          />
         </section>
       </div>
     </div>
-  </main>
+  </div>
 </template>
 
 <style scoped>
-.masthead {
+/* 整个应用外壳：左侧导航 230px + 右侧工作区 */
+.layout-app {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 44px;
+  min-height: 100vh;
+  background-color: var(--bg);
 }
 
-.brand {
+/* 1. 侧边栏导航 */
+.sidebar-nav {
+  width: 270px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  gap: 14px;
+  flex-direction: column;
+  padding: 20px 14px 18px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.sidebar-section-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-faint);
+  letter-spacing: 0.5px;
+  padding: 0 4px;
+}
+
+.workspace-grid.single-col {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 6px 24px;
+}
+
+.brand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--primary-soft);
 }
 
 .brand-text {
   display: flex;
   flex-direction: column;
-  gap: 2px;
 }
 
-.brand-name {
-  font-family: var(--font-serif);
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+.brand-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.brand-desc {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.nav-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-s);
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  text-align: left;
+}
+
+.nav-item:hover {
+  background: var(--surface-2);
   color: var(--text);
 }
 
-.brand-sub {
-  font-size: 12.5px;
-  color: var(--text-soft);
-  letter-spacing: 0.3px;
-}
-
-.masthead-tag {
-  font-size: 12px;
-  color: var(--primary-ink);
+.nav-item.is-active {
   background: var(--primary-soft);
-  border: 1px solid rgba(13, 138, 122, 0.18);
-  padding: 4px 12px;
-  border-radius: 999px;
+  color: var(--primary-ink);
+  font-weight: 700;
+}
+
+.nav-icon {
+  flex-shrink: 0;
+}
+
+/* 侧边栏底部插画 */
+.sidebar-banner {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 16px 12px;
+  border-radius: var(--radius-m);
+  background: linear-gradient(180deg, #f3faf7 0%, #eaf5f1 100%);
+  border: 1px solid #d8ede4;
+}
+
+.banner-illus {
+  margin-bottom: 6px;
+}
+
+.banner-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary-ink);
+}
+
+.banner-sub {
+  font-size: 11px;
+  color: var(--text-soft);
+  margin-top: 2px;
+}
+
+/* 2. 右侧主工作区 */
+.main-viewport {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 36px 48px;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+/* 顶部 Header */
+.top-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.header-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.header-link:hover {
+  background: var(--surface);
+  color: var(--primary);
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #e2f1f8;
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.user-name {
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.5px;
+  color: var(--text);
 }
 
-.workspace {
-  position: relative;
-  padding-left: 0;
+.dropdown-arrow {
+  color: var(--text-faint);
 }
 
-.workflow-grid {
+/* 步骤横向指示条 */
+.step-indicator-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 24px;
+  padding: 0 4px;
+}
+
+.step-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  opacity: 0.55;
+  transition: opacity 0.2s ease;
+}
+
+.step-badge.is-active {
+  opacity: 1;
+}
+
+.step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1.5px solid var(--border-strong);
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: var(--font-num);
+}
+
+.step-badge.is-active .step-num {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--primary-shadow);
+}
+
+.step-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.step-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.step-desc {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.step-connector {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  margin: 0 24px;
+}
+
+/* 核心工作区双栏卡片网格 */
+.workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(28px, 5vw, 72px);
+  grid-template-columns: minmax(460px, 1fr) minmax(440px, 1fr);
+  gap: 24px;
   align-items: start;
 }
 
-.workflow-column {
-  min-width: 0;
-}
-
-.workflow-left {
-  position: relative;
-  padding-left: 52px;
-}
-
-.workflow-right {
-  position: sticky;
-  top: 24px;
-  height: min(760px, calc(100vh - 160px));
-  min-height: 0;
-  max-height: calc(100vh - 160px);
+/* 卡片统一白色底、圆角与边框 */
+.left-section-card,
+.right-section-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 24px;
+  box-shadow: var(--card-shadow);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  padding: 24px 24px 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--surface) 94%, var(--primary-soft));
-  box-shadow: var(--shadow-md);
-  scrollbar-width: thin;
+  gap: 20px;
 }
 
-.workflow-right.report-active {
-  height: auto;
-  min-height: 0;
-  max-height: none;
-  overflow-y: auto;
-}
-
-.workflow-right.processing-active {
-  height: auto;
-  max-height: none;
-  overflow: visible;
-}
-
-.workflow-right.processing-active > .step:first-child {
-  flex: none;
-  overflow: visible;
-}
-
-.workflow-right.processing-active > .step > .step-body {
-  height: auto;
-}
-
-.workflow-right.processing-active .action-pane {
-  overflow: visible;
-}
-
-.workflow-right.report-active > .step:first-child {
-  flex: none;
-  overflow: visible;
-}
-
-.workflow-right.report-active > .step > .step-body {
-  height: auto;
-}
-
-.workflow-right > .step {
-  min-height: 0;
-  padding-bottom: 0;
-}
-
-.workflow-right > .step > .step-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(24px, 3vw, 44px);
-  height: 100%;
-  min-height: 0;
-}
-
-.upload-pane,
-.action-pane {
-  min-width: 0;
-}
-
-.upload-pane {
-  overflow-y: auto;
-  padding-right: 4px;
-  scrollbar-width: thin;
-}
-
-.action-pane {
-  overflow: hidden;
-  padding: 0 4px 8px 0;
+.section-head {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  gap: 4px;
 }
 
-.upload-pane > :deep(.dropzone-wrap) {
-  margin-top: 20px;
+.section-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
 }
 
-.action-pane .template-section {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
-
-.make-section {
-  margin-top: 26px;
-  padding-top: 22px;
-  border-top: 1px dashed var(--border-strong);
-  min-height: 0;
-  overflow: visible;
-}
-
-.action-pane > .make-section:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
-}
-
-.make-section > :deep(.progress-panel),
-.make-section > :deep(.result-panel) {
-  margin-top: 20px;
-}
-
-.report-placeholder {
-  height: 100%;
-  padding-bottom: 0;
-}
-
-.report-placeholder > .step-body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 28px;
-  height: 100%;
-}
-
-.report-pane,
-.report-action-pane {
-  min-width: 0;
-  overflow: visible;
-  padding-right: 4px;
-  scrollbar-width: thin;
-}
-
-.report-action-pane {
-  min-width: 0;
-}
-
-.report-kind-toggle {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 20px;
-}
-.report-kind-toggle button {
-  min-height: 42px;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-2);
-  color: var(--text-soft);
-  font: inherit;
+.section-subtitle {
+  margin: 0;
   font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
+  color: var(--text-soft);
 }
-.report-kind-toggle button.on {
-  border-color: var(--primary);
+
+/* 细项配置容器 */
+.sub-config-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sub-config-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sub-config-tag {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 6px;
   background: var(--primary-soft);
   color: var(--primary-ink);
+  border-radius: var(--radius-xs);
 }
 
-.report-progress-wide {
-  grid-column: 1 / -1;
-  width: 100%;
-  min-width: 0;
-}
-
-.report-progress-wide > :deep(.progress-panel),
-.report-progress-wide > :deep(.result-panel) { width: 100%; }
-
-.report-upload {
-  margin-top: 20px;
-}
-
-.report-loading {
-  margin: 12px 0 0;
-  color: var(--primary-ink);
-  font-size: 13px;
-}
-
-.report-upload-progress {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
-  background: var(--surface-2);
-}
-.report-upload-progress-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--text-soft);
-  font-size: 12px;
-}
-.report-upload-progress-head strong { color: var(--primary); font-family: var(--font-num); }
-.report-upload-track { height: 6px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: var(--surface); }
-.report-upload-bar { height: 100%; border-radius: inherit; background: var(--primary); transition: width .2s ease-out; }
-
-.report-sheet-pick {
-  margin-top: 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.report-progress-wide > :deep(.progress-panel),
-.report-progress-wide > :deep(.result-panel) {
-  margin-top: 20px;
-}
-
-.report-progress-wide > :deep(.progress-panel) {
-  height: auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.report-progress-wide > :deep(.pp-terminal) {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.report-progress-wide > :deep(.pp-terminal-body) {
-  height: auto;
-  min-height: 0;
-  max-height: none;
-  flex: 1 1 auto;
-  overflow-y: scroll;
-  overscroll-behavior: contain;
-}
-
-.report-step-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 16px;
-  flex-wrap: wrap;
-}
-
-.workflow-right > .step:first-child {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.workflow-right > .step:first-child::-webkit-scrollbar {
-  display: none;
-}
-
-.workflow-right > .step:first-child {
-  overflow: visible;
-}
-
-.workflow-right > .step:last-child {
-  flex: 1 1 auto;
-}
-
-.workflow-right :deep(.file-list) {
-  max-height: clamp(180px, 30vh, 320px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-right: 4px;
-  scrollbar-width: thin;
-}
-
-.workflow-right .step:last-child {
-  padding-bottom: 0;
-}
-
-@supports not (background: color-mix(in srgb, white, black)) {
-  .workflow-right {
-    background: var(--surface);
-  }
-}
-
-.rail {
-  position: absolute;
-  left: 15px;
-  top: 10px;
-  bottom: 14px;
-  width: 2px;
-  background: var(--border);
-  border-radius: 2px;
-}
-
-.step {
-  position: relative;
-  padding-bottom: 46px;
-}
-
-.step:last-child {
-  padding-bottom: 0;
-}
-
-.step-dot {
-  position: absolute;
-  left: -52px;
-  top: 2px;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  background: var(--bg);
-  border: 2px solid var(--border-strong);
-  color: var(--text-faint);
-  display: grid;
-  place-items: center;
+.sub-config-title {
   font-size: 13px;
   font-weight: 700;
-  font-family: var(--font-num);
-  transition: all 0.3s var(--ease-out);
+  color: var(--text);
 }
 
-/* 右侧上传卡片的步骤图标放在卡片内部，避免越过边框 */
-.workflow-right .step-dot {
-  left: -16px;
+/* 模板与排版 */
+.sheet-pick-group,
+.layout-dir-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
 }
 
-.workflow-right .step-body {
-  padding-left: 24px;
+.opt-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
-.step-dot.cur {
-  border-color: var(--primary);
-  color: var(--primary);
+.sheet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sheet-chip {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
   background: var(--surface);
-  box-shadow: 0 0 0 4px var(--primary-soft);
+  cursor: pointer;
+  color: var(--text-secondary);
 }
 
-.step-dot.done {
-  border-color: var(--primary);
+.sheet-chip.on {
   background: var(--primary);
   color: #fff;
+  border-color: var(--primary);
 }
 
-.step-body {
-  animation: rise 0.5s var(--ease-out) both;
-}
-
-.step:nth-child(1) .step-body {
-  animation-delay: 0.04s;
-}
-.step:nth-child(2) .step-body {
-  animation-delay: 0.1s;
-}
-.step:nth-child(3) .step-body {
-  animation-delay: 0.16s;
-}
-.step:nth-child(4) .step-body {
-  animation-delay: 0.22s;
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-.step-title {
-  margin: 0;
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-}
-
-.step-sub {
-  margin: 4px 0 0;
-  font-size: 12.5px;
-  color: var(--text-soft);
-}
-
-.step-body > :deep(.mode-select),
-.step-body > :deep(.inv-type),
-.step-body > :deep(.dropzone-wrap),
-.step-body > :deep(.progress-panel),
-.step-body > :deep(.result-panel) {
-  margin-top: 20px;
-}
-
-.run-area {
-  margin-top: 24px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-
-.layout-options {
-  margin-top: 26px;
-  padding-top: 22px;
-  border-top: 1px dashed var(--border-strong);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.lo-row {
-  display: flex;
-  align-items: center;
-  gap: 26px;
-  flex-wrap: wrap;
-}
-
-.lo-field {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.lo-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-soft);
-}
-
-.seg {
+.seg-btn-group {
   display: inline-flex;
-  padding: 3px;
-  gap: 2px;
   background: var(--surface);
+  padding: 2px;
+  border-radius: 8px;
   border: 1px solid var(--border);
-  border-radius: 9px;
 }
 
 .seg-btn {
   border: none;
   background: transparent;
-  padding: 6px 18px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-soft);
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
   cursor: pointer;
-  transition: background 0.16s var(--ease-out), color 0.16s var(--ease-out);
-}
-
-.seg-btn:hover {
-  color: var(--text);
+  color: var(--text-soft);
 }
 
 .seg-btn.on {
   background: var(--primary);
   color: #fff;
+  font-weight: 600;
 }
 
 .cell-input {
-  width: 86px;
-  padding: 7px 12px;
-  border: 1.5px solid var(--border-strong);
-  border-radius: 9px;
-  font-size: 13.5px;
+  width: 60px;
+  padding: 4px 8px;
+  font-size: 12.5px;
   font-weight: 700;
-  background: var(--surface);
   text-transform: uppercase;
-  outline: none;
-  transition: border-color 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
-}
-
-.cell-input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 6px;
+  background: #fff;
 }
 
 .cell-input.invalid {
   border-color: var(--danger);
-  box-shadow: 0 0 0 3px var(--danger-soft);
 }
 
-.lo-error {
-  font-size: 12px;
-  color: var(--danger);
+.ml-4 {
+  margin-left: 12px;
 }
 
-.lo-hint {
-  margin: 0;
-  font-size: 12px;
-  color: var(--text-faint);
-}
-
-.template-section {
-  margin-top: 26px;
-  padding-top: 22px;
-  border-top: 1px dashed var(--border-strong);
-}
-
-.ts-head {
+/* 底部帮助 Banner */
+.helper-banner {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-m);
+  background: #fdfaf3;
+  border: 1px solid #f6e8c3;
+  margin-top: auto;
 }
 
-.ts-label {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.3px;
+.helper-icon {
+  font-size: 18px;
 }
 
-.ts-tip {
-  font-size: 12px;
-  color: var(--text-faint);
-}
-
-.sheet-pick {
-  margin-top: 16px;
+.helper-text {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  align-items: flex-start;
+  gap: 2px;
 }
 
-.sheet-btns {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.helper-text strong {
+  font-size: 12.5px;
+  color: #92580c;
 }
 
-.sheet-btn {
-  border: 1.5px solid var(--border-strong);
-  background: var(--surface);
-  border-radius: 9px;
-  padding: 7px 16px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-soft);
+.helper-text span {
+  font-size: 11.5px;
+  color: #a47638;
+}
+
+.helper-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
   cursor: pointer;
-  max-width: 100%;
+}
+
+/* 右栏内部 */
+.file-item-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  font-size: 12.5px;
+}
+
+.file-icon {
+  flex-shrink: 0;
+}
+
+.f-name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: all 0.16s var(--ease-out);
+  font-weight: 600;
 }
 
-.sheet-btn:hover:not(:disabled) {
+.f-size {
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.f-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.f-remove:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* 资金组拖拽框 */
+.fund-drag-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 16px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  text-align: center;
+}
+
+.fund-drag-box.ready {
   border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.fund-drag-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fund-drag-text strong {
+  font-size: 14.5px;
+  color: var(--text);
+}
+
+.fund-drag-text span {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.fund-btn-browse {
+  display: inline-block;
+  padding: 6px 16px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-pill);
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff;
+}
+
+.fund-btn-browse:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.fund-file-chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.fund-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.fund-chip.found {
+  background: var(--primary-soft);
+  border-color: var(--primary-soft-border);
   color: var(--primary-ink);
 }
 
-.sheet-btn.on {
+.fund-chip-status {
+  font-weight: 800;
+}
+
+.fund-chip-label {
+  font-weight: 600;
+}
+
+.fund-chip-val {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-faint);
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 报表上传状态 */
+.report-loading-box {
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.loading-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.loading-track {
+  height: 6px;
+  background: var(--surface);
+  border-radius: 99px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.loading-bar {
+  height: 100%;
   background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
+  transition: width 0.2s ease;
 }
 
-.sheet-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.form-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin: 0;
 }
 
-.btn-make {
+/* 文件安全卡片 */
+.security-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f0f9f6;
+  border: 1px solid #d2ede3;
+  border-radius: var(--radius-m);
+}
+
+.security-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.security-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.security-text strong {
+  font-size: 13px;
+  color: var(--primary-ink);
+}
+
+.security-text span {
+  font-size: 11.5px;
+  color: var(--text-soft);
+  line-height: 1.4;
+}
+
+/* 开始制作大按钮 */
+.action-footer {
+  margin-top: 4px;
+}
+
+.primary-start-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 28px;
+  background: var(--primary);
+  color: #ffffff;
   border: none;
-  border-radius: 12px;
-  padding: 13px 38px;
+  border-radius: var(--radius-pill);
   font-size: 15px;
   font-weight: 700;
-  color: #fff;
-  background: var(--primary);
-  box-shadow: 0 8px 20px -8px rgba(13, 138, 122, 0.55);
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  transition: transform 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out),
-    background 0.18s var(--ease-out), opacity 0.18s var(--ease-out);
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--primary-shadow);
+  transition: all 0.2s var(--ease-smooth);
 }
 
-.btn-make:hover:not(:disabled) {
+.primary-start-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
   transform: translateY(-1px);
-  background: var(--primary-strong);
-  box-shadow: 0 12px 24px -8px rgba(13, 138, 122, 0.6);
+  box-shadow: 0 8px 24px var(--primary-shadow);
 }
 
-.btn-make:active:not(:disabled) {
-  transform: scale(0.98);
+.primary-start-btn:active:not(:disabled) {
+  transform: scale(0.99);
 }
 
-.btn-make:disabled {
-  opacity: 0.45;
+.primary-start-btn:disabled {
+  opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
 }
 
-.run-hint {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text-faint);
-}
-
-.run-hint b {
-  color: var(--primary-ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.spinner {
-  width: 15px;
-  height: 15px;
-  border: 2.5px solid rgba(255, 255, 255, 0.35);
+.btn-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid rgba(255, 255, 255, 0.3);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+  to { transform: rotate(360deg); }
 }
 
-.file-row {
+.paused-action-row {
   display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 9px 13px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
-  background: var(--surface-2);
-  font-size: 13px;
-  transition: border-color 0.15s var(--ease-out);
+  gap: 12px;
 }
 
-.file-row:hover {
-  border-color: var(--border-strong);
-}
-
-.file-glyph {
-  flex-shrink: 0;
-}
-
-.file-name {
+.btn-step-download {
   flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.file-size {
-  color: var(--text-faint);
-  font-family: var(--font-num);
-  font-variant-numeric: tabular-nums;
-}
-
-.file-remove {
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 13px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out);
-}
-
-.file-remove:hover:not(:disabled) {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.file-remove:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.colophon {
-  margin-top: 52px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-faint);
-  letter-spacing: 0.3px;
-}
-
-@media (max-width: 960px) {
-  .workflow-grid {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-  .workflow-left {
-    padding-left: 46px;
-  }
-  .workflow-right {
-    position: relative;
-    top: auto;
-    height: auto;
-    min-height: 0;
-    max-height: none;
-    display: block;
-    overflow: visible;
-    margin-top: 8px;
-    padding: 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-  .workflow-right > .step:first-child {
-    overflow: visible;
-    padding-right: 0;
-  }
-  .workflow-right > .step > .step-body {
-    display: block;
-    height: auto;
-  }
-  .upload-pane,
-  .action-pane {
-    overflow: visible;
-    padding-right: 0;
-  }
-  .report-placeholder > .step-body {
-    display: block;
-    height: auto;
-  }
-  .report-pane,
-  .report-action-pane {
-    overflow: visible;
-    padding-right: 0;
-  }
-  .report-action-pane {
-    margin-top: 28px;
-    padding-top: 24px;
-    border-top: 1px dashed var(--border-strong);
-  }
-  .report-progress-wide > :deep(.progress-panel) {
-    height: auto;
-    min-height: 0;
-  }
-  .report-progress-wide > :deep(.pp-terminal-body) {
-    min-height: 0;
-    max-height: min(48vh, 420px);
-  }
-  .action-pane {
-    margin-top: 28px;
-    padding-top: 24px;
-    border-top: 1px dashed var(--border-strong);
-  }
-  .workflow-right > .step:last-child {
-    flex: none;
-  }
-  .workflow-right .step {
-    padding-bottom: 36px;
-  }
-  .workflow-right .step:first-child {
-    padding-top: 36px;
-    border-top: 1px solid var(--border);
-  }
-  .workflow-right .step-dot {
-    display: none;
-  }
-  .workflow-right .step-body {
-    padding-left: 0;
-  }
-  .workflow-right .step-body {
-    animation-delay: 0.16s;
-  }
-  .workflow-right .rail {
-    display: none;
-  }
-  .workflow-left .step {
-    padding-bottom: 36px;
-  }
-  .workflow-left .step:last-child {
-    padding-bottom: 0;
-  }
-  .workflow-left .rail {
-    bottom: 0;
-  }
-  .workflow-right .run-area {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .workflow-right .lo-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 16px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
-.fund-mode-seg {
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  margin-bottom: 16px;
-}
-/* ── 资金组专用样式 ── */
-.fund-upload-block {
-  margin-top: 20px;
-  transition: opacity 0.2s;
-}
-.fund-block-dim {
-  opacity: 0.45;
-  pointer-events: none;
-}
-.fund-upload-label {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.fund-step-tag {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
+  justify-content: center;
+  padding: 10px;
   background: var(--primary);
   color: #fff;
-  font-size: 12px;
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: 700;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
 }
-.fund-drop-zone {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 14px 16px;
-  border: 1.5px dashed var(--border-strong);
-  border-radius: var(--radius-s);
-  background: var(--surface-2);
-  min-height: 52px;
-  transition: border-color 0.16s, background 0.16s;
-}
-.fund-drop-zone.fund-drop-active {
-  border-style: solid;
-  border-color: var(--primary);
-  background: var(--primary-soft);
-}
-.fund-drop-zone:hover:not(.fund-drop-active) {
-  border-color: var(--primary);
-}
-.fund-drop-hint {
-  font-size: 13px;
-  color: var(--text-soft);
-}
-.fund-pick-btn {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--primary-ink);
-  cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.fund-file-name {
+
+.btn-step-continue {
   flex: 1;
-  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  border-radius: 8px;
   font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 700;
+  cursor: pointer;
 }
-.fund-checklist {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 20px 0;
-  padding: 14px 16px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
+
+/* 响应式断点适配 */
+@media (max-width: 1080px) {
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
 }
-.fund-check-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-soft);
-  transition: color 0.2s;
-}
-.fund-check-item.done {
-  color: var(--primary-ink);
-  font-weight: 600;
+
+@media (max-width: 768px) {
+  .sidebar-nav {
+    display: none;
+  }
+  .main-viewport {
+    padding: 16px;
+  }
 }
 </style>

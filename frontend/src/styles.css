@@ -1,30 +1,51 @@
 :root {
-  /* 色板：青绿色单色系 + 偏冷中性色（非纯白/纯黑） */
-  --bg: #eef3f5;
-  --surface: #fbfdfe;
-  --surface-2: #f3f7f8;
-  --primary: #0d8a7a;
-  --primary-strong: #0a6d61;
-  --primary-soft: #ddf1ee;
-  --primary-ink: #0a564c;
-  --text: #17272c;
-  --text-soft: #51666d;
-  --text-faint: #8aa1a9;
-  --border: #dde6e9;
-  --border-strong: #c3d2d6;
-  --danger: #c2413c;
-  --danger-soft: #fbe9e8;
-  --shadow-sm: 0 1px 2px rgba(18, 43, 49, 0.05);
-  --shadow-md: 0 12px 32px -16px rgba(18, 43, 49, 0.18);
+  /* 设计图主调：翠绿/青绿 + 柔和温润的淡蓝灰背景 */
+  --bg: #edf2f5;
+  --bg-sidebar: #f8fafb;
+  --surface: #ffffff;
+  --surface-2: #f4f8f9;
+  --surface-hover: #f0f7f5;
+
+  --primary: #008765;
+  --primary-hover: #007356;
+  --primary-active: #006047;
+  --primary-soft: #e5f5f0;
+  --primary-soft-border: #bce6da;
+  --primary-ink: #005a43;
+  --primary-shadow: rgba(0, 135, 101, 0.28);
+
+  --text: #1a252c;
+  --text-secondary: #475a64;
+  --text-soft: #637782;
+  --text-faint: #91a2ac;
+  --text-light: #b0c0ca;
+
+  --border: #e2eaed;
+  --border-strong: #cbd7dc;
+  --border-focus: #008765;
+
+  --card-shadow: 0 4px 20px rgba(18, 38, 50, 0.04), 0 1px 3px rgba(18, 38, 50, 0.02);
+  --card-shadow-hover: 0 10px 28px rgba(18, 38, 50, 0.07), 0 2px 6px rgba(18, 38, 50, 0.04);
+  --modal-shadow: 0 20px 48px rgba(15, 30, 40, 0.16);
+
+  --radius-xs: 6px;
   --radius-s: 10px;
-  --radius: 16px;
+  --radius-m: 14px;
+  --radius-l: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 9999px;
 
-  --font-sans: "PingFang SC", "HarmonyOS Sans SC", "Source Han Sans SC",
-    "Microsoft YaHei", "微软雅黑", system-ui, sans-serif;
-  --font-serif: "Source Han Serif SC", "Songti SC", "SimSun", "宋体", serif;
-  --font-num: "DIN Alternate", "Bahnschrift", "Segoe UI", var(--font-sans);
+  --danger: #d93d3d;
+  --danger-soft: #fdf0f0;
+  --warning: #f59e0b;
+  --warning-soft: #fef8eb;
 
-  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "微软雅黑", "Segoe UI", Roboto, sans-serif;
+  --font-num: "DIN Alternate", "Bahnschrift", -apple-system, sans-serif;
+
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-smooth: cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
 * {
@@ -35,76 +56,50 @@ html,
 body {
   margin: 0;
   padding: 0;
-  /* 页面仍可滚动，但不显示浏览器全局滚动条；日志框自身的滚动条不受影响。 */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-html::-webkit-scrollbar,
-body::-webkit-scrollbar {
-  display: none;
-}
-
-body {
+  width: 100%;
+  height: 100%;
   font-family: var(--font-sans);
-  background:
-    radial-gradient(900px 320px at 12% -8%, rgba(13, 138, 122, 0.06), transparent 60%),
-    radial-gradient(800px 300px at 92% -6%, rgba(71, 135, 160, 0.05), transparent 55%),
-    var(--bg);
+  background-color: var(--bg);
   color: var(--text);
-  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
-}
-
-button,
-input {
-  font-family: inherit;
-  color: inherit;
 }
 
 #app {
   width: 100%;
-  max-width: none;
-  margin: 0 auto;
-  padding: clamp(28px, 4vh, 48px) clamp(20px, 4vw, 72px) 80px;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
 }
 
-@media (hover: hover) {
-  .mode-tile,
-  .type-option,
-  .dropzone,
-  .dz-icon,
-  .tpl-drop,
-  .seg-btn,
-  .sheet-btn,
-  .btn-make,
-  .file-row,
-  .file-remove,
-  .clear-all,
-  .tpl-remove,
-  .btn {
-    transition: none !important;
-  }
+button, input, select, textarea {
+  font-family: inherit;
+  color: inherit;
+}
 
-  .mode-tile:hover:not(:disabled),
-  .type-option:hover:not(:disabled),
-  .btn-make:hover:not(:disabled),
-  .dropzone.dragging,
-  .dropzone:hover .dz-icon,
-  .dropzone.dragging .dz-icon,
-  .btn:active {
-    transform: none !important;
-  }
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+/* 隐藏默认滚动条但保持可滚动 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd7dc;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9aaeb7;
 }
 
 ::selection {
   background: var(--primary-soft);
   color: var(--primary-ink);
-}
-
-@media (max-width: 640px) {
-  #app {
-    padding: 24px 16px 64px;
-  }
 }
