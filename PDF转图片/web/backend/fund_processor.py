@@ -569,7 +569,8 @@ def _patch_rmb_sheet_xml(data: bytes, payload):
     return etree.tostring(root, encoding='UTF-8', xml_declaration=True, standalone=True)
 
 
-def _save_system_workbook_preserving_template(original_path: str, workbook, output_path: str, rmb_payload=None):
+def _save_system_workbook_preserving_template(original_path: str, workbook, output_path: str,
+                                             rmb_payload=None, sys_marked=None):
     """Use Excel's native insert/save so drawings and cross-sheet formulas stay valid."""
     try:
         import win32com.client
@@ -599,17 +600,16 @@ def _save_system_workbook_preserving_template(original_path: str, workbook, outp
         excel.ScreenUpdating = False
         native_book = excel.Workbooks.Open(os.path.abspath(output_path), UpdateLinks=0, ReadOnly=False)
 
-        # Only copy the deliberate colour marks made during matching; retain every other template style.
-        for source_sheet in workbook.worksheets:
-            if source_sheet.title not in [sheet.Name for sheet in native_book.Worksheets]:
-                continue
-            target_sheet = native_book.Worksheets(source_sheet.title)
-            for row in source_sheet.iter_rows():
-                for source_cell in row:
-                    fill = source_cell.fill
-                    color = (fill.fgColor.rgb or '').upper() if fill.fill_type == 'solid' else ''
-                    if color[-6:] in known_fills:
-                        target_sheet.Cells(source_cell.row, source_cell.column).Interior.Color = excel_color(color)
+        # 只写入核对流程实际标记过的系统表单元格。
+        # 不能遍历整张系统表：该模板虽然约一万行，却带有 16,384 列的格式范围，
+        # 逐个 COM 单元格读取会让保存阶段耗时数分钟。
+        system_source = workbook['系统']
+        system_target = native_book.Worksheets('系统')
+        for row, column in (sys_marked or set()):
+            source_cell = system_source.cell(row, column)
+            color = (source_cell.fill.fgColor.rgb or '').upper()
+            if color[-6:] in known_fills:
+                system_target.Cells(row, column).Interior.Color = excel_color(color)
 
         if rmb_payload:
             rmb_sheet = native_book.Worksheets('人民币')
@@ -620,10 +620,15 @@ def _save_system_workbook_preserving_template(original_path: str, workbook, outp
             rmb_sheet.Rows(f'{insert_at}:{insert_at + row_count - 1}').Insert()
             for offset, item in enumerate(rmb_payload['rows']):
                 target_row = insert_at + offset
-                for column, value in enumerate(item['values'], start=1):
-                    if column == rmb_payload['result_column'] or column == 5:
-                        continue
-                    rmb_sheet.Cells(target_row, column).Value = com_value(value)
+                values = [
+                    None if column in (rmb_payload['result_column'], 5) else com_value(value)
+                    for column, value in enumerate(item['values'], start=1)
+                ]
+                # 一次写入整行，避免每个单元格跨进程调用 Excel。
+                rmb_sheet.Range(
+                    rmb_sheet.Cells(target_row, 1),
+                    rmb_sheet.Cells(target_row, len(values)),
+                ).Value = [values]
                 if item['unmatched']:
                     rmb_sheet.Rows(target_row).Font.Color = excel_color('FF0000')
                 if item['p_value'] is not None:
@@ -729,7 +734,7 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
 
     name3 = f'中信对公-标色-{date_suffix}.xlsx'
     path3 = os.path.join(out_dir, name3)
-    _save_system_workbook_preserving_template(file3_path, wb3, path3, rmb_payload)
+    _save_system_workbook_preserving_template(file3_path, wb3, path3, rmb_payload, sys_marked)
     output_files.append((path3, name3))
 
     if wb4:
