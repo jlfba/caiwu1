@@ -90,7 +90,7 @@ def identify_fund_files(file_paths):
         'receipt': ('收款审核',),
         'payment': ('服务商付款',),
         'system': ('对公',),
-        'bank_flow': ('银行账号管理',),
+        'bank_flow': ('流水',),
     }
     found = {}
     unknown = []

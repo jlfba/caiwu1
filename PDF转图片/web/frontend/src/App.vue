@@ -145,8 +145,8 @@ function selectFundFiles(fileList) {
   fundFiles.value = fList
   fundFile1.value = fList.find(f => /收款审核/.test(f.name)) || null
   fundFile2.value = fList.find(f => /服务商付款/.test(f.name)) || null
-  fundFile4.value = fList.find(f => /银行账号管理/.test(f.name)) || null
-  fundFile3.value = fList.find(f => /对公/.test(f.name) && !/银行账号管理/.test(f.name)) || null
+  fundFile4.value = fList.find(f => /流水/.test(f.name)) || null
+  fundFile3.value = fList.find(f => /对公/.test(f.name) && !/流水/.test(f.name)) || null
 }
 
 const fundFileSlots = computed(() => [
