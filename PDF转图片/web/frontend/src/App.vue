@@ -489,7 +489,6 @@ onUnmounted(() => {
           <!-- 子选项：收款组选人员 / 付款组选发票类型 -->
           <div class="sub-config-box">
             <div class="sub-config-head">
-              <span class="sub-config-tag">人员 / 版式</span>
               <span class="sub-config-title">{{ mode === 'receipt' ? '选择经办人员' : '选择发票类型（13种）' }}</span>
             </div>
 
