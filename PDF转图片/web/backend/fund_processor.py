@@ -159,7 +159,8 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
                  target_date: date, tmp_sheet_name: str,
                  sys_marked: set[tuple[int, int]], sys_fill,
                  match_previous_day: bool = False,
-                 match_negative_as_debit: bool = False):
+                 match_negative_as_debit: bool = False,
+                 match_prior_month: bool = False):
     """
     对一张审核表做匹配核对，结果写入临时工作表，并在 ws_sys 内标色。
     sys_marked: 已在系统表标色的行号集合（跨两次调用共享，防重复）
@@ -214,7 +215,7 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
         if row_date == target_date:
             filtered_rows.append((r, ws_sys.cell(r, col_tx).value))
 
-    if not filtered_rows and not match_previous_day:
+    if not filtered_rows and not (match_previous_day or match_prior_month):
         return False, f'系统表中未找到 {target_date} 的"{tx_label}"数据'
 
     # 写 E 列
@@ -287,6 +288,28 @@ def _process_one(wb_audit, amount_col_name: str, hint_words: list[str],
                     if mark_key not in sys_marked:
                         ws_sys.cell(sys_row, col_debit).fill = _FILL_LIGHT_GREEN
                         sys_marked.add(mark_key)
+                    break
+
+    # 当天（及收款的前一天）仍未找到时，在前一个月内补查。
+    # 只使用对公发生额中“无填充”的单元格，避免占用先前已经核对过的金额。
+    if match_prior_month:
+        earliest_date = target_date - timedelta(days=31)
+        for sys_row in range(2, ws_sys.max_row + 1):
+            row_date = _cell_date(ws_sys.cell(sys_row, col_日期).value)
+            if row_date is None or not earliest_date <= row_date <= target_date:
+                continue
+            system_cell = ws_sys.cell(sys_row, col_tx)
+            if system_cell.fill.fill_type is not None:
+                continue
+            system_value = _money_key(system_cell.value)
+            if system_value is None or system_value not in a_map:
+                continue
+            for audit_row in a_map[system_value]:
+                if audit_row not in a_marked:
+                    a_marked.add(audit_row)
+                    matched_a_rows.add(audit_row)
+                    # 纳入统一标色集合，按收款黄、付款绿回写系统表。
+                    filtered_rows.append((sys_row, system_cell.value))
                     break
 
     # 系统表筛选行内标色（共享 sys_marked 防跨两次误标）
@@ -717,7 +740,7 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
             wb1, '收款金额', ['收款', '审核'],
             ws_sys, col_日期, col_贷方, '贷方发生额',
             target_date1, '资金核对-收款', sys_marked, _FILL_YELLOW,
-            match_previous_day=True, match_negative_as_debit=True
+            match_previous_day=True, match_negative_as_debit=True, match_prior_month=True
         )
         if not ok1:
             raise ValueError(f'收款核对失败：{warn1}')
@@ -731,7 +754,8 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
         ok2, warn2 = _process_one(
             wb2, '付款金额', ['付款', '审核'],
             ws_sys, col_日期, col_借方, '借方发生额',
-            target_date2, '资金核对-付款', sys_marked, _FILL_LIGHT_GREEN
+            target_date2, '资金核对-付款', sys_marked, _FILL_LIGHT_GREEN,
+            match_prior_month=True
         )
         if not ok2:
             raise ValueError(f'付款核对失败：{warn2}')
@@ -755,23 +779,23 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
 
     output_files = []
     if wb1:
-        name1 = f'收款审核表-资金核对-{_extract_date(file1_path)}.xlsx'
+        name1 = os.path.basename(file1_path)
         path1 = os.path.join(out_dir, name1)
         wb1.save(path1)
         output_files.append((path1, name1))
     if wb2:
-        name2 = f'付款审核表-资金核对-{_extract_date(file2_path)}.xlsx'
+        name2 = os.path.basename(file2_path)
         path2 = os.path.join(out_dir, name2)
         wb2.save(path2)
         output_files.append((path2, name2))
 
-    name3 = f'中信对公-标色-{date_suffix}.xlsx'
+    name3 = os.path.basename(file3_path)
     path3 = os.path.join(out_dir, name3)
     _save_system_workbook_preserving_template(file3_path, wb3, path3, rmb_payload, sys_marked)
     output_files.append((path3, name3))
 
     if wb4:
-        name4 = f'银行账号管理流水-核对-{_extract_date(file4_path)}.xlsx'
+        name4 = os.path.basename(file4_path)
         path4 = os.path.join(out_dir, name4)
         wb4.save(path4)
         output_files.append((path4, name4))
