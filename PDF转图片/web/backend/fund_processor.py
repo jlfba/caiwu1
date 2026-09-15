@@ -362,19 +362,20 @@ def _process_bank_account_flow(wb_flow, ws_sys, target_date: date,
 
     processed = 0
     for row in range(2, ws.max_row + 1):
+        note = str(ws.cell(row, col_note).value or '')
+        # 先于费用类型筛选处理：无论所属费用类型，均记作作废且不参与核对。
+        if '修改付款' in note or '作废' in note:
+            ws.cell(row, col_result, '作废')
+            continue
         fee_type = str(ws.cell(row, col_type).value or '').strip()
         if fee_type in ('销售收入', '销售成本'):
             continue
         income = _money_key(ws.cell(row, col_income).value)
         expense = _money_key(ws.cell(row, col_expense).value)
-        note = str(ws.cell(row, col_note).value or '')
-        is_void = '作废' in note
 
         if income not in (None, Decimal('0.00')):
             processed += 1
-            if is_void:
-                ws.cell(row, col_result, '忽略')
-            elif '税点' in note:
+            if '税点' in note:
                 # 水单备注如“运费4998.80+税点12”应按合计 5010.80 匹配。
                 amount = _freight_tax_total(note) or _tax_amount(note)
                 if match(amount, col_credit, used_credit, _FILL_YELLOW):
@@ -395,9 +396,7 @@ def _process_bank_account_flow(wb_flow, ws_sys, target_date: date,
 
         if expense not in (None, Decimal('0.00')):
             processed += 1
-            if is_void:
-                ws.cell(row, col_result, '忽略')
-            elif '美金转账手续费' in note:
+            if '美金转账手续费' in note:
                 for cell in ws[row]:
                     cell.fill = _FILL_LIGHT_GREEN
                 ws.cell(row, col_result, '人工处理')
