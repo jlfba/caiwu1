@@ -13,6 +13,7 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 from lxml import etree
 from openpyxl.utils.datetime import to_excel
 from copy import copy
@@ -553,92 +554,93 @@ def _xml_cell_value(value):
     return 'inlineStr', str(value)
 
 
+def _rmb_xml_cell(column: str, row: int, value, style=None):
+    """Build one cell without serializing the template XML tree."""
+    attrs = f' r="{column}{row}"'
+    if style is not None:
+        attrs += f' s="{style}"'
+    kind, text = _xml_cell_value(value)
+    if kind is None:
+        return f'<c{attrs}/>'
+    if kind == 'inlineStr':
+        return f'<c{attrs} t="inlineStr"><is><t>{xml_escape(text)}</t></is></c>'
+    type_attr = '' if kind == 'n' else f' t="{kind}"'
+    return f'<c{attrs}{type_attr}><v>{xml_escape(text)}</v></c>'
+
+
+def _rmb_xml_row(row_no: int, item, payload):
+    """Create a bank-flow row using known-safe normal worksheet markup."""
+    cells = []
+    for col, value in enumerate(item['values'], 1):
+        # The lookup result is an internal processing column, never copied to RMB.
+        if col == payload['result_column']:
+            continue
+        column = openpyxl.utils.get_column_letter(col)
+        style = payload['red_styles'].get(column) if item['unmatched'] else payload['styles'][col - 1]
+        if col == 5 and isinstance(payload['formula'], str) and payload['formula'].startswith('='):
+            formula = Translator(payload['formula'], origin=f'E{payload["last_row"]}').translate_formula(f'E{row_no}')[1:]
+            cells.append(f'<c r="E{row_no}" s="{style}"><f>{xml_escape(formula)}</f></c>')
+        else:
+            cells.append(_rmb_xml_cell(column, row_no, value, style))
+    if item['p_value'] is not None:
+        cells.append(_rmb_xml_cell('P', row_no, item['p_value'], payload['signed_red_style']))
+    return (f'<row r="{row_no}" spans="1:16" s="1" customFormat="1" '
+            f'x14ac:dyDescent="0.2">{"".join(cells)}</row>').encode('utf-8')
+
+
 def _patch_rmb_sheet_xml(data: bytes, payload):
-    """Append flow rows by editing only sheet3 XML; preserve drawings and template parts."""
-    root = etree.fromstring(data)
-    ns = {'x': _SHEET_NS}
-    sheet_data = root.find('x:sheetData', ns)
-    insert_at, rows = payload['insert_at'], payload['rows']
-    amount = len(rows)
-    # Move all original rows below the append point down, including total rows.
-    for row in reversed(sheet_data.findall('x:row', ns)):
-        row_no = int(row.get('r'))
-        if row_no >= insert_at:
-            new_row = row_no + amount
-            row.set('r', str(new_row))
-            for cell in row.findall('x:c', ns):
-                coord = cell.get('r')
-                column = re.match(r'[A-Z]+', coord).group(0)
-                cell.set('r', f'{column}{new_row}')
-                formula = cell.find('x:f', ns)
-                if formula is not None and formula.text:
-                    try:
-                        formula.text = Translator('=' + formula.text, origin=coord).translate_formula(
-                            f'{column}{new_row}')[1:]
-                    except ValueError:
-                        pass
+    """Write RMB rows while keeping every existing XML node byte-for-byte intact.
 
-    source_row = next((r for r in sheet_data.findall('x:row', ns)
-                       if int(r.get('r')) == payload['last_row']), None)
-    source_styles = {}
-    if source_row is not None:
-        for cell in source_row.findall('x:c', ns):
-            source_styles[re.match(r'[A-Z]+', cell.get('r')).group(0)] = cell.get('s')
+    This template has an array formula in D23948.  Rebuilding or moving that row
+    invalidates the workbook in Excel.  We use only its blank tail rows except D23948,
+    then append after the tail.
+    """
+    if not payload:
+        return data
+    last_data_row = payload['last_row']
+    safe_rows = list(range(last_data_row + 1, 23948)) + list(range(23949, 23984))
+    rows = payload['rows']
+    row_re = re.compile(rb'<row\b(?=[^>]*\br="(\d+)")[^>]*>.*?</row>')
+    replacements = {row_no: _rmb_xml_row(row_no, item, payload)
+                    for row_no, item in zip(safe_rows, rows)}
+    seen = set()
 
-    for offset, item in enumerate(rows):
-        row_no = insert_at + offset
-        row = etree.Element(f'{{{_SHEET_NS}}}row', r=str(row_no))
-        values = item['values']
-        for col, value in enumerate(values, 1):
-            # 查找结果仅供第 6 步判断，不写入人民币工作表。
-            if col == payload['result_column']:
-                continue
-            column = openpyxl.utils.get_column_letter(col)
-            cell = etree.SubElement(row, f'{{{_SHEET_NS}}}c', r=f'{column}{row_no}')
-            if item['unmatched']:
-                cell.set('s', str(payload['red_styles'][column]))
-            elif source_styles.get(column) is not None:
-                cell.set('s', source_styles[column])
-            if col == 5 and isinstance(payload['formula'], str) and payload['formula'].startswith('='):
-                formula = Translator(payload['formula'], origin=f'E{payload["last_row"]}').translate_formula(f'E{row_no}')[1:]
-                etree.SubElement(cell, f'{{{_SHEET_NS}}}f').text = formula
-                continue
-            kind, text = _xml_cell_value(value)
-            if kind is None:
-                continue
-            if kind == 'inlineStr':
-                cell.set('t', 'inlineStr')
-                inline = etree.SubElement(cell, f'{{{_SHEET_NS}}}is')
-                etree.SubElement(inline, f'{{{_SHEET_NS}}}t').text = text
-            else:
-                if kind != 'n':
-                    cell.set('t', kind)
-                etree.SubElement(cell, f'{{{_SHEET_NS}}}v').text = text
-        if item['p_value'] is not None:
-            cell = etree.SubElement(row, f'{{{_SHEET_NS}}}c', r=f'P{row_no}',
-                                    s=str(payload['signed_red_style']))
-            etree.SubElement(cell, f'{{{_SHEET_NS}}}v').text = str(item['p_value'])
-        sheet_data.append(row)
+    def replace_row(match):
+        row_no = int(match.group(1))
+        replacement = replacements.get(row_no)
+        if replacement is None:
+            return match.group(0)
+        seen.add(row_no)
+        return replacement
 
-    # Restore ascending row order required by worksheet XML.
-    ordered = sorted(sheet_data.findall('x:row', ns), key=lambda r: int(r.get('r')))
-    for row in sheet_data.findall('x:row', ns):
-        sheet_data.remove(row)
-    for row in ordered:
-        sheet_data.append(row)
-    dimension = root.find('x:dimension', ns)
-    if dimension is not None:
-        dimension.set('ref', re.sub(r'([A-Z]+)\d+$', lambda m: f'{m.group(1)}{max(int(r.get("r")) for r in ordered)}', dimension.get('ref')))
-    return etree.tostring(root, encoding='UTF-8', xml_declaration=True, standalone=True)
+    patched = row_re.sub(replace_row, data)
+    missing = [row for row in replacements if row not in seen]
+    if missing:
+        raise ValueError(f'人民币模板缺少安全的预留行：{missing[0]}')
+
+    remaining = rows[len(replacements):]
+    if remaining:
+        start_row = 23984
+        appended = b''.join(_rmb_xml_row(start_row + offset, item, payload)
+                            for offset, item in enumerate(remaining))
+        patched = patched.replace(b'</sheetData>', appended + b'</sheetData>', 1)
+        final_row = start_row + len(remaining) - 1
+        patched = re.sub(
+            rb'(<dimension ref="[A-Z]+1:[A-Z]+)\d+("/>)',
+            lambda match: match.group(1) + str(final_row).encode() + match.group(2),
+            patched, count=1,
+        )
+    return patched
 
 
 def _save_system_workbook_preserving_template(original_path: str, workbook, output_path: str,
                                              rmb_payload=None, sys_marked=None):
-    """Use Excel's native insert/save so drawings and cross-sheet formulas stay valid."""
+    """Use Excel's native save on Windows; use the verified XML fallback on Linux."""
     try:
         import win32com.client
-    except ImportError as exc:
-        raise RuntimeError('资金组需要本机安装 Microsoft Excel 才能安全写入中信对公模板。') from exc
+    except ImportError:
+        _save_system_workbook_linux(original_path, workbook, output_path, rmb_payload)
+        return
 
     def excel_color(rgb: str) -> int:
         rgb = rgb[-6:]
@@ -709,6 +711,46 @@ def _save_system_workbook_preserving_template(original_path: str, workbook, outp
             native_book.Close(SaveChanges=False)
         if excel is not None:
             excel.Quit()
+
+
+def _save_system_workbook_linux(original_path: str, workbook, output_path: str, rmb_payload=None):
+    """Linux-safe save path.
+
+    Openpyxl writes the system-sheet highlights, then the original ZIP is rebuilt by
+    taking only those changed parts and applying a byte-preserving RMB XML patch.
+    The RMB tail is overwritten/appended rather than inserting rows, so the template's
+    cross-sheet formulas and the D23948 array formula stay intact.
+    """
+    temp_dir = tempfile.mkdtemp(prefix='fund-linux-', dir=os.path.dirname(output_path))
+    staged_path = os.path.join(temp_dir, 'system.xlsx')
+    try:
+        workbook.save(staged_path)
+        with zipfile.ZipFile(original_path, 'r') as original, \
+                zipfile.ZipFile(staged_path, 'r') as staged, \
+                zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as output:
+            original_names = {info.filename for info in original.infolist()}
+            staged_names = {info.filename for info in staged.infolist()}
+            # Keep the original package intact wherever possible.  Only the system
+            # sheet and styles changed by openpyxl are carried over from the staged file.
+            changed_parts = {'xl/worksheets/sheet1.xml', 'xl/styles.xml'}
+            for info in original.infolist():
+                name = info.filename
+                data = original.read(name)
+                if name in changed_parts and name in staged_names:
+                    data = staged.read(name)
+                elif name == 'xl/worksheets/sheet3.xml' and rmb_payload:
+                    data = _patch_rmb_sheet_xml(data, rmb_payload)
+                output.writestr(info, data)
+            # Preserve any new standard style part created by openpyxl.
+            for name in staged_names - original_names:
+                if name.startswith('xl/') and name in {'xl/styles.xml'}:
+                    output.writestr(name, staged.read(name))
+        with zipfile.ZipFile(output_path, 'r') as check:
+            bad_member = check.testzip()
+            if bad_member:
+                raise RuntimeError(f'Linux 生成的 Excel ZIP 校验失败：{bad_member}')
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str, file4_path: str | None,
