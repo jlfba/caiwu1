@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import ReceiptTypeSelect from './components/ReceiptTypeSelect.vue'
@@ -65,6 +65,7 @@ const filename = ref('')
 const error = ref('')
 const logs = ref([])
 const activityLogs = ref([])
+const logTerminal = ref(null)
 const reportStep = ref(0)
 const reportMaxStep = ref(0)
 const elapsedSeconds = ref(0)
@@ -101,6 +102,14 @@ function formatLogTime(value = new Date()) {
 function addActivityLog(content, level = 'info') {
   activityLogs.value.push({ id: ++activityLogId, time: formatLogTime(), content, level })
 }
+
+watch(
+  () => activityLogs.value.length,
+  async () => {
+    await nextTick()
+    if (logTerminal.value) logTerminal.value.scrollTop = logTerminal.value.scrollHeight
+  }
+)
 
 function exportActivityLogs() {
   const content = activityLogs.value.length
@@ -780,22 +789,30 @@ onUnmounted(() => {
       <section v-else class="log-page">
         <header class="log-page-head">
           <div>
-            <p class="log-page-kicker">任务留痕</p>
+            <p class="log-page-kicker">TASK CONSOLE</p>
             <h1>处理日志</h1>
-            <p>本页面会话内的所有任务状态、步骤和异常记录。</p>
+            <p>本会话任务的实时输出与异常记录。</p>
           </div>
           <div class="log-page-actions">
             <button type="button" class="log-back-btn" @click="currentNav = 'home'">返回工作台</button>
             <button type="button" class="log-export-btn" :disabled="!activityLogs.length" @click="exportActivityLogs">导出日志</button>
           </div>
         </header>
-        <div class="log-page-summary">共 {{ activityLogs.length }} 条记录</div>
-        <div class="log-page-list" role="log" aria-live="polite">
-          <p v-if="!activityLogs.length" class="activity-log-empty">尚无处理记录。开始上传或制作后，任务过程会显示在这里。</p>
+        <div class="log-terminal" role="log" aria-live="polite">
+          <div class="log-terminal-bar">
+            <div class="terminal-window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+            <span class="terminal-title">finance-tool / task-output</span>
+            <span class="terminal-count">{{ activityLogs.length }} lines</span>
+          </div>
+          <div ref="logTerminal" class="log-page-list">
+          <p class="terminal-banner">财务内部工具 · 会话日志已启动</p>
+          <p v-if="!activityLogs.length" class="activity-log-empty">等待任务输出…</p>
           <div v-for="item in activityLogs" :key="item.id" class="log-page-item" :class="`is-${item.level}`">
-            <time>{{ item.time }}</time>
-            <span class="log-page-dot"></span>
-            <p>{{ item.content }}</p>
+            <time>[{{ item.time }}]</time>
+            <span class="terminal-level">{{ item.level === 'error' ? 'ERR' : item.level === 'warning' ? 'WRN' : item.level === 'success' ? 'OK ' : 'LOG' }}</span>
+            <p><span class="terminal-prompt">›</span>{{ item.content }}</p>
+          </div>
+          <p v-if="activityLogs.length" class="terminal-cursor"><span>›</span></p>
           </div>
         </div>
       </section>
@@ -877,21 +894,10 @@ onUnmounted(() => {
   text-align: center;
 }
 
-.activity-log-empty {
-  margin: 16px 5px;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  line-height: 1.6;
-}
-
 .log-page {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 22px auto 0;
   padding: clamp(22px, 4vw, 42px);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  box-shadow: var(--card-shadow);
 }
 
 .log-page-head {
@@ -899,13 +905,12 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border);
+  padding: 0 0 22px;
 }
 
 .log-page-kicker {
   margin: 0 0 7px;
-  color: var(--primary);
+  color: var(--primary-ink);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: .12em;
@@ -915,7 +920,7 @@ onUnmounted(() => {
   margin: 0;
   color: var(--text);
   font-size: clamp(24px, 3vw, 32px);
-  letter-spacing: -.04em;
+  letter-spacing: -.025em;
 }
 
 .log-page-head p:not(.log-page-kicker) {
@@ -952,50 +957,73 @@ onUnmounted(() => {
 
 .log-export-btn:disabled { opacity: .45; cursor: not-allowed; }
 
-.log-page-summary {
-  margin: 20px 0 10px;
-  color: var(--text-faint);
-  font-size: 12px;
+.log-terminal {
+  overflow: hidden;
+  border: 1px solid #24383a;
+  border-radius: 12px;
+  background: #101b1c;
+  box-shadow: 0 20px 42px -28px rgba(15, 42, 38, .72);
 }
 
+.log-terminal-bar {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 14px;
+  background: #19292a;
+  border-bottom: 1px solid #294344;
+  color: #9cb9b4;
+  font-family: var(--font-num), Consolas, monospace;
+  font-size: 11px;
+}
+
+.terminal-window-controls { display: flex; gap: 6px; margin-right: 12px; }
+.terminal-window-controls i { width: 8px; height: 8px; border-radius: 50%; background: #52706b; }
+.terminal-window-controls i:first-child { background: #d57363; }
+.terminal-window-controls i:nth-child(2) { background: #c8a259; }
+.terminal-window-controls i:last-child { background: #5aad82; }
+.terminal-title { color: #c8dcd7; }
+.terminal-count { margin-left: auto; color: #7ca29a; font-variant-numeric: tabular-nums; }
+
 .log-page-list {
-  max-height: calc(100vh - 270px);
-  min-height: 240px;
+  max-height: calc(100vh - 310px);
+  min-height: 380px;
   overflow: auto;
-  border-top: 1px solid #eaf1ee;
+  padding: 17px 18px 20px;
+  scrollbar-color: #3b5a57 #101b1c;
 }
 
 .log-page-item {
   display: grid;
-  grid-template-columns: 62px 10px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 76px 32px minmax(0, 1fr);
+  gap: 10px;
   align-items: start;
-  padding: 15px 5px;
-  border-bottom: 1px solid #edf3f0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.55;
+  padding: 3px 0;
+  color: #c3d8d2;
+  font-family: var(--font-num), Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .log-page-item time {
-  color: var(--text-faint);
-  font-size: 12px;
+  color: #71928c;
+  font-size: inherit;
   font-variant-numeric: tabular-nums;
 }
 
 .log-page-item p { margin: 0; overflow-wrap: anywhere; }
-
-.log-page-dot {
-  width: 7px;
-  height: 7px;
-  margin-top: 7px;
-  border-radius: 50%;
-  background: #aabcb5;
-}
-
-.log-page-item.is-success .log-page-dot { background: #0c9a6f; }
-.log-page-item.is-warning .log-page-dot { background: #c38314; }
-.log-page-item.is-error .log-page-dot { background: #d45151; }
+.terminal-level { color: #81aaa1; font-size: 10px; font-weight: 800; letter-spacing: .06em; }
+.terminal-prompt { margin-right: 8px; color: #58c8ac; font-weight: 800; }
+.log-page-item.is-success .terminal-level, .log-page-item.is-success .terminal-prompt { color: #6ed4a3; }
+.log-page-item.is-warning .terminal-level, .log-page-item.is-warning .terminal-prompt { color: #e1b85d; }
+.log-page-item.is-error .terminal-level, .log-page-item.is-error .terminal-prompt { color: #ed8175; }
+.terminal-banner { margin: 0 0 12px; color: #79aaa0; font-family: var(--font-num), Consolas, monospace; font-size: 11px; }
+.terminal-banner::before { content: '# '; color: #58c8ac; }
+.activity-log-empty { margin: 18px 0; color: #76958e; font-family: var(--font-num), Consolas, monospace; }
+.activity-log-empty::before { content: '› '; color: #58c8ac; }
+.terminal-cursor { margin: 6px 0 0; color: #62d2b5; font-family: var(--font-num), Consolas, monospace; font-weight: 800; }
+.terminal-cursor span { display: inline-block; animation: terminal-blink 1.1s step-end infinite; }
+@keyframes terminal-blink { 50% { opacity: 0; } }
 
 .workspace-grid.single-col {
   grid-template-columns: minmax(0, 1fr);
