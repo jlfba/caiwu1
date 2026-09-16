@@ -339,9 +339,20 @@ def _receipt_output_start_column(ws):
     return (max(populated_columns, default=0) + 4)
 
 
-def _payment_ocr_lines(image_path):
-    """复用单个 PP-OCRv4 实例识别正向付款截图，避免大任务内存溢出。"""
-    result, _ = tool.get_ocr()(image_path, use_cls=False)
+def _payment_ocr_lines(image_path, fast=False):
+    """复用单个 PP-OCRv4；长截图快速模式限制检测输入尺寸。"""
+    ocr = tool.get_ocr()
+    detector = ocr.text_det
+    original_limit_type = detector.limit_type
+    original_limit_side_len = detector.limit_side_len
+    try:
+        if fast:
+            detector.limit_type = 'max'
+            detector.limit_side_len = 544
+        result, _ = ocr(image_path, use_cls=False)
+    finally:
+        detector.limit_type = original_limit_type
+        detector.limit_side_len = original_limit_side_len
     items = []
     for box, text, _score in result or []:
         text = text.strip()
@@ -364,12 +375,21 @@ def _payment_ocr_lines(image_path):
 
 
 def _payment_image_values(image_path):
-    """提取付款日期、时间和金额。"""
-    items = _payment_ocr_lines(image_path)
-    text = _wechat_items_text(items)
-    payment_type = 'huolala' if '货拉拉' in text else (
-        'alipay' if '支付时间' in text else 'wechat')
-    return _payment_extract(items, payment_type)
+    """长截图快速识别；三字段不完整时自动用原图精度重试。"""
+    from PIL import Image
+
+    def extract(items):
+        text = _wechat_items_text(items)
+        payment_type = 'huolala' if '货拉拉' in text else (
+            'alipay' if '支付时间' in text else 'wechat')
+        return _payment_extract(items, payment_type)
+
+    with Image.open(image_path) as source:
+        fast = max(source.size) > 1200
+    values = extract(_payment_ocr_lines(image_path, fast=fast))
+    if fast and any(value == '未知' for value in values):
+        values = extract(_payment_ocr_lines(image_path, fast=False))
+    return values
 
 
 def _restore_original_workbook_images(original_path, output_path):
