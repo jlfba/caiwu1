@@ -262,10 +262,10 @@ def process_receipt_mode2(pdf_paths, out_dir, progress=None):
 def _find_payment_image_columns(ws):
     """查找支付截图所在列，返回 (表头行号, 目标列号集合)。
 
-    表格模板不固定，因此只在前十行中寻找包含“付款截图”或“水单”的表头。
+    表格模板不固定，因此只在前十行中寻找包含“付款截图”、“水单”或“报销凭证”的表头。
     返回的列号为 openpyxl 使用的 1-based 列号。
     """
-    labels = ('付款截图', '水单')
+    labels = ('付款截图', '水单', '报销凭证')
     for row in range(1, min(ws.max_row, 10) + 1):
         columns = set()
         for cell in ws[row]:
@@ -280,7 +280,7 @@ def _find_payment_image_columns(ws):
 def _workbook_image_items(workbook_path, image_dir):
     """提取支付图片区域内的嵌入图片，按工作表/行/列顺序返回记录。
 
-    “水单/付款截图”是图片区域的起点，不代表图片一定只放在这一列。
+    “水单/付款截图/报销凭证”是图片区域的起点，不代表图片一定只放在这一列。
     很多原表会把同一行的多张截图横向放在其后多个列中，因此这里保留
     起始列到结果区之前的所有图片。
     """
@@ -292,7 +292,7 @@ def _workbook_image_items(workbook_path, image_dir):
             header_row, image_columns = _find_payment_image_columns(ws)
             if not image_columns:
                 continue
-            # 结果固定从 R 列开始，水单/付款截图列到 Q 列之间都属于图片区域。
+            # 结果固定从 R 列开始，水单/付款截图/报销凭证列到 Q 列之间都属于图片区域。
             image_end_column = 17
             for image_index, image in enumerate(getattr(ws, '_images', [])):
                 anchor = image.anchor
@@ -346,7 +346,7 @@ def _restore_original_workbook_images(original_path, output_path):
 
 
 def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
-    """赵淑华发票识别：按“付款截图/水单”列识别嵌入支付图片并动态回写结果。"""
+    """赵淑华发票识别：按“付款截图/水单/报销凭证”列识别嵌入支付图片并动态回写结果。"""
     from openpyxl import load_workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font
@@ -382,7 +382,7 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
                     'output_start': 18,
                 }
         if not sheet_layouts:
-            raise RuntimeError('未找到“付款截图”或“水单”列')
+            raise RuntimeError('未找到“付款截图”、“水单”或“报销凭证”列')
 
         row_images = {}
         for record in image_records:
