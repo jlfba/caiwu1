@@ -1,5 +1,5 @@
 @echo off
-rem Dev mode: open two windows - backend (15618) + frontend hot-reload (59323)
+rem Dev mode: open two windows - backend (8000) + frontend hot-reload (5173)
 set "PDF_TOOL_PYTHON=D:\code\Python\Python312\python.exe"
 if not exist "%PDF_TOOL_PYTHON%" (
   echo Python 3.12 not found: %PDF_TOOL_PYTHON%

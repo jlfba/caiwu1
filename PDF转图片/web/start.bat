@@ -1,5 +1,5 @@
 @echo off
-rem Dev mode: open two windows - backend (15618) + frontend hot-reload (59323)
+rem Daily use: start backend (serves page + API on port 8000)
 set "PDF_TOOL_PYTHON=D:\code\Python\Python312\python.exe"
 if not exist "%PDF_TOOL_PYTHON%" (
   echo Python 3.12 not found: %PDF_TOOL_PYTHON%
@@ -11,5 +11,6 @@ if not exist "%PDF_TOOL_PYTHON%" (
   pause
   exit /b 1
 )
-start "pdf-backend" /D "%~dp0backend" cmd /k ""%PDF_TOOL_PYTHON%" run.py"
-start "pdf-frontend" /D "%~dp0frontend" cmd /k npm run dev
+cd /d "%~dp0backend"
+"%PDF_TOOL_PYTHON%" run.py
+pause
