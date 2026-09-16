@@ -12,5 +12,7 @@ if not exist "%PDF_TOOL_PYTHON%" (
   exit /b 1
 )
 cd /d "%~dp0backend"
+rem Local daily-use mode: automatically reload after backend Python files change.
+set "RELOAD=1"
 "%PDF_TOOL_PYTHON%" run.py
 pause

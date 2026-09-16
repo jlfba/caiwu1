@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 if __name__ == '__main__':
     host = os.environ.get('HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', '8000'))
+    reload_enabled = os.environ.get('RELOAD', '').strip().lower() in ('1', 'true', 'yes')
     print('财务内部在线工具网页版启动中')
     print('  本机访问：http://127.0.0.1:%d' % port)
     if host in ('0.0.0.0', ''):
@@ -28,4 +29,6 @@ if __name__ == '__main__':
             print('  局域网访问：http://%s:%d' % (lan, port))
         except Exception:
             pass
-    uvicorn.run('app:app', host=host, port=port, reload=False)
+    if reload_enabled:
+        print('  已开启代码自动重载：保存后端代码后会自动重启服务')
+    uvicorn.run('app:app', host=host, port=port, reload=reload_enabled)
