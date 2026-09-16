@@ -329,6 +329,15 @@ def _workbook_image_items(workbook_path, image_dir):
     return records
 
 
+def _receipt_output_start_column(ws):
+    """返回赵淑华识别结果的起始列：最后有值列之后空三列再写入。"""
+    populated_columns = [
+        cell.column for cell in ws._cells.values()
+        if cell.value is not None and str(cell.value).strip()
+    ]
+    return (max(populated_columns, default=0) + 4)
+
+
 def _restore_original_workbook_images(original_path, output_path):
     """恢复原始工作簿的图片包，避免 openpyxl 重写后图片关系串图。"""
     fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1])
@@ -384,8 +393,9 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
                 sheet_layouts[ws.title] = {
                     'header_row': header_row,
                     'image_columns': image_columns,
-                    # 赵淑华表格统一从 R 列开始写识别结果，不再根据表头结束位置计算。
-                    'output_start': 18,
+                    # 从整张表最后一个实际有内容的列后空三列再写入；
+                    # 中间即使有空列、后续仍有内容，也不会误判。
+                    'output_start': _receipt_output_start_column(ws),
                 }
         if not sheet_layouts:
             raise RuntimeError('未找到“付款截图”、“水单”或“报销凭证”列')
