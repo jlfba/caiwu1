@@ -5,6 +5,8 @@ param(
 
     [string]$RemoteUser = 'jl',
 
+    [string]$IdentityFile = (Join-Path $env:USERPROFILE '.ssh\id_ed25519'),
+
     [string]$ImageTag = 'caiwu1:lan',
 
     [string]$ContainerName = 'caiwu1',
@@ -25,6 +27,9 @@ function Require-Command([string]$Name) {
 Require-Command docker
 Require-Command ssh
 Require-Command scp
+if (-not (Test-Path -LiteralPath $IdentityFile)) {
+    throw "SSH identity file not found: $IdentityFile"
+}
 
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $source = Get-ChildItem -LiteralPath $workspace -Directory |
@@ -73,7 +78,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Local Docker image export failed.' }
 
     Write-Host "Sending image to $RemoteHost over the LAN..."
-    & scp $archive "${destination}:$remoteArchive"
+    & scp -i $IdentityFile -o IdentitiesOnly=yes -o BatchMode=yes $archive "${destination}:$remoteArchive"
     if ($LASTEXITCODE -ne 0) { throw 'SCP transfer failed.' }
 
     $remoteScript = @(
@@ -95,7 +100,7 @@ try {
     ) -join '; '
 
     Write-Host 'Importing and replacing the remote container...'
-    & ssh $destination $remoteScript
+    & ssh -i $IdentityFile -o IdentitiesOnly=yes -o BatchMode=yes $destination $remoteScript
     if ($LASTEXITCODE -ne 0) { throw 'Remote deployment or health check failed.' }
 
     Write-Host "Deployment complete: http://${RemoteHost}:$ServicePort"
