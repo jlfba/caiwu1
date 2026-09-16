@@ -10,7 +10,6 @@ import datetime
 import shutil
 import sys
 import tempfile
-import time
 import zipfile
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
@@ -339,59 +338,6 @@ def _receipt_output_start_column(ws):
     return (max(populated_columns, default=0) + 4)
 
 
-def _payment_ocr_lines(image_path, fast=False):
-    """复用单个 PP-OCRv4；长截图快速模式限制检测输入尺寸。"""
-    ocr = tool.get_ocr()
-    detector = ocr.text_det
-    original_limit_type = detector.limit_type
-    original_limit_side_len = detector.limit_side_len
-    try:
-        if fast:
-            detector.limit_type = 'max'
-            detector.limit_side_len = 544
-        result, _ = ocr(image_path, use_cls=False)
-    finally:
-        detector.limit_type = original_limit_type
-        detector.limit_side_len = original_limit_side_len
-    items = []
-    for box, text, _score in result or []:
-        text = text.strip()
-        if not text:
-            continue
-        xs = [float(point[0]) for point in box]
-        ys = [float(point[1]) for point in box]
-        x1, x2 = min(xs), max(xs)
-        y1, y2 = min(ys), max(ys)
-        width, height = x2 - x1, y2 - y1
-        items.append({
-            'text': text,
-            'cx': (x1 + x2) / 2,
-            'cy': (y1 + y2) / 2,
-            'w': width,
-            'h': height,
-            'aspect': width / height if height > 0 else 99.0,
-        })
-    return items
-
-
-def _payment_image_values(image_path):
-    """长截图快速识别；三字段不完整时自动用原图精度重试。"""
-    from PIL import Image
-
-    def extract(items):
-        text = _wechat_items_text(items)
-        payment_type = 'huolala' if '货拉拉' in text else (
-            'alipay' if '支付时间' in text else 'wechat')
-        return _payment_extract(items, payment_type)
-
-    with Image.open(image_path) as source:
-        fast = max(source.size) > 1200
-    values = extract(_payment_ocr_lines(image_path, fast=fast))
-    if fast and any(value == '未知' for value in values):
-        values = extract(_payment_ocr_lines(image_path, fast=False))
-    return values
-
-
 def _restore_original_workbook_images(original_path, output_path):
     """恢复原始工作簿的图片包，避免 openpyxl 重写后图片关系串图。"""
     fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1])
@@ -469,17 +415,20 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
             layout = sheet_layouts[sheet_name]
             row = zero_row + 1
             for image_index, record in enumerate(records):
-                image_started_at = time.perf_counter()
-                date_value, time_value, amount = _payment_image_values(record['path'])
-                image_elapsed = time.perf_counter() - image_started_at
+                items = tool.ocr_lines(record['path'])
+                date_value, time_value, amount = _payment_extract(items, 'wechat')
+                text = _wechat_items_text(items)
+                if '支付时间' in text:
+                    date_value, time_value, amount = _payment_extract(items, 'alipay')
+                elif '货拉拉' in text:
+                    date_value, time_value, amount = _payment_extract(items, 'huolala')
                 start_col = layout['output_start'] + image_index * 3
                 ws.cell(row=row, column=start_col, value=date_value)
                 ws.cell(row=row, column=start_col + 1, value=time_value)
                 ws.cell(row=row, column=start_col + 2, value=amount)
                 processed += 1
-                report(processed, len(image_records),
-                       '正在识别表格图片 %d/%d（本张耗时 %.2f 秒）' %
-                       (processed, len(image_records), image_elapsed))
+                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
+                       (processed, len(image_records)))
 
         for sheet_name, layout in sheet_layouts.items():
             ws = wb[sheet_name]
