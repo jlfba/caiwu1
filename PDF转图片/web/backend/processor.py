@@ -10,6 +10,7 @@ import datetime
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
@@ -448,14 +449,17 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
             layout = sheet_layouts[sheet_name]
             row = zero_row + 1
             for image_index, record in enumerate(records):
+                image_started_at = time.perf_counter()
                 date_value, time_value, amount = _payment_image_values(record['path'])
+                image_elapsed = time.perf_counter() - image_started_at
                 start_col = layout['output_start'] + image_index * 3
                 ws.cell(row=row, column=start_col, value=date_value)
                 ws.cell(row=row, column=start_col + 1, value=time_value)
                 ws.cell(row=row, column=start_col + 2, value=amount)
                 processed += 1
-                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
-                       (processed, len(image_records)))
+                report(processed, len(image_records),
+                       '正在识别表格图片 %d/%d（本张耗时 %.2f 秒）' %
+                       (processed, len(image_records), image_elapsed))
 
         for sheet_name, layout in sheet_layouts.items():
             ws = wb[sheet_name]
