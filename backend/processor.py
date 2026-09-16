@@ -271,7 +271,16 @@ def _find_payment_image_columns(ws):
         for cell in ws[row]:
             value = re.sub(r'[\s\u3000:：]', '', str(cell.value or ''))
             if any(label in value for label in labels):
-                columns.add(cell.column)
+                # 合并表头只有左上角单元格保留文本，例如“报销凭证”可能横跨 E:J。
+                # 将合并区域覆盖的每一列都作为图片列，避免遗漏其下方的多列图片。
+                merged_range = next(
+                    (item for item in ws.merged_cells.ranges if cell.coordinate in item),
+                    None,
+                )
+                if merged_range:
+                    columns.update(range(merged_range.min_col, merged_range.max_col + 1))
+                else:
+                    columns.add(cell.column)
         if columns:
             return row, columns
     return None, set()
