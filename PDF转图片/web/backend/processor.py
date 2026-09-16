@@ -338,6 +338,30 @@ def _receipt_output_start_column(ws):
     return (max(populated_columns, default=0) + 4)
 
 
+def _fast_payment_ocr_lines(image_path):
+    """使用 PP-OCRv4 快速识别正向付款截图，并返回标准坐标条目。"""
+    result, _ = tool.get_ocr()(image_path, use_cls=False)
+    items = []
+    for box, text, _score in result or []:
+        text = text.strip()
+        if not text:
+            continue
+        xs = [float(point[0]) for point in box]
+        ys = [float(point[1]) for point in box]
+        x1, x2 = min(xs), max(xs)
+        y1, y2 = min(ys), max(ys)
+        width, height = x2 - x1, y2 - y1
+        items.append({
+            'text': text,
+            'cx': (x1 + x2) / 2,
+            'cy': (y1 + y2) / 2,
+            'w': width,
+            'h': height,
+            'aspect': width / height if height > 0 else 99.0,
+        })
+    return items
+
+
 def _restore_original_workbook_images(original_path, output_path):
     """恢复原始工作簿的图片包，避免 openpyxl 重写后图片关系串图。"""
     fd, temp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1])
@@ -415,7 +439,9 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
             layout = sheet_layouts[sheet_name]
             row = zero_row + 1
             for image_index, record in enumerate(records):
-                items = tool.ocr_lines(record['path'])
+                # 手机付款截图方向固定，使用 PP-OCRv4 快速配置：
+                # 复用识别模型并跳过方向分类，减少单张耗时。
+                items = _fast_payment_ocr_lines(record['path'])
                 date_value, time_value, amount = _payment_extract(items, 'wechat')
                 # 微信使用“转账时间”，支付宝/货拉拉使用“支付时间”。
                 text = _wechat_items_text(items)
