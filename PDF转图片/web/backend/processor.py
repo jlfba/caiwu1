@@ -10,7 +10,9 @@ import datetime
 import shutil
 import sys
 import tempfile
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # PDF转图片/ 目录（web/backend 的上一级的上一级的上一级）
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -338,9 +340,27 @@ def _receipt_output_start_column(ws):
     return (max(populated_columns, default=0) + 4)
 
 
-def _fast_payment_ocr_lines(image_path):
-    """使用 PP-OCRv4 快速识别正向付款截图，并返回标准坐标条目。"""
-    result, _ = tool.get_ocr()(image_path, use_cls=False)
+_payment_ocr_local = threading.local()
+_payment_ocr_executor = ThreadPoolExecutor(max_workers=2)
+
+
+def _payment_ocr_engine():
+    """为每个识别线程创建独立 PP-OCRv4 实例，避免共享模型并发冲突。"""
+    ocr = getattr(_payment_ocr_local, 'ocr', None)
+    if ocr is None:
+        from rapidocr_onnxruntime import RapidOCR
+        ocr = RapidOCR(
+            use_cls=False,
+            intra_op_num_threads=2,
+            inter_op_num_threads=1,
+        )
+        _payment_ocr_local.ocr = ocr
+    return ocr
+
+
+def _payment_ocr_lines(image_path):
+    """使用线程独立的 PP-OCRv4 识别正向付款截图。"""
+    result, _ = _payment_ocr_engine()(image_path, use_cls=False)
     items = []
     for box, text, _score in result or []:
         text = text.strip()
@@ -360,6 +380,15 @@ def _fast_payment_ocr_lines(image_path):
             'aspect': width / height if height > 0 else 99.0,
         })
     return items
+
+
+def _payment_image_values(image_path):
+    """提取付款日期、时间和金额。"""
+    items = _payment_ocr_lines(image_path)
+    text = _wechat_items_text(items)
+    payment_type = 'huolala' if '货拉拉' in text else (
+        'alipay' if '支付时间' in text else 'wechat')
+    return _payment_extract(items, payment_type)
 
 
 def _restore_original_workbook_images(original_path, output_path):
@@ -433,29 +462,39 @@ def process_receipt_workbooks(workbook_paths, out_dir, progress=None):
         for records in row_images.values():
             records.sort(key=lambda item: (item['col'], item['image_index']))
 
+        recognized = {}
         processed = 0
+        # 少量图片使用单模型，避免第二个模型的初始化成本；批量图片使用两个
+        # 独立 PP-OCRv4 工作器，缩短整份表格的总识别时间。
+        if len(image_records) >= 4:
+            futures = {_payment_ocr_executor.submit(
+                _payment_image_values, record['path']): record for record in image_records}
+            for future in as_completed(futures):
+                record = futures[future]
+                recognized[record['path']] = future.result()
+                processed += 1
+                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
+                       (processed, len(image_records)))
+        else:
+            for record in image_records:
+                # 少量图片只占用一个常驻工作器，避免启动第二个模型。
+                future = _payment_ocr_executor.submit(
+                    _payment_image_values, record['path'])
+                recognized[record['path']] = future.result()
+                processed += 1
+                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
+                       (processed, len(image_records)))
+
         for (sheet_name, zero_row), records in sorted(row_images.items()):
             ws = wb[sheet_name]
             layout = sheet_layouts[sheet_name]
             row = zero_row + 1
             for image_index, record in enumerate(records):
-                # 手机付款截图方向固定，使用 PP-OCRv4 快速配置：
-                # 复用识别模型并跳过方向分类，减少单张耗时。
-                items = _fast_payment_ocr_lines(record['path'])
-                date_value, time_value, amount = _payment_extract(items, 'wechat')
-                # 微信使用“转账时间”，支付宝/货拉拉使用“支付时间”。
-                text = _wechat_items_text(items)
-                if '支付时间' in text:
-                    date_value, time_value, amount = _payment_extract(items, 'alipay')
-                elif '货拉拉' in text:
-                    date_value, time_value, amount = _payment_extract(items, 'huolala')
+                date_value, time_value, amount = recognized[record['path']]
                 start_col = layout['output_start'] + image_index * 3
                 ws.cell(row=row, column=start_col, value=date_value)
                 ws.cell(row=row, column=start_col + 1, value=time_value)
                 ws.cell(row=row, column=start_col + 2, value=amount)
-                processed += 1
-                report(processed, len(image_records), '正在识别表格图片 %d/%d' %
-                       (processed, len(image_records)))
 
         for sheet_name, layout in sheet_layouts.items():
             ws = wb[sheet_name]
