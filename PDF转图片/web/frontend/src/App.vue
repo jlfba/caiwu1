@@ -178,7 +178,9 @@ function selectFundFiles(fileList) {
   fundFile1.value = fList.find(f => /收款审核/.test(f.name) && !/流水/.test(f.name)) || null
   fundFile2.value = fList.find(f => /服务商付款/.test(f.name) && !/流水/.test(f.name)) || null
   fundFile4.value = fList.find(f => /流水/.test(f.name)) || null
-  fundFile3.value = fList.find(f => /对公/.test(f.name) && !/流水/.test(f.name)) || null
+  // 审核表的名称也可能带“中信对公”；只有不属于其他三类的文件才是系统表。
+  fundFile3.value = fList.find(f => /对公/.test(f.name)
+    && !/收款审核|服务商付款|流水/.test(f.name)) || null
   addActivityLog(`资金组已选择 ${fList.length} 个 Excel 文件${fundFile3.value ? '，已识别中信对公表' : '，未识别中信对公表'}`, fundFile3.value ? 'success' : 'warning')
 }
 
@@ -205,8 +207,8 @@ async function submitFund() {
   filename.value = ''
   addActivityLog('开始提交资金组核对任务')
   try {
-    // 只上传已经自动识别出的原始 File 对象，避免拖拽事件或响应式数据混入 FormData。
-    const uploadFiles = [fundFile1.value, fundFile2.value, fundFile3.value, fundFile4.value]
+    // 传入全部原始文件，由后端按关键词识别四类表，不能因前端槽位丢掉第 5 个文件。
+    const uploadFiles = fundFiles.value
       .filter(file => file instanceof File)
     if (!uploadFiles.includes(fundFile3.value)) {
       throw new Error('中信对公文件无效，请重新选择 Excel 文件')
