@@ -986,8 +986,8 @@ onUnmounted(() => {
 .terminal-count { margin-left: auto; color: #7ca29a; font-variant-numeric: tabular-nums; }
 
 .log-page-list {
-  max-height: calc(100vh - 310px);
-  min-height: 380px;
+  max-height: calc(100vh - 250px);
+  min-height: clamp(480px, 62vh, 720px);
   overflow: auto;
   padding: 17px 18px 20px;
   scrollbar-color: #3b5a57 #101b1c;
