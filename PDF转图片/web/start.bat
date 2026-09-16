@@ -12,8 +12,8 @@ if not exist "%PDF_TOOL_PYTHON%" (
   exit /b 1
 )
 cd /d "%~dp0backend"
-rem Local daily-use mode: automatically reload after backend Python files change.
-set "RELOAD=1"
+rem Daily-use mode must stay stable while long OCR tasks are running.
+set "RELOAD=0"
 set "PORT=8000"
 "%PDF_TOOL_PYTHON%" run.py
 pause
