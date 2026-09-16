@@ -78,8 +78,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     return task_id
 
 
-def create_fund_task(filename1, data1, filename2, data2, filename3, data3,
-                     filename4, data4):
+def create_fund_task(files):
     """创建资金组任务：收款、付款、中信对公和银行账号管理流水四表核对。"""
     task_id = _make_task_id()
     task_dir = os.path.join(_TMP_ROOT, task_id)
@@ -89,9 +88,7 @@ def create_fund_task(filename1, data1, filename2, data2, filename3, data3,
     os.makedirs(out_dir, exist_ok=True)
 
     paths = []
-    for i, (fn, data) in enumerate([
-            (filename1, data1), (filename2, data2),
-            (filename3, data3), (filename4, data4)], 1):
+    for i, (fn, data) in enumerate(files, 1):
         safe = processor.sanitize_filename(fn)
         p = os.path.join(in_dir, f'fund{i}_' + safe)
         with open(p, 'wb') as f:
@@ -222,8 +219,9 @@ def _worker():
                 result = report_processor.process_report(
                     pdfs[0], sheet_name, output, progress)
             elif mode == 'fund':
+                fund_paths = fund_processor.identify_fund_files(pdfs)
                 result = fund_processor.process_fund(
-                    pdfs[0], pdfs[1], pdfs[2], pdfs[3], task['out_dir'], progress)
+                    *fund_paths, task['out_dir'], progress)
             elif mode == '1':
                 result = processor.process_mode1(
                     pdfs, task['out_dir'], progress,

@@ -20,12 +20,13 @@ jobs:
       - name: Prepare ASCII build context
         run: |
           mkdir -p build-context
-          cp -r frontend build-context/frontend
-          cp -r backend build-context/backend
-          cp pdf转图片.py build-context/
-          cp requirements.txt build-context/
-          cp Dockerfile build-context/
+          cp -r "PDF转图片/web/frontend" build-context/frontend
+          cp -r "PDF转图片/web/backend" build-context/backend
+          cp "PDF转图片/pdf转图片.py" build-context/
+          cp "PDF转图片/web/requirements.txt" build-context/requirements.txt
+          cp "PDF转图片/Dockerfile" build-context/Dockerfile
           rm -rf build-context/frontend/node_modules build-context/frontend/dist
+          rm -rf build-context/backend/__pycache__ build-context/backend/.tmp
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3

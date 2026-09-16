@@ -103,22 +103,19 @@ async def create_task(files: list[UploadFile] = File(...),
 
 @app.post('/api/fund-tasks')
 async def create_fund_task(
-        file1: UploadFile = File(...),
-        file2: UploadFile = File(...),
-        file3: UploadFile = File(...),
-        file4: UploadFile = File(...)):
+        files: list[UploadFile] = File(...)):
     """资金组：收款、付款、中信对公和银行账号管理流水四表核对。"""
-    for f in (file1, file2, file3, file4):
+    if not files:
+        return JSONResponse({'detail': '请至少上传中信对公 Excel 文件'}, status_code=400)
+    for f in files:
         if not (f.filename or '').lower().endswith(('.xlsx', '.xlsm')):
             return JSONResponse(
                 {'detail': f'资金组仅支持 .xlsx / .xlsm 文件：{f.filename}'},
                 status_code=400)
-    task_id = tasks.create_fund_task(
-        file1.filename or 'fund1.xlsx', await file1.read(),
-        file2.filename or 'fund2.xlsx', await file2.read(),
-        file3.filename or 'fund3.xlsx', await file3.read(),
-        file4.filename or 'fund4.xlsx', await file4.read(),
-    )
+    task_id = tasks.create_fund_task([
+        (f.filename or f'fund{i}.xlsx', await f.read())
+        for i, f in enumerate(files, 1)
+    ])
     return {'task_id': task_id}
 
 

@@ -1,0 +1,7 @@
+# 镜像构建上下文排除项（路径相对 Dockerfile 所在目录）
+**/__pycache__/
+**/*.pyc
+.git/
+web/.git/
+web/frontend/node_modules/
+web/frontend/dist/
