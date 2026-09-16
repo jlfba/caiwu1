@@ -20,6 +20,8 @@ _TMP_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.tmp')
 _TASKS = {}          # task_id -> dict（状态/进度/文件名）
 _QUEUE = queue.Queue()
 _LOCK = threading.Lock()
+_WORKER = None
+_WORKER_LOCK = threading.Lock()
 
 
 def _make_task_id():
@@ -73,6 +75,7 @@ def create_task(pdf_files, mode, inv_type, layout='v', start_cell='A1',
     }
     with _LOCK:
         _TASKS[task_id] = task
+    start_worker()
     _QUEUE.put((task_id, saved, mode, inv_type, layout, start_cell,
                 template_path, sheet_name))
     return task_id
@@ -103,6 +106,7 @@ def create_fund_task(files):
     }
     with _LOCK:
         _TASKS[task_id] = task
+    start_worker()
     _QUEUE.put((task_id, paths, 'fund', '', 'v', 'A1', None, ''))
     return task_id
 
@@ -131,6 +135,7 @@ def create_report_task(filename, data, sheet_name, report_profile='bundle'):
     }
     with _LOCK:
         _TASKS[task_id] = task
+    start_worker()
     _QUEUE.put((task_id, [input_path], '4step', '', 'v', 'A1', None, sheet_name))
     return task_id
 
@@ -146,6 +151,7 @@ def continue_report_task(task_id):
         task['status'] = 'pending'
         task['current'] = 0
         task['message'] = '等待继续处理…'
+    start_worker()
     _QUEUE.put((task_id, [task['input_path']], '4step', '', 'v', 'A1', None, task['sheet_name']))
     return True
 
@@ -278,7 +284,11 @@ def cleanup_old_tmp(older_than=24 * 3600):
 
 
 def start_worker():
-    """启动单 worker 线程（幂等）。"""
-    cleanup_old_tmp()
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
+    """确保单 worker 正在运行；容器重载后也可在提交任务时自动恢复。"""
+    global _WORKER
+    with _WORKER_LOCK:
+        if _WORKER is not None and _WORKER.is_alive():
+            return
+        cleanup_old_tmp()
+        _WORKER = threading.Thread(target=_worker, daemon=True, name='task-worker')
+        _WORKER.start()
