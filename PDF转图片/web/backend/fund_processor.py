@@ -100,6 +100,7 @@ def identify_fund_files(file_paths):
     }
     found = {}
     unknown = []
+    duplicates = []
     for path in file_paths:
         name = os.path.basename(path)
         # 文件名可能同时含“中信对公”和业务表关键词。
@@ -114,11 +115,15 @@ def identify_fund_files(file_paths):
                 matches = specific
             else:
                 matches = ['system'] if any(keyword in name for keyword in rules['system']) else []
-        if len(matches) == 1 and matches[0] not in found:
-            found[matches[0]] = path
+        if len(matches) == 1:
+            kind = matches[0]
+            if kind not in found:
+                found[kind] = path
+            else:
+                duplicates.append(kind)
         else:
             unknown.append(name)
-    if 'system' not in found or unknown:
+    if 'system' not in found or unknown or duplicates:
         labels = {'receipt': '收款审核表', 'payment': '服务商付款审核表',
                   'system': '中信对公', 'bank_flow': '银行账号管理流水'}
         detail = []
@@ -126,6 +131,9 @@ def identify_fund_files(file_paths):
             detail.append('缺少：' + labels['system'])
         if unknown:
             detail.append('无法识别：' + '、'.join(unknown))
+        if duplicates:
+            duplicate_labels = [labels[kind] for kind in dict.fromkeys(duplicates)]
+            detail.append('重复上传：' + '、'.join(duplicate_labels))
         raise ValueError('资金组文件识别失败；' + '；'.join(detail))
     return (found.get('receipt'), found.get('payment'),
             found['system'], found.get('bank_flow'))
