@@ -1,19 +1,9 @@
 # 项目规则
 
-## caiwu1 局域网部署
+## 局域网 Docker 镜像部署
 
-- 部署对象：`caiwu1`，服务器为 `jl@192.168.24.29`（1lou）。
-- 仅使用本地构建的镜像部署，禁止因发布而从 GitHub/GHCR 拉取镜像。
-- 源码必须取自 `PDF转图片/web/frontend` 与 `PDF转图片/web/backend`；根目录的 `frontend`、`backend` 不属于 caiwu1。
-- 本机 Docker 构建的完整入口是：
-
-  ```powershell
-  .\scripts\deploy-lan.ps1 -RemoteHost 192.168.24.29
-  ```
-
-- 脚本会创建临时扁平 Docker 构建上下文（`Dockerfile`、入口 Python、`requirements.txt`、`frontend/`、`backend/`），排除 `node_modules`、前端 `dist`、Python 缓存和 `backend/.tmp`，然后执行 `docker build`、`docker save`、`scp`、远端 `docker load`。
-- SSH 使用本机已有的 `%USERPROFILE%\.ssh\id_ed25519`，用户为 `jl`；不得将私钥、密码或令牌写入代码、规则或日志。
-- 更新时只操作 `caiwu1`：停止并重命名旧容器为带时间戳的 `caiwu1-previous-*`，新容器必须沿用端口 `15618:15618`、`59323:59323`、环境变量和日志轮转设置。
-- 新容器状态不是 `running` 时，删除失败的新容器并恢复旧容器；验证成功前不得删除旧容器。
-- 部署完成至少验证：容器为 `running`、`http://192.168.24.29:15618` 返回 HTTP 200、容器日志无启动错误。远端镜像 tar 与本机临时上下文、tar 必须清理。
-- 不得运行 `pkill`、不明确的 `kill`、Docker daemon 重启或任何会影响其他容器的系统级命令。除非用户明确要求，禁止操作 caiwu1 以外的容器。
+- 用户要求局域网部署时，优先本地构建 Docker 镜像，依次执行 `docker build`、`docker save`、SCP 上传、远端 `docker load`；除非用户明确要求，不从 GitHub/GHCR 拉取镜像。
+- 根据当前项目的 Dockerfile 与源码布局确定构建上下文。若 `COPY` 路径与仓库布局不一致，创建临时扁平构建上下文，只复制所需源码和依赖清单，并排除 `node_modules`、构建产物、缓存与业务临时文件。
+- SSH 认证使用已有本机密钥，绝不读取、输出或写入私钥、密码、令牌。服务器、用户、容器、镜像、端口、环境变量和源码路径均按当前任务确认，禁止写死。
+- 切换前检查并保留旧容器的完整运行配置。安全切换为：加载校验镜像 → 停止旧容器 → 旧容器改名为时间戳备份 → 用原运行配置启动新容器 → 验证状态、日志、服务健康检查。新容器失败则自动恢复备份，验证成功前不删除备份。
+- 完成后清理本机临时构建上下文/tar 和服务器上传 tar。除非用户明确要求，不得使用 `pkill`、不明确的 `kill`、Docker daemon 重启或影响无关容器的命令。
