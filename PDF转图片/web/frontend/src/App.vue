@@ -175,8 +175,8 @@ function clearFundFile() {
 function selectFundFiles(fileList) {
   const fList = Array.from(fileList || []).filter(f => /\.(xlsx|xlsm)$/i.test(f.name))
   fundFiles.value = fList
-  fundFile1.value = fList.find(f => /收款审核/.test(f.name) && !/对公|流水/.test(f.name)) || null
-  fundFile2.value = fList.find(f => /服务商付款/.test(f.name) && !/对公|流水/.test(f.name)) || null
+  fundFile1.value = fList.find(f => /收款审核/.test(f.name) && !/流水/.test(f.name)) || null
+  fundFile2.value = fList.find(f => /服务商付款/.test(f.name) && !/流水/.test(f.name)) || null
   fundFile4.value = fList.find(f => /流水/.test(f.name)) || null
   fundFile3.value = fList.find(f => /对公/.test(f.name) && !/流水/.test(f.name)) || null
   addActivityLog(`资金组已选择 ${fList.length} 个 Excel 文件${fundFile3.value ? '，已识别中信对公表' : '，未识别中信对公表'}`, fundFile3.value ? 'success' : 'warning')

@@ -101,19 +101,18 @@ def identify_fund_files(file_paths):
     unknown = []
     for path in file_paths:
         name = os.path.basename(path)
-        # 银行流水文件名通常也包含“对公”，需优先归入银行流水。
-        # 其他任何包含“对公”的文件都属于中信对公，即使还含收款/付款关键词。
+        # 文件名可能同时含“中信对公”和业务表关键词。
+        # 流水优先，其次必须识别收款/付款审核表；只有不含这些业务关键词时，
+        # “对公”才代表中信对公系统表。
         if any(keyword in name for keyword in rules['bank_flow']):
             matches = ['bank_flow']
-        elif any(keyword in name for keyword in rules['system']):
-            matches = ['system']
         else:
             specific = [key for key in ('receipt', 'payment')
                         if any(keyword in name for keyword in rules[key])]
             if specific:
                 matches = specific
             else:
-                matches = []
+                matches = ['system'] if any(keyword in name for keyword in rules['system']) else []
         if len(matches) == 1 and matches[0] not in found:
             found[matches[0]] = path
         else:
