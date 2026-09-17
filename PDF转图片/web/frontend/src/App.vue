@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import ModeSelect from './components/ModeSelect.vue'
 import InvoiceTypeSelect from './components/InvoiceTypeSelect.vue'
 import ReceiptTypeSelect from './components/ReceiptTypeSelect.vue'
@@ -76,6 +76,7 @@ let elapsedStartedAt = 0
 let elapsedAccumulated = 0
 let activityLogId = 0
 let syncedTaskLogs = new Set()
+const ACTIVE_TASK_STORAGE_KEY = 'caiwu-active-task'
 
 const submitting = computed(() => status.value === 'processing')
 const startCellValid = computed(() => /^[A-Za-z]{1,3}\d{1,7}$/.test(startCell.value))
@@ -101,6 +102,82 @@ function formatLogTime(value = new Date()) {
 
 function addActivityLog(content, level = 'info') {
   activityLogs.value.push({ id: ++activityLogId, time: formatLogTime(), content, level })
+}
+
+function saveActiveTask() {
+  if (!taskId.value) return
+  try {
+    sessionStorage.setItem(ACTIVE_TASK_STORAGE_KEY, JSON.stringify({
+      taskId: taskId.value,
+      mode: mode.value,
+      status: status.value,
+      current: current.value,
+      total: total.value,
+      message: message.value,
+      filename: filename.value,
+      error: error.value,
+      logs: logs.value,
+      activityLogs: activityLogs.value,
+      elapsedSeconds: elapsedSeconds.value,
+      reportStep: reportStep.value,
+      reportMaxStep: reportMaxStep.value,
+      currentNav: currentNav.value
+    }))
+  } catch (_) {
+    // 浏览器禁用会话存储时，仍按原来的方式正常处理任务。
+  }
+}
+
+function clearSavedTask() {
+  try {
+    sessionStorage.removeItem(ACTIVE_TASK_STORAGE_KEY)
+  } catch (_) {
+    // 忽略浏览器存储不可用的情况。
+  }
+}
+
+function resumeElapsedTimer() {
+  stopElapsedTimer(false)
+  elapsedAccumulated = elapsedSeconds.value
+  elapsedStartedAt = Date.now()
+  elapsedTimer = setInterval(() => {
+    elapsedSeconds.value = elapsedAccumulated + Math.floor((Date.now() - elapsedStartedAt) / 1000)
+  }, 1000)
+}
+
+async function restoreActiveTask() {
+  let saved
+  try {
+    saved = JSON.parse(sessionStorage.getItem(ACTIVE_TASK_STORAGE_KEY) || 'null')
+  } catch (_) {
+    clearSavedTask()
+    return
+  }
+  if (!saved || typeof saved.taskId !== 'string' || !saved.taskId) return
+
+  taskId.value = saved.taskId
+  mode.value = saved.mode || mode.value
+  status.value = saved.status || 'processing'
+  current.value = Number(saved.current) || 0
+  total.value = Number(saved.total) || 0
+  message.value = saved.message || '正在恢复任务状态…'
+  filename.value = saved.filename || ''
+  error.value = saved.error || ''
+  logs.value = Array.isArray(saved.logs) ? saved.logs : []
+  activityLogs.value = Array.isArray(saved.activityLogs) ? saved.activityLogs : []
+  activityLogId = activityLogs.value.reduce((maxId, item) => Math.max(maxId, Number(item.id) || 0), 0)
+  syncedTaskLogs = new Set(logs.value.map((item) => `${taskId.value}:${String(item)}`))
+  elapsedSeconds.value = Number(saved.elapsedSeconds) || 0
+  reportStep.value = Number(saved.reportStep) || 0
+  reportMaxStep.value = Number(saved.reportMaxStep) || 0
+  currentNav.value = saved.currentNav || 'home'
+
+  if (status.value === 'processing') {
+    resumeElapsedTimer()
+    stopPolling()
+    pollTimer = setInterval(poll, 1200)
+  }
+  await poll()
 }
 
 watch(
@@ -216,6 +293,7 @@ async function submitFund() {
     const data = await createFundTask(uploadFiles)
     taskId.value = data.task_id
     addActivityLog(`资金组任务已创建：${data.task_id}`, 'success')
+    saveActiveTask()
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
@@ -266,6 +344,7 @@ async function submitReport() {
     const data = await createReportTask(reportFile.value, reportSheet.value, 'bundle')
     taskId.value = data.task_id
     addActivityLog(`报表任务已创建：${data.task_id}`, 'success')
+    saveActiveTask()
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
@@ -280,6 +359,7 @@ async function continueReport() {
   if (!taskId.value || status.value !== 'paused') return
   status.value = 'processing'
   message.value = '正在继续处理…'
+  saveActiveTask()
   try {
     addActivityLog('开始提交文件处理任务')
     await continueReportTask(taskId.value)
@@ -403,6 +483,7 @@ async function submit() {
     })
     taskId.value = data.task_id
     addActivityLog(`处理任务已创建：${data.task_id}`, 'success')
+    saveActiveTask()
     pollTimer = setInterval(poll, 1200)
     poll()
   } catch (e) {
@@ -421,6 +502,7 @@ async function poll() {
   } catch (e) {
     status.value = 'error'
     error.value = e.message
+    clearSavedTask()
     stopPolling()
     stopElapsedTimer()
     return
@@ -460,11 +542,13 @@ async function poll() {
     stopPolling()
     stopElapsedTimer()
   }
+  saveActiveTask()
 }
 
 function reset() {
   stopPolling()
   stopElapsedTimer(false)
+  clearSavedTask()
   status.value = 'idle'
   taskId.value = ''
   current.value = 0
@@ -481,9 +565,13 @@ function reset() {
   clearFundFile()
 }
 
+onMounted(() => {
+  restoreActiveTask()
+})
+
 onUnmounted(() => {
   stopPolling()
-  stopElapsedTimer()
+  stopElapsedTimer(false)
 })
 </script>
 
