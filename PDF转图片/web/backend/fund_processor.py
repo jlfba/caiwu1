@@ -625,14 +625,14 @@ def _save_system_workbook_preserving_template(original_path: str, workbook, outp
 
 
 def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str, file4_path: str | None,
-                 out_dir: str, progress) -> str:
+                 out_dir: str, progress, package_result: bool = True) -> str:
     """
     主处理入口。
     file1_path: 可选收款审核表
     file2_path: 可选服务商付款审核表
     file3_path: 中信对公
     file4_path: 可选银行账号管理流水
-    返回输出 ZIP 文件路径。
+    package_result=True 时返回输出 ZIP 文件路径；否则直接返回结果目录。
     """
     date_source = next(path for path in (file1_path, file2_path, file4_path, file3_path) if path)
     date_suffix = _extract_date(date_source)
@@ -695,7 +695,7 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
         progress(5, 7, '未上传银行账号管理表，已跳过…')
         progress(6, 7, '未上传银行账号管理表，已跳过追加…')
 
-    progress(7, 7, '正在保存并打包结果…')
+    progress(7, 7, '正在保存结果…' if not package_result else '正在保存并打包结果…')
 
     output_files = []
     if wb1:
@@ -719,6 +719,9 @@ def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str
         path4 = os.path.join(out_dir, name4)
         wb4.save(path4)
         output_files.append((path4, name4))
+
+    if not package_result:
+        return out_dir
 
     zip_name = f'资金核对-{date_suffix}.zip'
     zip_path = os.path.join(out_dir, zip_name)

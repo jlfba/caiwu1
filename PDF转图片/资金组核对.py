@@ -42,10 +42,10 @@ def main():
             print(' - ' + os.path.basename(path), flush=True)
         print('结果目录：' + output_dir, flush=True)
         result = fund_processor.process_fund(
-            file1, file2, file3, file4, output_dir, _progress
+            file1, file2, file3, file4, output_dir, _progress, package_result=False
         )
-        messagebox.showinfo('资金组核对完成', f'已生成结果：\n{result}')
-        os.startfile(os.path.dirname(result))
+        messagebox.showinfo('资金组核对完成', f'已生成 Excel 文件：\n{result}')
+        os.startfile(result)
     except Exception as exc:
         traceback.print_exc()
         messagebox.showerror('资金组核对失败', str(exc))
