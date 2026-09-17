@@ -10,19 +10,13 @@
 import os
 import re
 import zipfile
-import tempfile
 import shutil
-import xml.etree.ElementTree as ET
-from xml.sax.saxutils import escape as xml_escape
-from lxml import etree
-from openpyxl.utils.datetime import to_excel
 from copy import copy
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import openpyxl
 from openpyxl.styles import PatternFill, Font
-from openpyxl.formula.translate import Translator
 
 _FILL_LIGHT_RED   = PatternFill(fill_type='solid', fgColor='FFC7CE')
 _FILL_YELLOW      = PatternFill(fill_type='solid', fgColor='FFFF00')
@@ -545,100 +539,6 @@ def _append_bank_flow_to_rmb(wb_flow, wb_system):
         'signed_red_style': signed_red_style,
         'rows': source_rows,
     }
-
-
-_SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-
-
-def _xml_cell_value(value):
-    if value is None:
-        return None, None
-    if hasattr(value, 'year') and hasattr(value, 'month'):
-        return 'n', str(to_excel(value))
-    if isinstance(value, bool):
-        return 'b', '1' if value else '0'
-    if isinstance(value, (int, float, Decimal)):
-        return 'n', str(value)
-    return 'inlineStr', str(value)
-
-
-def _rmb_xml_cell(column: str, row: int, value, style=None):
-    """Build one cell without serializing the template XML tree."""
-    attrs = f' r="{column}{row}"'
-    if style is not None:
-        attrs += f' s="{style}"'
-    kind, text = _xml_cell_value(value)
-    if kind is None:
-        return f'<c{attrs}/>'
-    if kind == 'inlineStr':
-        return f'<c{attrs} t="inlineStr"><is><t>{xml_escape(text)}</t></is></c>'
-    type_attr = '' if kind == 'n' else f' t="{kind}"'
-    return f'<c{attrs}{type_attr}><v>{xml_escape(text)}</v></c>'
-
-
-def _rmb_xml_row(row_no: int, item, payload):
-    """Create a bank-flow row using known-safe normal worksheet markup."""
-    cells = []
-    for col, value in enumerate(item['values'], 1):
-        # The lookup result is an internal processing column, never copied to RMB.
-        if col == payload['result_column']:
-            continue
-        column = openpyxl.utils.get_column_letter(col)
-        style = payload['red_styles'].get(column) if item['unmatched'] else payload['styles'][col - 1]
-        if col == 5 and isinstance(payload['formula'], str) and payload['formula'].startswith('='):
-            formula = Translator(payload['formula'], origin=f'E{payload["last_row"]}').translate_formula(f'E{row_no}')[1:]
-            cells.append(f'<c r="E{row_no}" s="{style}"><f>{xml_escape(formula)}</f></c>')
-        else:
-            cells.append(_rmb_xml_cell(column, row_no, value, style))
-    if item['p_value'] is not None:
-        cells.append(_rmb_xml_cell('P', row_no, item['p_value'], payload['signed_red_style']))
-    return (f'<row r="{row_no}" spans="1:16" s="1" customFormat="1" '
-            f'x14ac:dyDescent="0.2">{"".join(cells)}</row>').encode('utf-8')
-
-
-def _patch_rmb_sheet_xml(data: bytes, payload):
-    """Write RMB rows while keeping every existing XML node byte-for-byte intact.
-
-    This template has an array formula in D23948.  Rebuilding or moving that row
-    invalidates the workbook in Excel.  We use only its blank tail rows except D23948,
-    then append after the tail.
-    """
-    if not payload:
-        return data
-    last_data_row = payload['last_row']
-    safe_rows = list(range(last_data_row + 1, 23948)) + list(range(23949, 23984))
-    rows = payload['rows']
-    row_re = re.compile(rb'<row\b(?=[^>]*\br="(\d+)")[^>]*>.*?</row>')
-    replacements = {row_no: _rmb_xml_row(row_no, item, payload)
-                    for row_no, item in zip(safe_rows, rows)}
-    seen = set()
-
-    def replace_row(match):
-        row_no = int(match.group(1))
-        replacement = replacements.get(row_no)
-        if replacement is None:
-            return match.group(0)
-        seen.add(row_no)
-        return replacement
-
-    patched = row_re.sub(replace_row, data)
-    missing = [row for row in replacements if row not in seen]
-    if missing:
-        raise ValueError(f'人民币模板缺少安全的预留行：{missing[0]}')
-
-    remaining = rows[len(replacements):]
-    if remaining:
-        start_row = 23984
-        appended = b''.join(_rmb_xml_row(start_row + offset, item, payload)
-                            for offset, item in enumerate(remaining))
-        patched = patched.replace(b'</sheetData>', appended + b'</sheetData>', 1)
-        final_row = start_row + len(remaining) - 1
-        patched = re.sub(
-            rb'(<dimension ref="[A-Z]+1:[A-Z]+)\d+("/>)',
-            lambda match: match.group(1) + str(final_row).encode() + match.group(2),
-            patched, count=1,
-        )
-    return patched
 
 
 def _save_system_workbook_preserving_template(original_path: str, workbook, output_path: str,
