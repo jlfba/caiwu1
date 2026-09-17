@@ -643,12 +643,15 @@ def _patch_rmb_sheet_xml(data: bytes, payload):
 
 def _save_system_workbook_preserving_template(original_path: str, workbook, output_path: str,
                                              rmb_payload=None, sys_marked=None):
-    """Use Excel's native save on Windows; use the verified XML fallback on Linux."""
+    """Use Excel's native save to preserve this template's Excel-only structures."""
     try:
         import win32com.client
-    except ImportError:
-        _save_system_workbook_linux(original_path, workbook, output_path, rmb_payload)
-        return
+    except ImportError as exc:
+        raise RuntimeError(
+            '当前中信对公模板包含 Excel 专有的数组公式和扩展结构，'
+            'Linux 纯 Python 保存会导致 Excel 修复并丢失处理结果。'
+            '请使用安装了 Microsoft Excel 的 Windows 版本处理资金组。'
+        ) from exc
 
     def excel_color(rgb: str) -> int:
         rgb = rgb[-6:]
@@ -719,46 +722,6 @@ def _save_system_workbook_preserving_template(original_path: str, workbook, outp
             native_book.Close(SaveChanges=False)
         if excel is not None:
             excel.Quit()
-
-
-def _save_system_workbook_linux(original_path: str, workbook, output_path: str, rmb_payload=None):
-    """Linux-safe save path.
-
-    Openpyxl writes the system-sheet highlights, then the original ZIP is rebuilt by
-    taking only those changed parts and applying a byte-preserving RMB XML patch.
-    The RMB tail is overwritten/appended rather than inserting rows, so the template's
-    cross-sheet formulas and the D23948 array formula stay intact.
-    """
-    temp_dir = tempfile.mkdtemp(prefix='fund-linux-', dir=os.path.dirname(output_path))
-    staged_path = os.path.join(temp_dir, 'system.xlsx')
-    try:
-        workbook.save(staged_path)
-        with zipfile.ZipFile(original_path, 'r') as original, \
-                zipfile.ZipFile(staged_path, 'r') as staged, \
-                zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as output:
-            original_names = {info.filename for info in original.infolist()}
-            staged_names = {info.filename for info in staged.infolist()}
-            # Keep the original package intact wherever possible.  Only the system
-            # sheet and styles changed by openpyxl are carried over from the staged file.
-            changed_parts = {'xl/worksheets/sheet1.xml', 'xl/styles.xml'}
-            for info in original.infolist():
-                name = info.filename
-                data = original.read(name)
-                if name in changed_parts and name in staged_names:
-                    data = staged.read(name)
-                elif name == 'xl/worksheets/sheet3.xml' and rmb_payload:
-                    data = _patch_rmb_sheet_xml(data, rmb_payload)
-                output.writestr(info, data)
-            # Preserve any new standard style part created by openpyxl.
-            for name in staged_names - original_names:
-                if name.startswith('xl/') and name in {'xl/styles.xml'}:
-                    output.writestr(name, staged.read(name))
-        with zipfile.ZipFile(output_path, 'r') as check:
-            bad_member = check.testzip()
-            if bad_member:
-                raise RuntimeError(f'Linux 生成的 Excel ZIP 校验失败：{bad_member}')
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def process_fund(file1_path: str | None, file2_path: str | None, file3_path: str, file4_path: str | None,
