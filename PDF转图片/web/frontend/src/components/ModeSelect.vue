@@ -24,13 +24,6 @@ const modes = [
     desc: 'Excel 报表数据清洗、整理与生成结果',
     colorTheme: 'emerald'
   },
-  {
-    id: 'fund',
-    title: '资金组',
-    sub: '表格处理',
-    desc: '收款、付款与中信银行账号流水自动核对',
-    colorTheme: 'indigo'
-  }
 ]
 </script>
 
