@@ -25,6 +25,8 @@ import fitz
 SOURCE_SUFFIXES = {'.pdf'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
 MONEY_TOKEN = r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?'
+NEGATIVE_MONEY_TOKEN = (r'[-－—–−]\s*(?:(?:CNY|人民币)\s*)?'
+                        r'[¥￥]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?')
 
 
 @dataclass(frozen=True)
@@ -103,12 +105,16 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
     # 类型 3：私账水单，标签最明确，必须优先判断。
     for amount in amounts_after(normalized, ('汇款金额小写',)):
         found.append((amount, '人民币-私账'))
-    # 类型 2：APP 支付，金额值本身带负号。
-    for match in re.finditer(r'金额[^0-9－-]{0,12}([－-]\s*[¥￥]?\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?)', normalized):
-        amount = parse_amount(match.group(1))
-        if amount is not None:
-            # APP 支付水单通常用负数表示支出，来源 PDF 的付款总额为正数。
-            found.append((abs(amount), '人民币-APP'))
+    # 类型 2：APP 支付。OCR 常把短横识别为全角横线、长横线或数学减号；
+    # “金额”与负数也可能被分成多行，因此在金额字段后 100 个字符内查找。
+    for label in re.finditer(r'金额', normalized):
+        field_text = normalized[label.end():label.end() + 100]
+        match = re.search(NEGATIVE_MONEY_TOKEN, field_text, re.I)
+        if match:
+            amount = parse_amount(match.group(0))
+            if amount is not None:
+                # APP 支付水单以负数表示支出，来源 PDF 的付款总额是正数。
+                found.append((abs(amount), '人民币-APP'))
     # 类型 1：常规水单，只接受金额字段附近明确出现 CNY 的值。
     for match in re.finditer(r'金额.{0,50}?CNY\s*([¥￥]?\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?)', normalized, re.I):
         amount = parse_amount(match.group(1))
@@ -241,6 +247,12 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             if values:
                 log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
             else:
+                negative_values = [parse_amount(match.group(0))
+                                   for match in re.finditer(NEGATIVE_MONEY_TOKEN, compact(text), re.I)]
+                negative_values = [abs(value) for value in negative_values if value is not None]
+                if negative_values:
+                    log('  检测到负数金额 ' + '、'.join(str(value) for value in negative_values)
+                        + '，但未在“金额”字段后找到；请保留该日志供核对。')
                 log('  未识别到符合水单规则的金额。')
         except Exception as exc:
             log(f'  识别失败：{exc}')
