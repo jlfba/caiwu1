@@ -137,11 +137,18 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
             amount = parse_amount(match.group(0))
             if amount is not None:
                 found.append((abs(amount), '人民币-APP支付成功'))
-    # 类型 1：常规水单，只接受金额字段附近明确出现 CNY 的值。
+    # 类型 1：常规水单。PDF/图片 OCR 的条目顺序不一定等于视觉顺序：
+    # 有些水单会先读到“CNY 2,850.00”，最后才读到左侧的“金额”。
+    # 因此保留原有“金额 -> CNY”规则，并增加“同图含金额字段 + CNY 金额”的兜底。
     for match in re.finditer(r'金额.{0,50}?CNY\s*([¥￥]?\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?)', normalized, re.I):
         amount = parse_amount(match.group(1))
         if amount is not None:
             found.append((amount, '人民币-常规'))
+    if '金额' in normalized:
+        for match in re.finditer(r'C\s*N\s*Y\s*[¥￥]?\s*([0-9][0-9,，]*(?:\.[0-9]{1,2})?)', text or '', re.I):
+            amount = parse_amount(match.group(1))
+            if amount is not None:
+                found.append((amount, '人民币-常规'))
     return list(dict.fromkeys(found))
 
 
