@@ -419,7 +419,7 @@ def row(source: Path | str, receipt: Path | str, amount: Decimal | str, result: 
     return {'来源PDF': str(source), '水单': str(receipt), '金额': str(amount), '处理结果': result}
 
 
-def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dict[str, str]]) -> list[tuple[Record, Record]]:
+def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dict[str, str]]) -> tuple[list[tuple[Record, Record]], set[Path]]:
     by_amount_sources: dict[Decimal, list[Record]] = defaultdict(list)
     by_amount_receipts: dict[Decimal, list[Record]] = defaultdict(list)
     for item in sources:
@@ -427,6 +427,7 @@ def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dic
     for item in receipts:
         by_amount_receipts[item.amount].append(item)
     pairs = []
+    conflict_paths: set[Path] = set()
     for amount in sorted(set(by_amount_sources) & set(by_amount_receipts)):
         left = list({item.path: item for item in by_amount_sources[amount]}.values())
         right = list({item.path: item for item in by_amount_receipts[amount]}.values())
@@ -436,7 +437,10 @@ def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dic
         else:
             log(f'金额 {amount} 有 {len(left)} 份 PDF、{len(right)} 份水单候选，保留供人工核对。')
             report.append(row('; '.join(str(x.path) for x in left), '; '.join(str(x.path) for x in right), amount, '同金额存在多份候选，未自动移动'))
-    return pairs
+            # 只有两边都存在、却无法唯一对应的同金额冲突项才进入异常文件夹。
+            conflict_paths.update(item.path for item in left)
+            conflict_paths.update(item.path for item in right)
+    return pairs, conflict_paths
 
 
 def safe_target(folder: Path, preferred_name: str) -> Path:
@@ -508,11 +512,11 @@ def main() -> None:
                 log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
             log('=' * 60)
 
-            cny_sources, usd_sources, report, source_files = source_records(pdf_dir)
-            cny_receipts, usd_receipts, receipt_report, receipt_files = receipt_records(receipt_dir)
+            cny_sources, usd_sources, report, _source_files = source_records(pdf_dir)
+            cny_receipts, usd_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
-            cny_pairs = unique_pairs(cny_sources, cny_receipts, report)
-            usd_pairs = unique_pairs(usd_sources, usd_receipts, report)
+            cny_pairs, cny_conflicts = unique_pairs(cny_sources, cny_receipts, report)
+            usd_pairs, usd_conflicts = unique_pairs(usd_sources, usd_receipts, report)
 
             moved = 0
             for source, receipt in cny_pairs:
@@ -526,15 +530,14 @@ def main() -> None:
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
                 moved += 1
 
-            # 其余参与本批扫描、但没有唯一正常匹配的文件，集中保留给人工复核。
-            paired_paths = {item.path for pair in cny_pairs + usd_pairs for item in pair}
-            exception_files = [path for path in source_files + receipt_files
-                               if path not in paired_paths and path.exists()]
+            # 仅“同金额两边都有多份候选”的冲突项进入异常文件夹。
+            # 只有 PDF 或只有水单、未识别金额等文件保持原目录不动。
+            exception_files = [path for path in cny_conflicts | usd_conflicts if path.exists()]
             exception_count = 0
             for path in dict.fromkeys(exception_files):
                 archive_exception(path, pdf_dir / '异常文件夹')
                 log(f'已移至 异常文件夹：{path.name}')
-                report.append(row(path.name, '', '', '未能自动唯一匹配，已移至异常文件夹待进一步验证'))
+                report.append(row(path.name, '', '', '同金额多份候选，已移至异常文件夹待进一步验证'))
                 exception_count += 1
 
             report_path = write_report(pdf_dir, report)
