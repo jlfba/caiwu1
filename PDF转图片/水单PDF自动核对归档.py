@@ -212,17 +212,18 @@ _OCR = None
 
 
 def enhanced_ocr_image(image_path: Path) -> Path | None:
-    """为细小表格水单生成高分辨率 OCR 临时图，失败则使用原图。"""
+    """为单张识别失败的细小水单生成轻量 OCR 临时图。"""
     try:
         with Image.open(image_path) as image:
-            # 小截图中的“费用金额”“汇款金额”等字与表格线容易粘连，
-            # 放大、提高对比度及轻微锐化后，检测与识别模型更容易分出字符。
+            # 仅用于原图未识别到水单金额的重试，避免批量处理占满电脑资源。
             enlarged = image.convert('RGB').resize(
-                (image.width * 3, image.height * 3), Image.Resampling.LANCZOS
+                (max(image.width + 1, int(image.width * 1.5)),
+                 max(image.height + 1, int(image.height * 1.5))),
+                Image.Resampling.LANCZOS
             )
-            enhanced = ImageEnhance.Contrast(enlarged).enhance(1.35)
-            enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.6)
-            enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
+            enhanced = ImageEnhance.Contrast(enlarged).enhance(1.15)
+            enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.2)
+            enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1, percent=80, threshold=5))
             temp = Path(tempfile.gettempdir()) / f'water-slip-enhanced-{os.getpid()}-{image_path.stem}.png'
             enhanced.save(temp, format='PNG')
             return temp
@@ -230,17 +231,19 @@ def enhanced_ocr_image(image_path: Path) -> Path | None:
         return None
 
 
-def ocr_text(image_path: Path) -> str:
+def ocr_text(image_path: Path, retry_enhanced: bool = False) -> str:
     global _OCR
     if _OCR is None:
         log('正在加载 OCR 识别模型，首次加载可能需要几十秒…')
         _OCR = get_ocr()
         log('OCR 识别模型加载完成。')
+    if not retry_enhanced:
+        result, _ = _OCR(str(image_path))
+        return '\n'.join(str(row[1]) for row in (result or []) if len(row) > 1)
+
     enhanced_path = enhanced_ocr_image(image_path)
     try:
-        # 对水单图片始终优先使用增强版；PDF 的临时渲染图已是高 DPI，不重复放大。
-        target = enhanced_path or image_path
-        result, _ = _OCR(str(target))
+        result, _ = _OCR(str(enhanced_path or image_path))
         return '\n'.join(str(row[1]) for row in (result or []) if len(row) > 1)
     finally:
         if enhanced_path:
@@ -338,6 +341,16 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             for amount, kind in usd_values:
                 usd.append(Record(path, amount, kind))
             values = cny_values + usd_values
+            if not values and path.suffix.lower() in IMAGE_SUFFIXES:
+                log('  原图未识别到水单金额，正在轻量增强后重试…')
+                text = ocr_text(path, retry_enhanced=True)
+                cny_values = cny_receipt_amounts(text)
+                usd_values = usd_receipt_amounts(text, is_citic, is_cmb)
+                for amount, kind in cny_values:
+                    cny.append(Record(path, amount, kind))
+                for amount, kind in usd_values:
+                    usd.append(Record(path, amount, kind))
+                values = cny_values + usd_values
             if values:
                 log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
             else:
