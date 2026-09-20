@@ -149,6 +149,9 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
             amount = parse_amount(match.group(1))
             if amount is not None:
                 found.append((amount, '人民币-常规'))
+    # 另一种普通银行水单直接显示“付款金额：54,466.00”，无需 CNY 标记。
+    for amount in amounts_after(normalized, ('付款金额',)):
+        found.append((amount, '人民币-常规付款金额'))
     return list(dict.fromkeys(found))
 
 
