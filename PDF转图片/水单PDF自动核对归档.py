@@ -20,6 +20,7 @@ from pathlib import Path
 from tkinter import Tk, filedialog, messagebox
 
 import fitz
+from PIL import Image, ImageEnhance, ImageFilter
 
 
 SOURCE_SUFFIXES = {'.pdf'}
@@ -210,14 +211,40 @@ def get_ocr():
 _OCR = None
 
 
+def enhanced_ocr_image(image_path: Path) -> Path | None:
+    """为细小表格水单生成高分辨率 OCR 临时图，失败则使用原图。"""
+    try:
+        with Image.open(image_path) as image:
+            # 小截图中的“费用金额”“汇款金额”等字与表格线容易粘连，
+            # 放大、提高对比度及轻微锐化后，检测与识别模型更容易分出字符。
+            enlarged = image.convert('RGB').resize(
+                (image.width * 3, image.height * 3), Image.Resampling.LANCZOS
+            )
+            enhanced = ImageEnhance.Contrast(enlarged).enhance(1.35)
+            enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.6)
+            enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1, percent=120, threshold=3))
+            temp = Path(tempfile.gettempdir()) / f'water-slip-enhanced-{os.getpid()}-{image_path.stem}.png'
+            enhanced.save(temp, format='PNG')
+            return temp
+    except Exception:
+        return None
+
+
 def ocr_text(image_path: Path) -> str:
     global _OCR
     if _OCR is None:
         log('正在加载 OCR 识别模型，首次加载可能需要几十秒…')
         _OCR = get_ocr()
         log('OCR 识别模型加载完成。')
-    result, _ = _OCR(str(image_path))
-    return '\n'.join(str(row[1]) for row in (result or []) if len(row) > 1)
+    enhanced_path = enhanced_ocr_image(image_path)
+    try:
+        # 对水单图片始终优先使用增强版；PDF 的临时渲染图已是高 DPI，不重复放大。
+        target = enhanced_path or image_path
+        result, _ = _OCR(str(target))
+        return '\n'.join(str(row[1]) for row in (result or []) if len(row) > 1)
+    finally:
+        if enhanced_path:
+            enhanced_path.unlink(missing_ok=True)
 
 
 def pdf_text(path: Path) -> str:
