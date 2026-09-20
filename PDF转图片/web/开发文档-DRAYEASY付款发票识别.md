@@ -22,6 +22,6 @@ Excel 固定为十列；付款组补充填写列置于前三列，后七列按�
 ## 实现与验证
 
 - 在共享 PDF 解析模块中增加基于文字坐标的 DRAYEASY 解析器；无文字层时沿用既有 OCR 回退。
-- Delivery Address 按表头正下方单独提取并重复写入明细；Container 中的 ISO 柜号后续费用描述自动拆回 Description。
+- Delivery Address 从明细表上方的独立字段读取完整地址并重复写入明细；Container 中的 ISO 柜号后续费用描述自动拆回 Description。
 - 在网页的付款组类型列表、接口校验和 Excel 导出规则中接入类型 `14`。
 - 以构造的坐标化票面条目验证字段位置、续行合并及输出列顺序；再执行 Python 编译检查与前端构建。

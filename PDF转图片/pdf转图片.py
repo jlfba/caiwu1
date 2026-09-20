@@ -829,7 +829,7 @@ EYNEX_OUTPUT_HEADERS = ('发票号', '柜号', 'DATE', '费用', 'DESCRIPTION',
 
 # DRAYEASY 发票：前三列为付款组填写列；INVOICE 在票面右侧取值，
 # 地址、柜号与明细表头以下的内容按明细行输出。
-DRAYEASY_HEADERS = ('DELIVERY ADDRESS', 'CONTAINER', 'DESCRIPTION', 'RATE', 'QTY', 'AMOUNT')
+DRAYEASY_HEADERS = ('CONTAINER', 'DESCRIPTION', 'RATE', 'QTY', 'AMOUNT')
 DRAYEASY_OUTPUT_HEADERS = ('配仓单号', '单号', '费用名称', 'INVOICE',
                            'Delivery Address', 'Container', 'Description',
                            'Rate', 'Qty', 'Amount')
@@ -2797,27 +2797,29 @@ def _drayeasy_invoice_no(lines):
     return value or '未知'
 
 
-def _drayeasy_delivery_address(lines, found):
-    """取 Delivery Address 表头正下方的地址，供明细行重复使用。"""
-    anchor = found.get('DELIVERY ADDRESS')
-    if anchor is None:
+def _drayeasy_delivery_address(lines):
+    """取表格上方蓝色 Delivery Address 标签后的完整地址（可跨多视觉行）。"""
+    label_line = _find_line(lines, 'DELIVERYADDRESS')
+    if label_line is None:
         return ''
-    header_bottom = anchor['cy'] + anchor['h'] / 2
-    # 地址栏右界取相邻 Container 表头左侧，避免把柜号或费用说明拼进地址。
-    container = found.get('CONTAINER')
-    left = anchor['cx'] - anchor['w'] / 2 - 12
-    right = (container['cx'] - container['w'] / 2 - 4
-             if container is not None else anchor['cx'] + max(anchor['w'], 180))
+    label = next((item for item in label_line['items']
+                  if _compact_text(item['text']).startswith('DELIVERY')), None)
+    if label is None:
+        return ''
+    label_bottom = label_line['cy'] + max(item['h'] for item in label_line['items']) / 2
+    # 只取明细表头（Container）出现前的文本，避免将下方明细拼入地址。
+    table_header = _find_line(lines, 'CONTAINER')
+    table_top = table_header['cy'] - 2 if table_header is not None else float('inf')
+    left = label['cx'] - label['w'] / 2 - 8
+    right = float('inf')
     parts = []
     for line in lines:
-        if line['cy'] <= header_bottom + 2:
+        if line['cy'] <= label_bottom + 2 or line['cy'] >= table_top:
             continue
         values = [item['text'] for item in line['items']
                   if left <= item['cx'] < right]
         if values:
             parts.append(' '.join(values))
-            # 地址通常在表头下一视觉行；不跨行采集，避免带入下方下一条明细。
-            break
     return ' '.join(parts).strip()
 
 
@@ -2837,7 +2839,7 @@ def _drayeasy_split_container_description(container, description):
 
 
 def _drayeasy_table(lines, found, data_from_top=False):
-    """按 DRAYEASY 六个表头的横坐标抽取明细，Description 换行合并到上一条。"""
+    """按 DRAYEASY 明细表五个表头的横坐标提取明细。"""
     ordered = sorted(found.items(), key=lambda pair: pair[1]['cx'] - pair[1]['w'] / 2)
     lefts = [item['cx'] - item['w'] / 2 for _, item in ordered]
     column_by_label = {label: index for index, label in enumerate(DRAYEASY_HEADERS)}
@@ -2847,7 +2849,7 @@ def _drayeasy_table(lines, found, data_from_top=False):
     data_lines = lines if data_from_top else [
         line for line in lines if line['cy'] > header_bottom + 2]
     rows = []
-    delivery_address = _drayeasy_delivery_address(lines, found)
+    delivery_address = _drayeasy_delivery_address(lines)
     stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'REMIT')
     for line in data_lines:
         compact = _compact_text(line['text'])
@@ -2860,10 +2862,10 @@ def _drayeasy_table(lines, found, data_from_top=False):
             if column is not None:
                 target = output_columns[column]
                 cells[target] = (cells[target] + ' ' + item['text']).strip()
-        if not any(cells[2:]):
+        if not any(cells[1:]):
             continue
         # 费率、数量或金额出现才是一条新明细；纯 Description 行接到上一条。
-        is_detail = any(_has_digit(cells[index]) for index in (3, 4, 5))
+        is_detail = any(_has_digit(cells[index]) for index in (2, 3, 4))
         if is_detail or not rows:
             rows.append(cells)
         else:
@@ -2871,11 +2873,10 @@ def _drayeasy_table(lines, found, data_from_top=False):
                 if value:
                     rows[-1][index] = (rows[-1][index] + ' ' + value).strip()
     for row in rows:
-        # Delivery Address 是发票级字段；若明细行未落在该列，使用表头正下方的地址补齐。
-        if not row[0] and delivery_address:
-            row[0] = delivery_address
-        row[1], row[2] = _drayeasy_split_container_description(row[1], row[2])
-    return [row for row in rows if any(row[2:])]
+        row[0], row[1] = _drayeasy_split_container_description(row[0], row[1])
+        # Delivery Address 位于明细表上方，固定重复写入每一条费用明细。
+        row.insert(0, delivery_address)
+    return [row for row in rows if any(row[3:])]
 
 
 def extract_drayeasy_page(items):
