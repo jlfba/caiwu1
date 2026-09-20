@@ -25,9 +25,12 @@ import cv2
 
 SOURCE_SUFFIXES = {'.pdf'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
-MONEY_TOKEN = r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?'
+MONEY_TOKEN = (r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*'
+               r'(?:\d{1,3}(?:[,，.]\d{3})+[,，.]\d{1,2}'
+               r'|\d{1,3}(?:[,，.]\d{3})+|\d+\.\d{1,2}|\d+)')
 NEGATIVE_MONEY_TOKEN = (r'[-－—–−]\s*(?:(?:CNY|人民币)\s*)?'
-                        r'[¥￥]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?')
+                        r'[¥￥]?\s*(?:\d{1,3}(?:[,，.]\d{3})+[,，.]\d{1,2}'
+                        r'|\d{1,3}(?:[,，.]\d{3})+|\d+\.\d{1,2}|\d+)')
 # 仅着色形如 54,466.00 或 -164.70 的两位小数金额，
 # 不把处理序号、日期或 “1789....png” 这类文件名数字误标。
 LOG_AMOUNT_TOKEN = r'(?<![A-Za-z0-9])[－—–−-]?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{1,2}(?![A-Za-z0-9])'
@@ -74,12 +77,23 @@ def compact(text: str) -> str:
 
 
 def parse_amount(value: str) -> Decimal | None:
-    """将 OCR/PDF 中带币种、千分位、负号的金额统一为两位 Decimal。"""
+    """将 OCR/PDF 中带币种、千分位、负号的金额统一为两位 Decimal。
+
+    兼容 OCR 将千分位逗号误读为点：7.084.00 -> 7084.00。
+    """
     if not value:
         return None
-    clean = re.sub(r'[^0-9.\-]', '', value.replace('－', '-'))
+    clean = re.sub(r'[^0-9.,\-]', '', value.replace('－', '-').replace('，', ','))
     if clean.count('-') > 1 or clean.startswith('-') is False and '-' in clean:
         return None
+    sign = '-' if clean.startswith('-') else ''
+    digits = clean[1:] if sign else clean
+    decimal_match = re.search(r'([.,])(\d{1,2})$', digits)
+    if decimal_match:
+        integer_part = re.sub(r'[.,]', '', digits[:decimal_match.start()])
+        clean = sign + integer_part + '.' + decimal_match.group(2)
+    else:
+        clean = sign + re.sub(r'[.,]', '', digits)
     try:
         return Decimal(clean).quantize(Decimal('0.01'))
     except (InvalidOperation, ValueError):
