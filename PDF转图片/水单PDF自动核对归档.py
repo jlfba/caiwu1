@@ -74,22 +74,37 @@ def amounts_after(text: str, labels: tuple[str, ...], limit: int = 80) -> list[D
 
 
 def reimbursement_amount_below(text: str) -> list[Decimal]:
-    """取“报销金额”标题下方的金额，适配 PDF 文字层与 OCR 的分行结果。
+    """取“报销金额”表头对应的金额，适配 PDF 表格文字层与 OCR。
 
-    此处不读取标题右侧内容：APP 支付付款申请的金额位于“报销金额”
-    标题下面，通常有“金额”“人民币”等说明文字后才出现数值。
+    PDF 表格的文字层有时按列、而非按视觉行输出；因此除了标题后的
+    四个文本行，还在表头后的有限文本范围内兜底找带小数/千分位的金额。
     """
     lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
     values: list[Decimal] = []
     for index, line in enumerate(lines):
         if '报销金额' not in compact(line):
             continue
-        # 只检查标题下方四行，避免错误拿到下一个字段/下一笔数据。
+        # 正常阅读顺序：仅检查标题下方四行。
         below = compact(' '.join(lines[index + 1:index + 5]))
         for match in re.finditer(MONEY_TOKEN, below, re.I):
             token = match.group(0)
             # 日期、编号等纯整数不应作为报销金额；金额应有小数、千分位或币种符号。
             if not any(mark in token.upper() for mark in ('.', ',', 'CNY', '¥', '￥', '$')):
+                continue
+            amount = parse_amount(token)
+            if amount is not None:
+                values.append(amount)
+                break
+
+    # 表格 PDF 可能将“报销金额（元）”和其下方的 5,332.00 分列输出。
+    # 在每个表头后的 300 个字符内兜底，仍要求金额有小数点或千分位，
+    # 排除日期、单据张数等纯数字。
+    normalized = compact(text)
+    for header in re.finditer(r'报销金额(?:[（(]元?[）)])?', normalized):
+        area = normalized[header.end():header.end() + 300]
+        for match in re.finditer(MONEY_TOKEN, area, re.I):
+            token = match.group(0)
+            if '.' not in token and ',' not in token:
                 continue
             amount = parse_amount(token)
             if amount is not None:
@@ -203,8 +218,9 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
                           or bool(re.search(r'\bUSD\b', text, re.I)))
             # 人民币 APP 支付的“报销金额”在标题下方，不在标题右侧。
             # “付款总额”和“汇款金额”仍按右侧金额取值。
+            reimbursement_values = reimbursement_amount_below(text) if not is_usd_pdf else []
             cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
-                          + reimbursement_amount_below(text)) if not is_usd_pdf else []
+                          + reimbursement_values) if not is_usd_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
             usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
             cny.extend(Record(path, value, '人民币') for value in cny_values)
@@ -215,6 +231,8 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             else:
                 values = cny_values or usd_values
                 log('  识别金额：' + '、'.join(str(value) for value in values))
+                if reimbursement_values:
+                    log('  报销金额候选：' + '、'.join(str(value) for value in reimbursement_values))
         except Exception as exc:
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
