@@ -304,7 +304,7 @@ def read_text(path: Path, retry_enhanced: bool = False) -> str:
     return ocr_text(path, retry_enhanced=retry_enhanced)
 
 
-def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]]]:
+def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
     cny: list[Record] = []
     usd: list[Record] = []
     report: list[dict[str, str]] = []
@@ -350,10 +350,10 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
     log(f'来源 PDF 识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
-    return cny, usd, report
+    return cny, usd, report, files
 
 
-def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]]]:
+def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
     cny: list[Record] = []
     usd: list[Record] = []
     report: list[dict[str, str]] = []
@@ -412,7 +412,7 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'水单读取失败：{exc}'))
     log(f'水单识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
-    return cny, usd, report
+    return cny, usd, report, files
 
 
 def row(source: Path | str, receipt: Path | str, amount: Decimal | str, result: str) -> dict[str, str]:
@@ -465,6 +465,14 @@ def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
         raise
 
 
+def archive_exception(path: Path, output_dir: Path) -> Path:
+    """将未能自动确认的单个文件移至异常目录，保留原名且不覆盖。"""
+    output_dir.mkdir(exist_ok=True)
+    target = safe_target(output_dir, path.name)
+    shutil.move(str(path), str(target))
+    return target
+
+
 def write_report(folder: Path, entries: list[dict[str, str]]) -> Path:
     report_path = folder / '水单匹配处理报告.csv'
     with report_path.open('w', encoding='utf-8-sig', newline='') as file:
@@ -500,8 +508,8 @@ def main() -> None:
                 log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
             log('=' * 60)
 
-            cny_sources, usd_sources, report = source_records(pdf_dir)
-            cny_receipts, usd_receipts, receipt_report = receipt_records(receipt_dir)
+            cny_sources, usd_sources, report, source_files = source_records(pdf_dir)
+            cny_receipts, usd_receipts, receipt_report, receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
             cny_pairs = unique_pairs(cny_sources, cny_receipts, report)
             usd_pairs = unique_pairs(usd_sources, usd_receipts, report)
@@ -518,12 +526,24 @@ def main() -> None:
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
                 moved += 1
 
+            # 其余参与本批扫描、但没有唯一正常匹配的文件，集中保留给人工复核。
+            paired_paths = {item.path for pair in cny_pairs + usd_pairs for item in pair}
+            exception_files = [path for path in source_files + receipt_files
+                               if path not in paired_paths and path.exists()]
+            exception_count = 0
+            for path in dict.fromkeys(exception_files):
+                archive_exception(path, pdf_dir / '异常文件夹')
+                log(f'已移至 异常文件夹：{path.name}')
+                report.append(row(path.name, '', '', '未能自动唯一匹配，已移至异常文件夹待进一步验证'))
+                exception_count += 1
+
             report_path = write_report(pdf_dir, report)
             log(f'处理完成：已归档 {moved} 对文件。')
+            log(f'待进一步验证：已移至异常文件夹 {exception_count} 个文件。')
             log('处理报告：' + display_path(report_path))
             continue_processing = messagebox.askyesno(
                 '本批处理完成',
-                f'已归档 {moved} 对文件。\n处理报告：\n{report_path}\n\n是否继续处理下一批？',
+                f'已归档 {moved} 对文件。\n已移至异常文件夹 {exception_count} 个文件。\n处理报告：\n{report_path}\n\n是否继续处理下一批？',
                 parent=root,
             )
             if not continue_processing:
