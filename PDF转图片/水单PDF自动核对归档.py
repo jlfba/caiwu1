@@ -97,11 +97,12 @@ def amounts_after(text: str, labels: tuple[str, ...], limit: int = 80) -> list[D
     return list(dict.fromkeys(values))
 
 
-SOURCE_TABLE_AMOUNT_LABELS = ('报销金额', '费用金额', '借款金额', '申请金额')
+# “总费用金额”是该类付款申请实际需核对的总额；不再读取单项“费用金额”。
+SOURCE_TABLE_AMOUNT_LABELS = ('报销金额', '总费用金额', '借款金额', '申请金额')
 
 
 def source_table_amounts(text: str) -> list[Decimal]:
-    """取四类来源表格金额，适配 PDF 表格文字层与 OCR。
+    """取四类来源表格总金额，适配 PDF 表格文字层与 OCR。
 
     PDF 表格的文字层有时按列、而非按视觉行输出；因此除了标题后的
     四个文本行，还在表头后的有限文本范围内兜底找带小数/千分位的金额。
@@ -230,7 +231,7 @@ def enhanced_ocr_image(image_path: Path) -> Path | None:
         if image is None:
             return None
         # 仅用于单张漏识别图片：放大 1.5 倍、局部对比度增强、Otsu 二值化。
-        # 对“费用金额”“汇款金额”这类细字加表格线，通常比原彩色截图更清晰。
+        # 对“总费用金额”“汇款金额”这类细字加表格线，通常比原彩色截图更清晰。
         enlarged = cv2.resize(image, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(enlarged)
@@ -304,7 +305,7 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             relative_parts = path.relative_to(pdf_dir).parts
             is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
                           or bool(re.search(r'\bUSD\b', text, re.I)))
-            # 付款总额/汇款金额可取右侧值；四类表格金额只按表头位置取值。
+            # 付款总额/汇款金额可取右侧值；四类表格总金额只按表头位置取值。
             table_amount_values = (pdf_table_amounts_by_position(path)
                                    + source_table_amounts(text)) if not is_usd_pdf else []
             table_amount_values = list(dict.fromkeys(table_amount_values))
