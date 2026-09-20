@@ -121,7 +121,7 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
     """返回人民币水单候选；类型顺序与业务规则一致。"""
     normalized = compact(text)
     found: list[tuple[Decimal, str]] = []
-    # 类型 3：私账水单，标签最明确，必须优先判断。
+    # 私账水单，标签最明确，必须优先判断。
     for amount in amounts_after(normalized, ('汇款金额小写',)):
         found.append((amount, '人民币-私账'))
     # 类型 2：APP 支付。OCR 常把短横识别为全角横线、长横线或数学减号；
@@ -156,6 +156,12 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
     # 另一种普通银行水单直接显示“付款金额：54,466.00”，无需 CNY 标记。
     for amount in amounts_after(normalized, ('付款金额',)):
         found.append((amount, '人民币-常规付款金额'))
+    # 类型 1 还会出现“金额（小写）：8,300.00”及“汇款金额：200.00元”。
+    # 括号可因 PDF/OCR 变成全角或半角，compact 后均可统一识别。
+    for amount in amounts_after(normalized, ('金额（小写）', '金额(小写)', '金额小写')):
+        found.append((amount, '人民币-常规金额小写'))
+    for amount in amounts_after(normalized, ('汇款金额',)):
+        found.append((amount, '人民币-常规汇款金额'))
     return list(dict.fromkeys(found))
 
 
