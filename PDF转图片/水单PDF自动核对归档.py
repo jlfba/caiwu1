@@ -27,6 +27,10 @@ IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
 MONEY_TOKEN = r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?'
 NEGATIVE_MONEY_TOKEN = (r'[-－—–−]\s*(?:(?:CNY|人民币)\s*)?'
                         r'[¥￥]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?')
+# 仅着色包含小数点或千分位的金额，避免将处理序号、日期和文件名数字误标。
+LOG_AMOUNT_TOKEN = r'(?<![A-Za-z0-9])[－—–−-]?(?=\d[\d,]*[.,])\d[\d,]*(?:\.\d{1,2})?(?![A-Za-z0-9])'
+ANSI_BOLD_GREEN = '\033[1;92m'
+ANSI_RESET = '\033[0m'
 
 
 @dataclass(frozen=True)
@@ -37,8 +41,26 @@ class Record:
 
 
 def log(message: str) -> None:
-    """实时输出到双击脚本后打开的控制台。"""
-    print(message, flush=True)
+    """实时输出；日志中的金额统一显示为亮绿色加粗。"""
+    colored = re.sub(LOG_AMOUNT_TOKEN,
+                     lambda match: ANSI_BOLD_GREEN + match.group(0) + ANSI_RESET,
+                     str(message))
+    print(colored, flush=True)
+
+
+def enable_console_color() -> None:
+    """为传统 Windows 控制台启用 ANSI 颜色，失败时仍保留正常日志。"""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_ulong()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        pass
 
 
 def display_path(path: Path) -> str:
@@ -370,6 +392,7 @@ def choose_folder(root: Tk, title: str) -> Path | None:
 
 
 def main() -> None:
+    enable_console_color()
     root = Tk()
     root.withdraw()
     root.attributes('-topmost', True)
