@@ -2845,7 +2845,7 @@ def _drayeasy_repair_shifted_amount(row):
     """修复 PDF 表头坐标错位时 Rate/Qty/Amount 整体向左写入的行。"""
     # 正常五列为 Container, Description, Rate, Qty, Amount。真实票面若 Amount
     # 表头未被文字层正确读出，会变成：Description 含 Rate，Rate 含 Qty，Qty 含 Amount。
-    if len(row) != 5 or row[4] or not row[1]:
+    if len(row) != 5 or str(row[4] or '').strip() or not str(row[1] or '').strip():
         return row
     combined = ' '.join(str(value or '').strip() for value in row[1:] if str(value or '').strip())
     pattern = re.compile(r'^(.*?)\s+(' + _DRAYEASY_MONEY_RE + r')\s+('
