@@ -123,21 +123,33 @@ def source_table_amounts(text: str) -> list[Decimal]:
                 values.append(amount)
                 break
 
-    # 表格 PDF 可能将表头与金额分列输出，例如“费用金额”与下方的 450.00元。
-    # 在每个表头后的 300 个字符内兜底，仍要求金额有小数点或千分位，
-    # 排除日期、单据张数等纯数字。
-    normalized = compact(text)
-    for label in SOURCE_TABLE_AMOUNT_LABELS:
-        for header in re.finditer(re.escape(label) + r'(?:[（(]元?[）)])?', normalized):
-            area = normalized[header.end():header.end() + 300]
-            for match in re.finditer(MONEY_TOKEN, area, re.I):
-                token = match.group(0)
-                if '.' not in token and ',' not in token:
-                    continue
-                amount = parse_amount(token)
-                if amount is not None:
-                    values.append(amount)
-                    break
+    return list(dict.fromkeys(values))
+
+
+def pdf_table_amounts_by_position(path: Path) -> list[Decimal]:
+    """按 PDF 坐标取金额表头正下方同列的最近金额，避免扫到日期等其他数字。"""
+    values: list[Decimal] = []
+    doc = fitz.open(path)
+    try:
+        for page in doc:
+            words = page.get_text('words')  # x0, y0, x1, y1, word, block, line, word_no
+            labels = [word for word in words if any(label in compact(word[4])
+                      for label in SOURCE_TABLE_AMOUNT_LABELS)]
+            for label in labels:
+                lx0, ly0, lx1, ly1 = label[:4]
+                candidates: list[tuple[float, Decimal]] = []
+                for word in words:
+                    wx0, wy0, wx1, _wy1, value = word[:5]
+                    # 必须在表头下方，且与表头横向重叠或非常接近同一列。
+                    if wy0 < ly1 - 2 or wx1 < lx0 - 12 or wx0 > lx1 + 12:
+                        continue
+                    amount = parse_amount(value)
+                    if amount is not None and ('.' in value or ',' in value):
+                        candidates.append((wy0 - ly1, amount))
+                if candidates:
+                    values.append(min(candidates, key=lambda item: item[0])[1])
+    finally:
+        doc.close()
     return list(dict.fromkeys(values))
 
 
@@ -292,9 +304,11 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             relative_parts = path.relative_to(pdf_dir).parts
             is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
                           or bool(re.search(r'\bUSD\b', text, re.I)))
-            # 来源 PDF 支持付款总额/汇款金额，以及四类表格金额的右侧或下方取值。
-            table_amount_values = source_table_amounts(text) if not is_usd_pdf else []
-            cny_values = (amounts_after(text, ('付款总额', '汇款金额') + SOURCE_TABLE_AMOUNT_LABELS)
+            # 付款总额/汇款金额可取右侧值；四类表格金额只按表头位置取值。
+            table_amount_values = (pdf_table_amounts_by_position(path)
+                                   + source_table_amounts(text)) if not is_usd_pdf else []
+            table_amount_values = list(dict.fromkeys(table_amount_values))
+            cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                           + table_amount_values) if not is_usd_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
             usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
@@ -305,7 +319,7 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
                 is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
                               or bool(re.search(r'\bUSD\b', text, re.I)))
                 table_amount_values = source_table_amounts(text) if not is_usd_pdf else []
-                cny_values = (amounts_after(text, ('付款总额', '汇款金额') + SOURCE_TABLE_AMOUNT_LABELS)
+                cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                               + table_amount_values) if not is_usd_pdf else []
                 cny_values = list(dict.fromkeys(cny_values))
                 usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
