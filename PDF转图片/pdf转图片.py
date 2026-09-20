@@ -2838,33 +2838,15 @@ def _drayeasy_split_container_description(container, description):
     return container_no, desc
 
 
-_DRAYEASY_MONEY_RE = r'(?:[$¥￥]\s*)?[-+]?\(?\d[\d,]*(?:\.\d+)?\)?'
-
-
-def _drayeasy_repair_shifted_amount(row):
-    """修复 PDF 表头坐标错位时 Rate/Qty/Amount 整体向左写入的行。"""
-    # 正常五列为 Container, Description, Rate, Qty, Amount。真实票面若 Amount
-    # 表头未被文字层正确读出，会变成：Description 含 Rate，Rate 含 Qty，Qty 含 Amount。
-    if len(row) != 5 or str(row[4] or '').strip() or not str(row[1] or '').strip():
-        return row
-    combined = ' '.join(str(value or '').strip() for value in row[1:] if str(value or '').strip())
-    pattern = re.compile(r'^(.*?)\s+(' + _DRAYEASY_MONEY_RE + r')\s+('
-                         + _DRAYEASY_MONEY_RE + r')\s+(' + _DRAYEASY_MONEY_RE + r')$')
-    match = pattern.match(combined)
-    if match is None:
-        return row
-    description, rate, qty, amount = (part.strip() for part in match.groups())
-    if not description:
-        return row
-    return [row[0], description, rate, qty, amount]
-
-
 def _drayeasy_table(lines, found, data_from_top=False):
     """按 DRAYEASY 明细表五个表头的横坐标提取明细。"""
     ordered = sorted(found.items(), key=lambda pair: pair[1]['cx'] - pair[1]['w'] / 2)
-    lefts = [item['cx'] - item['w'] / 2 for _, item in ordered]
     column_by_label = {label: index for index, label in enumerate(DRAYEASY_HEADERS)}
-    bounds = [float('-inf')] + lefts[1:] + [float('inf')]
+    # 复用项目其他表格解析的标准做法：相邻表头中心点的中点就是分列边界。
+    # 不能取表头文字的左边缘，Description 等宽列会把 Rate/Qty/Amount 全部推到左列。
+    centers = [item['cx'] for _, item in ordered]
+    bounds = [float('-inf')] + [(centers[index] + centers[index + 1]) / 2
+                                for index in range(len(centers) - 1)] + [float('inf')]
     output_columns = [column_by_label[label] for label, _ in ordered]
     header_bottom = max(item['cy'] + item['h'] / 2 for _, item in ordered)
     data_lines = lines if data_from_top else [
@@ -2894,7 +2876,6 @@ def _drayeasy_table(lines, found, data_from_top=False):
                 if value:
                     rows[-1][index] = (rows[-1][index] + ' ' + value).strip()
     for row in rows:
-        row[:] = _drayeasy_repair_shifted_amount(row)
         row[0], row[1] = _drayeasy_split_container_description(row[0], row[1])
         # Delivery Address 位于明细表上方，固定重复写入每一条费用明细。
         row.insert(0, delivery_address)
