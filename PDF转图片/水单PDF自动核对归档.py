@@ -332,8 +332,6 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             else:
                 values = cny_values or usd_values
                 log('  识别金额：' + '、'.join(str(value) for value in values))
-                if table_amount_values:
-                    log('  表格金额候选：' + '、'.join(str(value) for value in table_amount_values))
         except Exception as exc:
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
