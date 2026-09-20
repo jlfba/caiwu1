@@ -73,8 +73,11 @@ def amounts_after(text: str, labels: tuple[str, ...], limit: int = 80) -> list[D
     return list(dict.fromkeys(values))
 
 
-def reimbursement_amount_below(text: str) -> list[Decimal]:
-    """取“报销金额”表头对应的金额，适配 PDF 表格文字层与 OCR。
+SOURCE_TABLE_AMOUNT_LABELS = ('报销金额', '费用金额', '借款金额', '申请金额')
+
+
+def source_table_amounts(text: str) -> list[Decimal]:
+    """取四类来源表格金额，适配 PDF 表格文字层与 OCR。
 
     PDF 表格的文字层有时按列、而非按视觉行输出；因此除了标题后的
     四个文本行，还在表头后的有限文本范围内兜底找带小数/千分位的金额。
@@ -82,7 +85,7 @@ def reimbursement_amount_below(text: str) -> list[Decimal]:
     lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
     values: list[Decimal] = []
     for index, line in enumerate(lines):
-        if '报销金额' not in compact(line):
+        if not any(label in compact(line) for label in SOURCE_TABLE_AMOUNT_LABELS):
             continue
         # 正常阅读顺序：仅检查标题下方四行。
         below = compact(' '.join(lines[index + 1:index + 5]))
@@ -96,20 +99,21 @@ def reimbursement_amount_below(text: str) -> list[Decimal]:
                 values.append(amount)
                 break
 
-    # 表格 PDF 可能将“报销金额（元）”和其下方的 5,332.00 分列输出。
+    # 表格 PDF 可能将表头与金额分列输出，例如“费用金额”与下方的 450.00元。
     # 在每个表头后的 300 个字符内兜底，仍要求金额有小数点或千分位，
     # 排除日期、单据张数等纯数字。
     normalized = compact(text)
-    for header in re.finditer(r'报销金额(?:[（(]元?[）)])?', normalized):
-        area = normalized[header.end():header.end() + 300]
-        for match in re.finditer(MONEY_TOKEN, area, re.I):
-            token = match.group(0)
-            if '.' not in token and ',' not in token:
-                continue
-            amount = parse_amount(token)
-            if amount is not None:
-                values.append(amount)
-                break
+    for label in SOURCE_TABLE_AMOUNT_LABELS:
+        for header in re.finditer(re.escape(label) + r'(?:[（(]元?[）)])?', normalized):
+            area = normalized[header.end():header.end() + 300]
+            for match in re.finditer(MONEY_TOKEN, area, re.I):
+                token = match.group(0)
+                if '.' not in token and ',' not in token:
+                    continue
+                amount = parse_amount(token)
+                if amount is not None:
+                    values.append(amount)
+                    break
     return list(dict.fromkeys(values))
 
 
@@ -226,11 +230,10 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             relative_parts = path.relative_to(pdf_dir).parts
             is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
                           or bool(re.search(r'\bUSD\b', text, re.I)))
-            # 人民币 APP 支付的“报销金额”在标题下方，不在标题右侧。
-            # “付款总额”和“汇款金额”仍按右侧金额取值。
-            reimbursement_values = reimbursement_amount_below(text) if not is_usd_pdf else []
-            cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
-                          + reimbursement_values) if not is_usd_pdf else []
+            # 来源 PDF 支持付款总额/汇款金额，以及四类表格金额的右侧或下方取值。
+            table_amount_values = source_table_amounts(text) if not is_usd_pdf else []
+            cny_values = (amounts_after(text, ('付款总额', '汇款金额') + SOURCE_TABLE_AMOUNT_LABELS)
+                          + table_amount_values) if not is_usd_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
             usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
             cny.extend(Record(path, value, '人民币') for value in cny_values)
@@ -241,8 +244,8 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             else:
                 values = cny_values or usd_values
                 log('  识别金额：' + '、'.join(str(value) for value in values))
-                if reimbursement_values:
-                    log('  报销金额候选：' + '、'.join(str(value) for value in reimbursement_values))
+                if table_amount_values:
+                    log('  表格金额候选：' + '、'.join(str(value) for value in table_amount_values))
         except Exception as exc:
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
