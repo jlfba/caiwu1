@@ -278,10 +278,10 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
     cny: list[Record] = []
     usd: list[Record] = []
     report: list[dict[str, str]] = []
-    files = [path for path in sorted(pdf_dir.rglob('*'))
-             if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
-             and not ({'水单正常匹配', '美金正常'} & set(path.relative_to(pdf_dir).parts))]
-    log(f'第一步完成扫描：发现 {len(files)} 份来源 PDF，开始识别金额。')
+    # 只扫描用户选择的当前文件夹，不进入任何子文件夹。
+    files = [path for path in sorted(pdf_dir.iterdir())
+             if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
+    log(f'第一步完成扫描（不扫描子文件夹）：发现 {len(files)} 份来源 PDF，开始识别金额。')
     for index, path in enumerate(files, 1):
         try:
             log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
@@ -324,14 +324,15 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
         # 不能因扩展名为 PNG 就参与水单金额匹配。
         if path.suffix.lower() in IMAGE_SUFFIXES and '提交的付款申请' in path.stem:
             return False
-        # 人民币水单是图片；美元水单 PDF 只应从指定银行子文件夹读取。
+        # 人民币水单是图片；美元水单 PDF 必须直接放在所选目录，
+        # 并由文件名或正文中的银行标识判断。
         if path.suffix.lower() != '.pdf':
             return True
-        parts = set(path.relative_to(receipt_dir).parts)
-        return bool({'中信银行', '招商银行'} & parts)
+        return '中信银行' in path.name or '招商银行' in path.name
 
-    files = [path for path in sorted(receipt_dir.rglob('*')) if is_receipt_file(path)]
-    log(f'第二步完成扫描：发现 {len(files)} 份水单图片/PDF，开始 OCR 识别。')
+    # 只扫描用户选择的当前文件夹，不进入任何子文件夹。
+    files = [path for path in sorted(receipt_dir.iterdir()) if is_receipt_file(path)]
+    log(f'第二步完成扫描（不扫描子文件夹）：发现 {len(files)} 份水单图片/PDF，开始 OCR 识别。')
     for index, path in enumerate(files, 1):
         try:
             log(f'[水单 {index}/{len(files)}] 正在识别：{path.name}')
@@ -339,9 +340,9 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             cny_values = cny_receipt_amounts(text)
             for amount, kind in cny_values:
                 cny.append(Record(path, amount, kind))
-            parts = {part.lower() for part in path.parts}
-            is_citic = '中信银行' in path.parts or 'citic' in parts
-            is_cmb = '招商银行' in path.parts or 'cmb' in parts
+            file_name = path.name.lower()
+            is_citic = '中信银行' in path.name or 'citic' in file_name
+            is_cmb = '招商银行' in path.name or 'cmb' in file_name
             usd_values = usd_receipt_amounts(text, is_citic, is_cmb)
             for amount, kind in usd_values:
                 usd.append(Record(path, amount, kind))
