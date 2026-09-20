@@ -115,6 +115,13 @@ def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
             if amount is not None:
                 # APP 支付水单以负数表示支出，来源 PDF 的付款总额是正数。
                 found.append((abs(amount), '人民币-APP'))
+    # 微信/零钱通“支付成功”截图把付款金额单独以大字放在页面中央，
+    # 没有“金额”字段，不能沿用银行水单的字段位置规则。
+    if re.search(r'支付成功|扫码付款|微信支付|零钱通', normalized):
+        for match in re.finditer(NEGATIVE_MONEY_TOKEN, normalized, re.I):
+            amount = parse_amount(match.group(0))
+            if amount is not None:
+                found.append((abs(amount), '人民币-APP微信支付'))
     # 类型 1：常规水单，只接受金额字段附近明确出现 CNY 的值。
     for match in re.finditer(r'金额.{0,50}?CNY\s*([¥￥]?\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?)', normalized, re.I):
         amount = parse_amount(match.group(1))
@@ -252,7 +259,7 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
                 negative_values = [abs(value) for value in negative_values if value is not None]
                 if negative_values:
                     log('  检测到负数金额 ' + '、'.join(str(value) for value in negative_values)
-                        + '，但未在“金额”字段后找到；请保留该日志供核对。')
+                        + '，但未能确认为“金额”字段或微信支付成功页。')
                 log('  未识别到符合水单规则的金额。')
         except Exception as exc:
             log(f'  识别失败：{exc}')
