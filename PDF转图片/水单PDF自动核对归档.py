@@ -20,7 +20,7 @@ from pathlib import Path
 from tkinter import Tk, filedialog, messagebox
 
 import fitz
-from PIL import Image, ImageEnhance, ImageFilter
+import cv2
 
 
 SOURCE_SUFFIXES = {'.pdf'}
@@ -214,19 +214,18 @@ _OCR = None
 def enhanced_ocr_image(image_path: Path) -> Path | None:
     """为单张识别失败的细小水单生成轻量 OCR 临时图。"""
     try:
-        with Image.open(image_path) as image:
-            # 仅用于原图未识别到水单金额的重试，避免批量处理占满电脑资源。
-            enlarged = image.convert('RGB').resize(
-                (max(image.width + 1, int(image.width * 1.5)),
-                 max(image.height + 1, int(image.height * 1.5))),
-                Image.Resampling.LANCZOS
-            )
-            enhanced = ImageEnhance.Contrast(enlarged).enhance(1.15)
-            enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.2)
-            enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=1, percent=80, threshold=5))
-            temp = Path(tempfile.gettempdir()) / f'water-slip-enhanced-{os.getpid()}-{image_path.stem}.png'
-            enhanced.save(temp, format='PNG')
-            return temp
+        image = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return None
+        # 仅用于单张漏识别图片：放大 1.5 倍、局部对比度增强、Otsu 二值化。
+        # 对“费用金额”“汇款金额”这类细字加表格线，通常比原彩色截图更清晰。
+        enlarged = cv2.resize(image, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(enlarged)
+        _, enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        temp = Path(tempfile.gettempdir()) / f'water-slip-enhanced-{os.getpid()}-{image_path.stem}.png'
+        cv2.imwrite(str(temp), enhanced)
+        return temp
     except Exception:
         return None
 
@@ -250,28 +249,32 @@ def ocr_text(image_path: Path, retry_enhanced: bool = False) -> str:
             enhanced_path.unlink(missing_ok=True)
 
 
-def pdf_text(path: Path) -> str:
+def pdf_text(path: Path, retry_enhanced: bool = False) -> str:
     """优先原生文字层；扫描 PDF 没有文字时逐页渲染后 OCR。"""
     doc = fitz.open(path)
     temporary: list[Path] = []
     try:
         native = '\n'.join(page.get_text('text') for page in doc)
-        if compact(native):
+        # 常规情况优先用 PDF 文字层；来源金额没取到而重试时，
+        # 强制渲染整页后 OCR，避免重复读取同一份表格乱序文字层。
+        if compact(native) and not retry_enhanced:
             return native
         for number, page in enumerate(doc, 1):
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             temp = Path(tempfile.gettempdir()) / f'water-slip-ocr-{os.getpid()}-{number}.png'
             pix.save(str(temp))
             temporary.append(temp)
-        return '\n'.join(ocr_text(path) for path in temporary)
+        return '\n'.join(ocr_text(path, retry_enhanced=retry_enhanced) for path in temporary)
     finally:
         doc.close()
         for temp in temporary:
             temp.unlink(missing_ok=True)
 
 
-def read_text(path: Path) -> str:
-    return pdf_text(path) if path.suffix.lower() == '.pdf' else ocr_text(path)
+def read_text(path: Path, retry_enhanced: bool = False) -> str:
+    if path.suffix.lower() == '.pdf':
+        return pdf_text(path, retry_enhanced=retry_enhanced)
+    return ocr_text(path, retry_enhanced=retry_enhanced)
 
 
 def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]]]:
@@ -295,6 +298,17 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
                           + table_amount_values) if not is_usd_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
             usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
+            if not cny_values and not usd_values:
+                # 扫描版付款申请中的细字表格先原图 OCR，失败后才走局部对比度增强。
+                log('  原图未识别到来源金额，正在增强后重试…')
+                text = read_text(path, retry_enhanced=True)
+                is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
+                              or bool(re.search(r'\bUSD\b', text, re.I)))
+                table_amount_values = source_table_amounts(text) if not is_usd_pdf else []
+                cny_values = (amounts_after(text, ('付款总额', '汇款金额') + SOURCE_TABLE_AMOUNT_LABELS)
+                              + table_amount_values) if not is_usd_pdf else []
+                cny_values = list(dict.fromkeys(cny_values))
+                usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
             cny.extend(Record(path, value, '人民币') for value in cny_values)
             usd.extend(Record(path, value, '美元') for value in usd_values)
             if not cny_values and not usd_values:
