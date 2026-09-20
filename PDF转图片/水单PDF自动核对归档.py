@@ -444,47 +444,50 @@ def main() -> None:
     root.withdraw()
     root.attributes('-topmost', True)
     try:
-        pdf_dir = choose_folder(root, '第一步：选择存放报销/付款 PDF 的主文件夹')
-        if not pdf_dir:
-            return
-        receipt_dir = choose_folder(root, '第二步：选择存放人民币/美元等水单的文件夹')
-        if not receipt_dir:
-            return
-        log('=' * 60)
-        log('开始水单 PDF 自动核对')
-        log('来源 PDF 文件夹：' + display_path(pdf_dir))
-        log('水单文件夹：' + display_path(receipt_dir))
-        if pdf_dir == receipt_dir:
-            log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
-        log('=' * 60)
+        while True:
+            pdf_dir = choose_folder(root, '第一步：选择存放报销/付款 PDF 的主文件夹')
+            if not pdf_dir:
+                return
+            receipt_dir = choose_folder(root, '第二步：选择存放人民币/美元等水单的文件夹')
+            if not receipt_dir:
+                return
+            log('=' * 60)
+            log('开始水单 PDF 自动核对')
+            log('来源 PDF 文件夹：' + display_path(pdf_dir))
+            log('水单文件夹：' + display_path(receipt_dir))
+            if pdf_dir == receipt_dir:
+                log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
+            log('=' * 60)
 
-        cny_sources, usd_sources, report = source_records(pdf_dir)
-        cny_receipts, usd_receipts, receipt_report = receipt_records(receipt_dir)
-        report.extend(receipt_report)
-        cny_pairs = unique_pairs(cny_sources, cny_receipts, report)
-        usd_pairs = unique_pairs(usd_sources, usd_receipts, report)
+            cny_sources, usd_sources, report = source_records(pdf_dir)
+            cny_receipts, usd_receipts, receipt_report = receipt_records(receipt_dir)
+            report.extend(receipt_report)
+            cny_pairs = unique_pairs(cny_sources, cny_receipts, report)
+            usd_pairs = unique_pairs(usd_sources, usd_receipts, report)
 
-        moved = 0
-        for source, receipt in cny_pairs:
-            archive_pair(source, receipt, pdf_dir / '水单正常匹配')
-            log(f'已归档到 水单正常匹配：{source.path.name}')
-            report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
-            moved += 1
-        for source, receipt in usd_pairs:
-            archive_pair(source, receipt, pdf_dir / '美金正常')
-            log(f'已归档到 美金正常：{source.path.name}')
-            report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
-            moved += 1
+            moved = 0
+            for source, receipt in cny_pairs:
+                archive_pair(source, receipt, pdf_dir / '水单正常匹配')
+                log(f'已归档到 水单正常匹配：{source.path.name}')
+                report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
+                moved += 1
+            for source, receipt in usd_pairs:
+                archive_pair(source, receipt, pdf_dir / '美金正常')
+                log(f'已归档到 美金正常：{source.path.name}')
+                report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
+                moved += 1
 
-        report_path = write_report(pdf_dir, report)
-        log(f'处理完成：已归档 {moved} 对文件。')
-        log('处理报告：' + display_path(report_path))
-        log('按回车键关闭此窗口。')
-        messagebox.showinfo(
-            '水单 PDF 自动核对完成',
-            f'已归档 {moved} 对文件。\n处理报告：\n{report_path}',
-            parent=root,
-        )
+            report_path = write_report(pdf_dir, report)
+            log(f'处理完成：已归档 {moved} 对文件。')
+            log('处理报告：' + display_path(report_path))
+            continue_processing = messagebox.askyesno(
+                '本批处理完成',
+                f'已归档 {moved} 对文件。\n处理报告：\n{report_path}\n\n是否继续处理下一批？',
+                parent=root,
+            )
+            if not continue_processing:
+                log('用户选择不继续处理，按回车键关闭此窗口。')
+                break
     except Exception as exc:
         traceback.print_exc()
         messagebox.showerror('水单 PDF 自动核对失败', str(exc))
