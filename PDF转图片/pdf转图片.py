@@ -2797,6 +2797,45 @@ def _drayeasy_invoice_no(lines):
     return value or '未知'
 
 
+def _drayeasy_delivery_address(lines, found):
+    """取 Delivery Address 表头正下方的地址，供明细行重复使用。"""
+    anchor = found.get('DELIVERY ADDRESS')
+    if anchor is None:
+        return ''
+    header_bottom = anchor['cy'] + anchor['h'] / 2
+    # 地址栏右界取相邻 Container 表头左侧，避免把柜号或费用说明拼进地址。
+    container = found.get('CONTAINER')
+    left = anchor['cx'] - anchor['w'] / 2 - 12
+    right = (container['cx'] - container['w'] / 2 - 4
+             if container is not None else anchor['cx'] + max(anchor['w'], 180))
+    parts = []
+    for line in lines:
+        if line['cy'] <= header_bottom + 2:
+            continue
+        values = [item['text'] for item in line['items']
+                  if left <= item['cx'] < right]
+        if values:
+            parts.append(' '.join(values))
+            # 地址通常在表头下一视觉行；不跨行采集，避免带入下方下一条明细。
+            break
+    return ' '.join(parts).strip()
+
+
+def _drayeasy_split_container_description(container, description):
+    """将误落入 Container 的“柜号 + 费用描述”拆回两个字段。"""
+    value = str(container or '').strip()
+    # 常见 ISO 柜号为 4 个字母加 7 位数字，例如 TLLU7865126。
+    match = re.search(r'\b([A-Z]{4}\s*[-]?\s*\d{7})\b', value, flags=re.I)
+    if match is None:
+        return value, str(description or '').strip()
+    container_no = re.sub(r'[\s-]+', '', match.group(1)).upper()
+    remainder = (value[:match.start()] + ' ' + value[match.end():]).strip()
+    desc = str(description or '').strip()
+    if remainder and remainder.lower() not in desc.lower():
+        desc = (remainder + (' ' + desc if desc else '')).strip()
+    return container_no, desc
+
+
 def _drayeasy_table(lines, found, data_from_top=False):
     """按 DRAYEASY 六个表头的横坐标抽取明细，Description 换行合并到上一条。"""
     ordered = sorted(found.items(), key=lambda pair: pair[1]['cx'] - pair[1]['w'] / 2)
@@ -2808,6 +2847,7 @@ def _drayeasy_table(lines, found, data_from_top=False):
     data_lines = lines if data_from_top else [
         line for line in lines if line['cy'] > header_bottom + 2]
     rows = []
+    delivery_address = _drayeasy_delivery_address(lines, found)
     stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'REMIT')
     for line in data_lines:
         compact = _compact_text(line['text'])
@@ -2830,6 +2870,11 @@ def _drayeasy_table(lines, found, data_from_top=False):
             for index, value in enumerate(cells):
                 if value:
                     rows[-1][index] = (rows[-1][index] + ' ' + value).strip()
+    for row in rows:
+        # Delivery Address 是发票级字段；若明细行未落在该列，使用表头正下方的地址补齐。
+        if not row[0] and delivery_address:
+            row[0] = delivery_address
+        row[1], row[2] = _drayeasy_split_container_description(row[1], row[2])
     return [row for row in rows if any(row[2:])]
 
 
