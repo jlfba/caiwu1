@@ -957,7 +957,7 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if inv_type == '14':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'DRAYEASY发票明细表.xlsx', tool.DRAYEASY_OUTPUT_HEADERS,
-            {4, 5, 6}, set(), [18, 34, 18, 46, 14, 10, 14])
+            {7, 8, 9}, set(), [18, 18, 24, 18, 34, 18, 46, 14, 10, 14])
     elif inv_type == '13':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'EYNEX发票明细表.xlsx', tool.EYNEX_OUTPUT_HEADERS,

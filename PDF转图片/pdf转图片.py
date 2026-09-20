@@ -827,10 +827,12 @@ EYNEX_HEADERS = ('DATE', 'ACTIVITY', 'DESCRIPTION', 'QTY', 'RATE', 'AMOUNT')
 EYNEX_OUTPUT_HEADERS = ('发票号', '柜号', 'DATE', '费用', 'DESCRIPTION',
                         'QTY', 'RATE', '金额')
 
-# DRAYEASY 发票：INVOICE 在票面右侧取值；地址、柜号与明细表头以下的内容按明细行输出。
+# DRAYEASY 发票：前三列为付款组填写列；INVOICE 在票面右侧取值，
+# 地址、柜号与明细表头以下的内容按明细行输出。
 DRAYEASY_HEADERS = ('DELIVERY ADDRESS', 'CONTAINER', 'DESCRIPTION', 'RATE', 'QTY', 'AMOUNT')
-DRAYEASY_OUTPUT_HEADERS = ('INVOICE', 'Delivery Address', 'Container',
-                           'Description', 'Rate', 'Qty', 'Amount')
+DRAYEASY_OUTPUT_HEADERS = ('配仓单号', '单号', '费用名称', 'INVOICE',
+                           'Delivery Address', 'Container', 'Description',
+                           'Rate', 'Qty', 'Amount')
 
 
 def _compact_text(text):
@@ -2865,7 +2867,8 @@ def extract_drayeasy_from_pdfs(pdf_paths):
                 elif found is not None:
                     rows = _drayeasy_table(_group_detail_lines(items), found, data_from_top=True)
                 for row in rows:
-                    all_rows.append([last_invoice] + row)
+                    # 配仓单号、单号、费用名称用于付款组后续填写，固定置于导出表前三列。
+                    all_rows.append(['', '', '', last_invoice] + row)
         finally:
             doc.close()
     return all_rows, pages, skipped

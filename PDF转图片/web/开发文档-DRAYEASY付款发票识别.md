@@ -6,15 +6,18 @@
 
 ## 输出约定
 
-Excel 固定为七列，且按明细行重复发票级字段：
+Excel 固定为十列；付款组补充填写列置于前三列，后七列按明细行重复发票级字段：
 
-1. INVOICE
-2. Delivery Address
-3. Container
-4. Description
-5. Rate
-6. Qty
-7. Amount
+1. 配仓单号
+2. 单号
+3. 费用名称
+4. INVOICE
+5. Delivery Address
+6. Container
+7. Description
+8. Rate
+9. Qty
+10. Amount
 
 ## 实现与验证
 
