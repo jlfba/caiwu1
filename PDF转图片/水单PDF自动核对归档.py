@@ -71,6 +71,31 @@ def amounts_after(text: str, labels: tuple[str, ...], limit: int = 80) -> list[D
     return list(dict.fromkeys(values))
 
 
+def reimbursement_amount_below(text: str) -> list[Decimal]:
+    """取“报销金额”标题下方的金额，适配 PDF 文字层与 OCR 的分行结果。
+
+    此处不读取标题右侧内容：APP 支付付款申请的金额位于“报销金额”
+    标题下面，通常有“金额”“人民币”等说明文字后才出现数值。
+    """
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+    values: list[Decimal] = []
+    for index, line in enumerate(lines):
+        if '报销金额' not in compact(line):
+            continue
+        # 只检查标题下方四行，避免错误拿到下一个字段/下一笔数据。
+        below = compact(' '.join(lines[index + 1:index + 5]))
+        for match in re.finditer(MONEY_TOKEN, below, re.I):
+            token = match.group(0)
+            # 日期、编号等纯整数不应作为报销金额；金额应有小数、千分位或币种符号。
+            if not any(mark in token.upper() for mark in ('.', ',', 'CNY', '¥', '￥', '$')):
+                continue
+            amount = parse_amount(token)
+            if amount is not None:
+                values.append(amount)
+                break
+    return list(dict.fromkeys(values))
+
+
 def cny_receipt_amounts(text: str) -> list[tuple[Decimal, str]]:
     """返回人民币水单候选；类型顺序与业务规则一致。"""
     normalized = compact(text)
@@ -163,7 +188,11 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             relative_parts = path.relative_to(pdf_dir).parts
             is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
                           or bool(re.search(r'\bUSD\b', text, re.I)))
-            cny_values = amounts_after(text, ('付款总额', '报销金额', '汇款金额')) if not is_usd_pdf else []
+            # 人民币 APP 支付的“报销金额”在标题下方，不在标题右侧。
+            # “付款总额”和“汇款金额”仍按右侧金额取值。
+            cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
+                          + reimbursement_amount_below(text)) if not is_usd_pdf else []
+            cny_values = list(dict.fromkeys(cny_values))
             usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
             cny.extend(Record(path, value, '人民币') for value in cny_values)
             usd.extend(Record(path, value, '美元') for value in usd_values)
