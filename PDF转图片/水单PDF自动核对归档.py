@@ -24,7 +24,7 @@ import fitz
 
 SOURCE_SUFFIXES = {'.pdf'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
-MONEY_TOKEN = r'[-－]?s*(?:CNY|USD)?s*[¥￥$]?s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?'
+MONEY_TOKEN = r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*[0-9][0-9,，]*(?:\.[0-9]{1,2})?'
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,15 @@ class Record:
     path: Path
     amount: Decimal
     kind: str
+
+
+def log(message: str) -> None:
+    """实时输出到双击脚本后打开的控制台。"""
+    print(message, flush=True)
+
+
+def display_path(path: Path) -> str:
+    return str(path)
 
 
 def compact(text: str) -> str:
@@ -108,7 +117,9 @@ _OCR = None
 def ocr_text(image_path: Path) -> str:
     global _OCR
     if _OCR is None:
+        log('正在加载 OCR 识别模型，首次加载可能需要几十秒…')
         _OCR = get_ocr()
+        log('OCR 识别模型加载完成。')
     result, _ = _OCR(str(image_path))
     return '\n'.join(str(row[1]) for row in (result or []) if len(row) > 1)
 
@@ -141,12 +152,13 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
     cny: list[Record] = []
     usd: list[Record] = []
     report: list[dict[str, str]] = []
-    for path in sorted(pdf_dir.rglob('*')):
-        if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
-            continue
-        if {'水单正常匹配', '美金正常'} & set(path.relative_to(pdf_dir).parts):
-            continue
+    files = [path for path in sorted(pdf_dir.rglob('*'))
+             if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES
+             and not ({'水单正常匹配', '美金正常'} & set(path.relative_to(pdf_dir).parts))]
+    log(f'第一步完成扫描：发现 {len(files)} 份来源 PDF，开始识别金额。')
+    for index, path in enumerate(files, 1):
         try:
+            log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
             relative_parts = path.relative_to(pdf_dir).parts
             is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
@@ -156,9 +168,15 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             cny.extend(Record(path, value, '人民币') for value in cny_values)
             usd.extend(Record(path, value, '美元') for value in usd_values)
             if not cny_values and not usd_values:
+                log('  未识别到待匹配金额。')
                 report.append(row(path, '', '', '未识别到付款总额、报销金额或汇款金额'))
+            else:
+                values = cny_values or usd_values
+                log('  识别金额：' + '、'.join(str(value) for value in values))
         except Exception as exc:
+            log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
+    log(f'来源 PDF 识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
     return cny, usd, report
 
 
@@ -166,20 +184,39 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
     cny: list[Record] = []
     usd: list[Record] = []
     report: list[dict[str, str]] = []
-    for path in sorted(receipt_dir.rglob('*')):
+    def is_receipt_file(path: Path) -> bool:
         if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES | SOURCE_SUFFIXES:
-            continue
+            return False
+        # 人民币水单是图片；美元水单 PDF 只应从指定银行子文件夹读取。
+        if path.suffix.lower() != '.pdf':
+            return True
+        parts = set(path.relative_to(receipt_dir).parts)
+        return bool({'中信银行', '招商银行'} & parts)
+
+    files = [path for path in sorted(receipt_dir.rglob('*')) if is_receipt_file(path)]
+    log(f'第二步完成扫描：发现 {len(files)} 份水单图片/PDF，开始 OCR 识别。')
+    for index, path in enumerate(files, 1):
         try:
+            log(f'[水单 {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
-            for amount, kind in cny_receipt_amounts(text):
+            cny_values = cny_receipt_amounts(text)
+            for amount, kind in cny_values:
                 cny.append(Record(path, amount, kind))
             parts = {part.lower() for part in path.parts}
             is_citic = '中信银行' in path.parts or 'citic' in parts
             is_cmb = '招商银行' in path.parts or 'cmb' in parts
-            for amount, kind in usd_receipt_amounts(text, is_citic, is_cmb):
+            usd_values = usd_receipt_amounts(text, is_citic, is_cmb)
+            for amount, kind in usd_values:
                 usd.append(Record(path, amount, kind))
+            values = cny_values + usd_values
+            if values:
+                log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
+            else:
+                log('  未识别到符合水单规则的金额。')
         except Exception as exc:
+            log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'水单读取失败：{exc}'))
+    log(f'水单识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
     return cny, usd, report
 
 
@@ -199,8 +236,10 @@ def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dic
         left = list({item.path: item for item in by_amount_sources[amount]}.values())
         right = list({item.path: item for item in by_amount_receipts[amount]}.values())
         if len(left) == len(right) == 1:
+            log(f'金额 {amount} 唯一匹配：{left[0].path.name} <-> {right[0].path.name}')
             pairs.append((left[0], right[0]))
         else:
+            log(f'金额 {amount} 有 {len(left)} 份 PDF、{len(right)} 份水单候选，保留供人工核对。')
             report.append(row('; '.join(str(x.path) for x in left), '; '.join(str(x.path) for x in right), amount, '同金额存在多份候选，未自动移动'))
     return pairs
 
@@ -256,6 +295,13 @@ def main() -> None:
         receipt_dir = choose_folder(root, '第二步：选择存放人民币/美元等水单的文件夹')
         if not receipt_dir:
             return
+        log('=' * 60)
+        log('开始水单 PDF 自动核对')
+        log('来源 PDF 文件夹：' + display_path(pdf_dir))
+        log('水单文件夹：' + display_path(receipt_dir))
+        if pdf_dir == receipt_dir:
+            log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
+        log('=' * 60)
 
         cny_sources, usd_sources, report = source_records(pdf_dir)
         cny_receipts, usd_receipts, receipt_report = receipt_records(receipt_dir)
@@ -266,20 +312,30 @@ def main() -> None:
         moved = 0
         for source, receipt in cny_pairs:
             archive_pair(source, receipt, pdf_dir / '水单正常匹配')
+            log(f'已归档到 水单正常匹配：{source.path.name}')
             report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
             moved += 1
         for source, receipt in usd_pairs:
             archive_pair(source, receipt, pdf_dir / '美金正常')
+            log(f'已归档到 美金正常：{source.path.name}')
             report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
             moved += 1
 
         report_path = write_report(pdf_dir, report)
+        log(f'处理完成：已归档 {moved} 对文件。')
+        log('处理报告：' + display_path(report_path))
+        log('按任意键关闭此窗口。')
         messagebox.showinfo('水单 PDF 自动核对完成', f'已归档 {moved} 对文件。\n处理报告：\n{report_path}')
     except Exception as exc:
         traceback.print_exc()
         messagebox.showerror('水单 PDF 自动核对失败', str(exc))
     finally:
         root.destroy()
+        if sys.stdin.isatty():
+            try:
+                input('按回车键关闭…')
+            except (EOFError, KeyboardInterrupt):
+                pass
 
 
 if __name__ == '__main__':
