@@ -319,6 +319,11 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
     def is_receipt_file(path: Path) -> bool:
         if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES | SOURCE_SUFFIXES:
             return False
+        # 同一目录可能保留了付款申请 PDF 的转图/截图副本，文件名例如
+        # “张三提交的付款申请202609....png”。它是来源单据而非银行水单，
+        # 不能因扩展名为 PNG 就参与水单金额匹配。
+        if path.suffix.lower() in IMAGE_SUFFIXES and '提交的付款申请' in path.stem:
+            return False
         # 人民币水单是图片；美元水单 PDF 只应从指定银行子文件夹读取。
         if path.suffix.lower() != '.pdf':
             return True
