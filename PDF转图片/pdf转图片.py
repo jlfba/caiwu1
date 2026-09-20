@@ -17,7 +17,7 @@ PDF 工具：现有发票图片识别 / 发票明细转表格
    - 自动合并 DESCRIPTION/TAX/DATE 的换行内容，过滤 TOTAL/SUBTOTAL 等汇总行。
    - 输出 Excel 固定列：发票号、TRACKING NO.、DATE、DESCRIPTION、TAX、QTY、RATE、AMOUNT；
      发票号和追踪编号按明细行重复；默认保存到首个 PDF 目录 发票明细表.xlsx。
-   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK；11 MKK；12 DINO；13 EYNEX。
+   - 发票类型：1 canexs；2 精准（Accuracy Customs Brokers）；3 创时亚马逊卡派；4 创时卡派；5 创时清关费；6 创时附加费；7 MAX萨凡纳；8 MAX纽约；9 AA；10 JCK；11 MKK；12 DINO；13 EYNEX；14 DRAYEASY。
 
 使用：
     python pdf转图片.py
@@ -826,6 +826,11 @@ DINO_OUTPUT_HEADERS = ('发票号', 'Date', 'Product or service', 'Description',
 EYNEX_HEADERS = ('DATE', 'ACTIVITY', 'DESCRIPTION', 'QTY', 'RATE', 'AMOUNT')
 EYNEX_OUTPUT_HEADERS = ('发票号', '柜号', 'DATE', '费用', 'DESCRIPTION',
                         'QTY', 'RATE', '金额')
+
+# DRAYEASY 发票：INVOICE 在票面右侧取值；地址、柜号与明细表头以下的内容按明细行输出。
+DRAYEASY_HEADERS = ('DELIVERY ADDRESS', 'CONTAINER', 'DESCRIPTION', 'RATE', 'QTY', 'AMOUNT')
+DRAYEASY_OUTPUT_HEADERS = ('INVOICE', 'Delivery Address', 'Container',
+                           'Description', 'Rate', 'Qty', 'Amount')
 
 
 def _compact_text(text):
@@ -2775,6 +2780,95 @@ def eynex_mode(pdf_paths):
                        widths=[18, 18, 16, 34, 30, 10, 12, 14])
     print('识别完成：共处理 %d 页，提取 %d 行明细。' % (pages, len(rows)))
     print('Excel 已保存：%s' % output)
+
+
+def _drayeasy_invoice_no(lines):
+    """DRAYEASY：取 INVOICE 标签右侧的发票号。"""
+    line = _find_line(lines, 'INVOICE')
+    if line is None:
+        return '未知'
+    anchor = next((item for item in line['items']
+                   if _compact_text(item['text']).startswith('INVOICE')), None)
+    if anchor is None:
+        return '未知'
+    value = _line_right_of(line, anchor, drop=('NO', 'NO.', 'NUMBER', 'N'))
+    return value or '未知'
+
+
+def _drayeasy_table(lines, found, data_from_top=False):
+    """按 DRAYEASY 六个表头的横坐标抽取明细，Description 换行合并到上一条。"""
+    ordered = sorted(found.items(), key=lambda pair: pair[1]['cx'] - pair[1]['w'] / 2)
+    lefts = [item['cx'] - item['w'] / 2 for _, item in ordered]
+    column_by_label = {label: index for index, label in enumerate(DRAYEASY_HEADERS)}
+    bounds = [float('-inf')] + lefts[1:] + [float('inf')]
+    output_columns = [column_by_label[label] for label, _ in ordered]
+    header_bottom = max(item['cy'] + item['h'] / 2 for _, item in ordered)
+    data_lines = lines if data_from_top else [
+        line for line in lines if line['cy'] > header_bottom + 2]
+    rows = []
+    stop_words = ('TOTAL', 'SUBTOTAL', 'BALANCE', 'PAYMENT', 'THANK', 'REMIT')
+    for line in data_lines:
+        compact = _compact_text(line['text'])
+        if any(word in compact for word in stop_words):
+            break
+        cells = [''] * len(DRAYEASY_HEADERS)
+        for item in line['items']:
+            column = next((index for index in range(len(bounds) - 1)
+                           if bounds[index] <= item['cx'] < bounds[index + 1]), None)
+            if column is not None:
+                target = output_columns[column]
+                cells[target] = (cells[target] + ' ' + item['text']).strip()
+        if not any(cells[2:]):
+            continue
+        # 费率、数量或金额出现才是一条新明细；纯 Description 行接到上一条。
+        is_detail = any(_has_digit(cells[index]) for index in (3, 4, 5))
+        if is_detail or not rows:
+            rows.append(cells)
+        else:
+            for index, value in enumerate(cells):
+                if value:
+                    rows[-1][index] = (rows[-1][index] + ' ' + value).strip()
+    return [row for row in rows if any(row[2:])]
+
+
+def extract_drayeasy_page(items):
+    """DRAYEASY 单页：INVOICE 右侧、Delivery Address/Container 及六列费用明细。"""
+    if not items:
+        return {}, [], None
+    lines = _group_detail_lines(items)
+    fields = {'invoice': _drayeasy_invoice_no(lines)}
+    found = _find_header_band_keys(items, DRAYEASY_HEADERS)
+    if found is None:
+        return fields, [], None
+    return fields, _drayeasy_table(lines, found), found
+
+
+def extract_drayeasy_from_pdfs(pdf_paths):
+    """批量识别 DRAYEASY；续页沿用上页 INVOICE 和表头坐标。"""
+    all_rows, pages, skipped = [], 0, 0
+    for pdf_path in pdf_paths:
+        if not os.path.isfile(pdf_path):
+            print('  找不到文件，跳过：%s' % pdf_path)
+            skipped += 1
+            continue
+        doc = fitz.open(pdf_path)
+        last_invoice, found = '未知', None
+        try:
+            for page_no, page in enumerate(doc, 1):
+                pages += 1
+                items = _detail_page_items(pdf_path, page, page_no)
+                fields, rows, page_found = extract_drayeasy_page(items)
+                if fields.get('invoice') and fields['invoice'] != '未知':
+                    last_invoice = fields['invoice']
+                if page_found is not None:
+                    found = page_found
+                elif found is not None:
+                    rows = _drayeasy_table(_group_detail_lines(items), found, data_from_top=True)
+                for row in rows:
+                    all_rows.append([last_invoice] + row)
+        finally:
+            doc.close()
+    return all_rows, pages, skipped
 
 
 # 图片固定 10cm x 15cm。openpyxl 图片锚定单元格左上角、尺寸不受单元格约束，

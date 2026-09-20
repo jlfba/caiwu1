@@ -903,7 +903,7 @@ def process_payment_receipts(file_paths, out_dir, progress=None, payment_type='w
 def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     """付款组：发票明细识别 → Excel。
 
-    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK | '12' DINO | '13' EYNEX。
+    inv_type: '1' canexs | '2' 精准 | '3' 创时亚马逊卡派 | '4' 创时卡派 | '5' 创时清关费 | '6' 创时附加费 | '7' MAX萨凡纳 | '8' MAX纽约 | '9' AA | '10' JCK | '11' MKK | '12' DINO | '13' EYNEX | '14' DRAYEASY。
     返回生成的 Excel 绝对路径。
     """
     def report(cur, tot, msg):
@@ -916,7 +916,9 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
         if not os.path.isfile(pdf):
             skipped += 1
             continue
-        if inv_type == '13':
+        if inv_type == '14':
+            rows, pg, sk = tool.extract_drayeasy_from_pdfs([pdf])
+        elif inv_type == '13':
             rows, pg, sk = tool.extract_eynex_from_pdfs([pdf])
         elif inv_type == '12':
             rows, pg, sk = tool.extract_dino_from_pdfs([pdf])
@@ -952,7 +954,11 @@ def process_mode2(pdf_paths, out_dir, inv_type, progress=None):
     if not all_rows:
         raise RuntimeError('没有识别到任何明细，未生成 Excel（共 %d 个文件，%d 页）' % (n, pages))
 
-    if inv_type == '13':
+    if inv_type == '14':
+        name, headers, numeric_cols, zero_pad_cols, widths = (
+            'DRAYEASY发票明细表.xlsx', tool.DRAYEASY_OUTPUT_HEADERS,
+            {4, 5, 6}, set(), [18, 34, 18, 46, 14, 10, 14])
+    elif inv_type == '13':
         name, headers, numeric_cols, zero_pad_cols, widths = (
             'EYNEX发票明细表.xlsx', tool.EYNEX_OUTPUT_HEADERS,
             {5, 6, 7}, set(), [18, 18, 16, 34, 30, 10, 12, 14])

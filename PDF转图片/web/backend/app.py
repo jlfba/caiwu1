@@ -63,8 +63,8 @@ async def create_task(files: list[UploadFile] = File(...),
                       sheet_name: str = Form('')):
     if mode not in ('1', '2', '3', '4', '5', '6', '9'):
         return JSONResponse({'detail': 'mode 无效，应为 1、2、3、4、5 或 6'}, status_code=400)
-    if mode == '3' and inv_type not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13'):
-        return JSONResponse({'detail': 'inv_type 无效，应为 1-13'}, status_code=400)
+    if mode == '3' and inv_type not in ('1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'):
+        return JSONResponse({'detail': 'inv_type 无效，应为 1-14'}, status_code=400)
     if layout not in ('v', 'h'):
         return JSONResponse({'detail': 'layout 无效，应为 v 或 h'}, status_code=400)
     if not files:
