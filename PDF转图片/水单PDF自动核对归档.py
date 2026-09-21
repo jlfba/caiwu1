@@ -262,6 +262,16 @@ def citic_foreign_amounts(text: str) -> list[tuple[Decimal, str]]:
     return list(dict.fromkeys(found))
 
 
+def cmb_foreign_amounts(text: str) -> list[tuple[Decimal, str]]:
+    """招商银行外币回单：读取“买入币种/金额”右侧的外币金额。"""
+    found: list[tuple[Decimal, str]] = []
+    for currency in FOREIGN_CURRENCIES:
+        values = foreign_amounts_after(text, ('买入币种/金额', '买入币种金额'), currency)
+        if values:
+            found.append((values[0], f'招商银行-{currency}'))
+    return list(dict.fromkeys(found))
+
+
 def get_ocr():
     from rapidocr_onnxruntime import RapidOCR
     return RapidOCR()
@@ -343,25 +353,29 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
     # 人民币及普通付款申请只扫描用户选择的当前文件夹，不进入任何子文件夹。
     direct_files = [path for path in sorted(pdf_dir.iterdir())
                     if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
-    # 中信外币是唯一例外：在“中信银行/日期文件夹”内，含“回单”的 PDF
-    # 是水单；同级其他 PDF（例如付款审核）是来源付款申请。
-    citic_root = receipt_dir / '中信银行'
-    citic_review_files = []
-    if citic_root.is_dir():
-        citic_review_files = [path for date_dir in sorted(citic_root.iterdir()) if date_dir.is_dir()
-                              for path in sorted(date_dir.iterdir())
-                              if path.is_file() and path.suffix.lower() == '.pdf'
-                              and '回单' not in path.stem]
-    files = direct_files + citic_review_files
-    citic_review_set = set(citic_review_files)
+    # 中信、招商外币是固定例外：在“银行名称/日期文件夹”内，含“回单”的
+    # PDF 是水单；同级其他 PDF（例如付款审核）是来源付款申请。
+    bank_review_files: list[Path] = []
+    bank_counts: dict[str, int] = {}
+    for bank_name in ('中信银行', '招商银行'):
+        bank_root = receipt_dir / bank_name
+        review_files = ([path for date_dir in sorted(bank_root.iterdir()) if date_dir.is_dir()
+                         for path in sorted(date_dir.iterdir())
+                         if path.is_file() and path.suffix.lower() == '.pdf'
+                         and '回单' not in path.stem] if bank_root.is_dir() else [])
+        bank_review_files.extend(review_files)
+        bank_counts[bank_name] = len(review_files)
+    files = direct_files + bank_review_files
+    bank_review_set = set(bank_review_files)
     log('第一步完成扫描：当前目录来源 PDF ' + str(len(direct_files))
         + ' 份（不扫描子文件夹）；中信银行日期子文件夹付款审核 PDF '
-        + str(len(citic_review_files)) + ' 份，开始识别金额。')
+        + str(bank_counts['中信银行']) + ' 份；招商银行日期子文件夹付款审核 PDF '
+        + str(bank_counts['招商银行']) + ' 份，开始识别金额。')
     for index, path in enumerate(files, 1):
         try:
             log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
-            is_foreign_pdf = path in citic_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+            is_foreign_pdf = path in bank_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
             # 付款总额/汇款金额可取右侧值；四类表格总金额只按表头位置取值。
             table_amount_values = (pdf_table_amounts_by_position(path)
                                    + source_table_amounts(text)) if not is_foreign_pdf else []
@@ -376,7 +390,7 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
                 # 扫描版付款申请中的细字表格先原图 OCR，失败后才走局部对比度增强。
                 log('  原图未识别到来源金额，正在增强后重试…')
                 text = read_text(path, retry_enhanced=True)
-                is_foreign_pdf = path in citic_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+                is_foreign_pdf = path in bank_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
                 table_amount_values = source_table_amounts(text) if not is_foreign_pdf else []
                 cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                               + table_amount_values) if not is_foreign_pdf else []
@@ -415,19 +429,22 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             return True
         return '中信银行' in path.name or '招商银行' in path.name
 
-    # 人民币水单只扫描当前目录；中信银行例外，按“中信银行/日期文件夹/PDF”读取。
+    # 人民币水单只扫描当前目录；中信、招商外币例外，按“银行/日期文件夹/PDF”读取。
     files = [path for path in sorted(receipt_dir.iterdir()) if is_receipt_file(path)]
-    citic_root = receipt_dir / '中信银行'
-    citic_files = []
-    if citic_root.is_dir():
-        citic_files = [path for date_dir in sorted(citic_root.iterdir()) if date_dir.is_dir()
-                       for path in sorted(date_dir.iterdir())
-                       if path.is_file() and path.suffix.lower() == '.pdf' and '回单' in path.stem]
-    all_files = files + citic_files
-    log(f'第二步完成扫描：当前目录水单 {len(files)} 份；中信银行日期子文件夹 PDF {len(citic_files)} 份。')
+    bank_receipt_files: dict[str, list[Path]] = {}
+    for bank_name in ('中信银行', '招商银行'):
+        bank_root = receipt_dir / bank_name
+        bank_receipt_files[bank_name] = ([path for date_dir in sorted(bank_root.iterdir()) if date_dir.is_dir()
+                                         for path in sorted(date_dir.iterdir())
+                                         if path.is_file() and path.suffix.lower() == '.pdf'
+                                         and '回单' in path.stem] if bank_root.is_dir() else [])
+    citic_files = bank_receipt_files['中信银行']
+    cmb_files = bank_receipt_files['招商银行']
+    all_files = files + citic_files + cmb_files
+    log(f'第二步完成扫描：当前目录水单 {len(files)} 份；中信银行日期子文件夹 PDF {len(citic_files)} 份；招商银行日期子文件夹 PDF {len(cmb_files)} 份。')
     for index, path in enumerate(all_files, 1):
         try:
-            label = '中信外币' if path in citic_files else '水单'
+            label = '中信外币' if path in citic_files else ('招商外币' if path in cmb_files else '水单')
             log(f'[{label} {index}/{len(all_files)}] 正在识别：{path.name}')
             if path in citic_files:
                 # 文件名只用来筛选“回单”；金额必须从回单 PDF 正文的
@@ -444,6 +461,22 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
                     log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in citic_values))
                 else:
                     log('  未识别到中信银行购汇金额/现汇金额的 USD、CAD、GBP 或 EUR。')
+                continue
+            if path in cmb_files:
+                # 文件名只用来筛选“回单”；金额必须从招商回单 PDF 正文的
+                # “买入币种/金额”字段读取，不能从文件名取得。
+                text = read_text(path)
+                cmb_values = cmb_foreign_amounts(text)
+                if not cmb_values:
+                    log('  原图未识别到招商银行外币金额，正在增强后重试…')
+                    text = read_text(path, retry_enhanced=True)
+                    cmb_values = cmb_foreign_amounts(text)
+                for amount, kind in cmb_values:
+                    foreign.append(Record(path, amount, kind))
+                if cmb_values:
+                    log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in cmb_values))
+                else:
+                    log('  未识别到招商银行买入币种/金额的 USD、CAD、GBP 或 EUR。')
                 continue
             text = read_text(path)
             cny_values = cny_receipt_amounts(text)
@@ -545,8 +578,8 @@ def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
 
 
 def pair_output_dir(source: Record, receipt: Record, default_dir: Path) -> Path:
-    """中信日期目录内的同级付款审核和回单，归档在该日期目录中。"""
-    if (source.kind == '外币付款申请' and '中信银行-' in receipt.kind
+    """银行日期目录内的同级付款审核和回单，归档在该日期目录中。"""
+    if (source.kind == '外币付款申请' and ('中信银行-' in receipt.kind or '招商银行-' in receipt.kind)
             and source.path.parent == receipt.path.parent):
         return source.path.parent / '水单正常匹配'
     return default_dir / '水单正常匹配'
