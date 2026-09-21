@@ -408,23 +408,30 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
     if citic_root.is_dir():
         citic_files = [path for date_dir in sorted(citic_root.iterdir()) if date_dir.is_dir()
                        for path in sorted(date_dir.iterdir())
-                       if path.is_file() and path.suffix.lower() == '.pdf']
+                       if path.is_file() and path.suffix.lower() == '.pdf' and '回单' in path.stem]
     all_files = files + citic_files
     log(f'第二步完成扫描：当前目录水单 {len(files)} 份；中信银行日期子文件夹 PDF {len(citic_files)} 份。')
     for index, path in enumerate(all_files, 1):
         try:
             label = '中信外币' if path in citic_files else '水单'
             log(f'[{label} {index}/{len(all_files)}] 正在识别：{path.name}')
-            text = read_text(path)
             if path in citic_files:
-                values = citic_foreign_amounts(text)
-                for amount, kind in values:
+                # 文件名只用来筛选“回单”；金额必须从回单 PDF 正文的
+                # “购汇金额”及“现汇金额”字段获取，不能把文件名金额作为依据。
+                text = read_text(path)
+                citic_values = citic_foreign_amounts(text)
+                if not citic_values:
+                    log('  原图未识别到中信银行外币金额，正在增强后重试…')
+                    text = read_text(path, retry_enhanced=True)
+                    citic_values = citic_foreign_amounts(text)
+                for amount, kind in citic_values:
                     foreign.append(Record(path, amount, kind))
-                if values:
-                    log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
+                if citic_values:
+                    log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in citic_values))
                 else:
                     log('  未识别到中信银行购汇金额/现汇金额的 USD、CAD、GBP 或 EUR。')
                 continue
+            text = read_text(path)
             cny_values = cny_receipt_amounts(text)
             for amount, kind in cny_values:
                 cny.append(Record(path, amount, kind))
