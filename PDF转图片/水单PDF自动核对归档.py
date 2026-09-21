@@ -527,7 +527,14 @@ def safe_target(folder: Path, preferred_name: str) -> Path:
 def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
     output_dir.mkdir(exist_ok=True)
     source_target = safe_target(output_dir, source.path.name)
-    receipt_target = safe_target(output_dir, source.path.stem + receipt.path.suffix.lower())
+    # 人民币水单是图片，可沿用来源 PDF 名称。中信回单与付款审核均为
+    # PDF：若仍用相同名称，Windows/网络共享会覆盖先移动的付款审核。
+    # 因此回单追加“ - 水单”标识，确保一对文件完整保留。
+    if receipt.path.suffix.lower() == source.path.suffix.lower():
+        receipt_name = source.path.stem + ' - 水单' + receipt.path.suffix.lower()
+    else:
+        receipt_name = source.path.stem + receipt.path.suffix.lower()
+    receipt_target = safe_target(output_dir, receipt_name)
     shutil.move(str(source.path), str(source_target))
     try:
         shutil.move(str(receipt.path), str(receipt_target))
