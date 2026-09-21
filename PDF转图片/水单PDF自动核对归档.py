@@ -25,6 +25,7 @@ import cv2
 
 SOURCE_SUFFIXES = {'.pdf'}
 IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp'}
+FOREIGN_CURRENCIES = ('USD', 'CAD', 'GBP', 'EUR')
 MONEY_TOKEN = (r'[-－]?\s*(?:CNY|USD)?\s*[¥￥$]?\s*'
                r'(?:\d{1,3}(?:[,，.]\d{3})+[,，.]\d{1,2}'
                r'|\d{1,3}(?:[,，.]\d{3})+|\d+\.\d{1,2}|\d+)')
@@ -105,6 +106,20 @@ def amounts_after(text: str, labels: tuple[str, ...], limit: int = 80) -> list[D
     values: list[Decimal] = []
     for label in labels:
         for match in re.finditer(re.escape(label) + r'[^0-9A-Za-z$¥￥－-]{0,12}(' + MONEY_TOKEN + r')', normalized, re.I):
+            amount = parse_amount(match.group(1))
+            if amount is not None:
+                values.append(amount)
+    return list(dict.fromkeys(values))
+
+
+def foreign_amounts_after(text: str, labels: tuple[str, ...], currency: str) -> list[Decimal]:
+    """取银行 PDF 字段右侧指定币种金额，兼容币种在金额前或同一行。"""
+    normalized = compact(text).upper()
+    values: list[Decimal] = []
+    for label in labels:
+        pattern = (re.escape(label) + r'.{0,60}?' + re.escape(currency)
+                   + r'\s*(' + MONEY_TOKEN + r')')
+        for match in re.finditer(pattern, normalized, re.I):
             amount = parse_amount(match.group(1))
             if amount is not None:
                 values.append(amount)
@@ -230,6 +245,21 @@ def usd_receipt_amounts(text: str, is_citic: bool, is_cmb: bool) -> list[tuple[D
     return list(dict.fromkeys(found))
 
 
+def citic_foreign_amounts(text: str) -> list[tuple[Decimal, str]]:
+    """中信银行外币水单：购汇金额 + 现汇金额（若有）作为同币种总金额。"""
+    found: list[tuple[Decimal, str]] = []
+    for currency in FOREIGN_CURRENCIES:
+        purchase = foreign_amounts_after(text, ('购汇金额',), currency)
+        spot = foreign_amounts_after(text, ('现汇金额',), currency)
+        # 每个字段若 OCR 重复识别，只用第一笔；现汇存在时必须与购汇相加。
+        if purchase:
+            total = purchase[0] + (spot[0] if spot else Decimal('0.00'))
+            found.append((total.quantize(Decimal('0.01')), f'中信银行-{currency}'))
+        elif spot:
+            found.append((spot[0], f'中信银行-{currency}'))
+    return list(dict.fromkeys(found))
+
+
 def get_ocr():
     from rapidocr_onnxruntime import RapidOCR
     return RapidOCR()
@@ -306,7 +336,7 @@ def read_text(path: Path, retry_enhanced: bool = False) -> str:
 
 def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
     cny: list[Record] = []
-    usd: list[Record] = []
+    foreign: list[Record] = []
     report: list[dict[str, str]] = []
     # 只扫描用户选择的当前文件夹，不进入任何子文件夹。
     files = [path for path in sorted(pdf_dir.iterdir())
@@ -317,45 +347,45 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
             log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
             relative_parts = path.relative_to(pdf_dir).parts
-            is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
-                          or bool(re.search(r'\bUSD\b', text, re.I)))
+            is_foreign_pdf = bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
             # 付款总额/汇款金额可取右侧值；四类表格总金额只按表头位置取值。
             table_amount_values = (pdf_table_amounts_by_position(path)
-                                   + source_table_amounts(text)) if not is_usd_pdf else []
+                                   + source_table_amounts(text)) if not is_foreign_pdf else []
             table_amount_values = list(dict.fromkeys(table_amount_values))
             cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
-                          + table_amount_values) if not is_usd_pdf else []
+                          + table_amount_values) if not is_foreign_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
-            usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
-            if not cny_values and not usd_values:
+            # 外币付款申请常只有“付款总额”数值，不一定印出 USD/CAD 等币种；
+            # 单独保存该字段，后续只与中信银行外币水单进行核对。
+            foreign_values = amounts_after(text, ('付款总额',))
+            if not cny_values and not foreign_values:
                 # 扫描版付款申请中的细字表格先原图 OCR，失败后才走局部对比度增强。
                 log('  原图未识别到来源金额，正在增强后重试…')
                 text = read_text(path, retry_enhanced=True)
-                is_usd_pdf = ('美金' in relative_parts or '美元' in relative_parts
-                              or bool(re.search(r'\bUSD\b', text, re.I)))
-                table_amount_values = source_table_amounts(text) if not is_usd_pdf else []
+                is_foreign_pdf = bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+                table_amount_values = source_table_amounts(text) if not is_foreign_pdf else []
                 cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
-                              + table_amount_values) if not is_usd_pdf else []
+                              + table_amount_values) if not is_foreign_pdf else []
                 cny_values = list(dict.fromkeys(cny_values))
-                usd_values = amounts_after(text, ('付款总额',)) if is_usd_pdf else []
+                foreign_values = amounts_after(text, ('付款总额',))
             cny.extend(Record(path, value, '人民币') for value in cny_values)
-            usd.extend(Record(path, value, '美元') for value in usd_values)
-            if not cny_values and not usd_values:
+            foreign.extend(Record(path, value, '外币付款申请') for value in foreign_values)
+            if not cny_values and not foreign_values:
                 log('  未识别到待匹配金额。')
                 report.append(row(path, '', '', '未识别到付款总额、报销金额或汇款金额'))
             else:
-                values = cny_values or usd_values
+                values = cny_values or foreign_values
                 log('  识别金额：' + '、'.join(str(value) for value in values))
         except Exception as exc:
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'源 PDF 读取失败：{exc}'))
-    log(f'来源 PDF 识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
-    return cny, usd, report, files
+    log(f'来源 PDF 识别完成：人民币候选 {len(cny)} 条，外币付款候选 {len(foreign)} 条。')
+    return cny, foreign, report, files
 
 
 def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
     cny: list[Record] = []
-    usd: list[Record] = []
+    foreign: list[Record] = []
     report: list[dict[str, str]] = []
     def is_receipt_file(path: Path) -> bool:
         if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES | SOURCE_SUFFIXES:
@@ -371,13 +401,30 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             return True
         return '中信银行' in path.name or '招商银行' in path.name
 
-    # 只扫描用户选择的当前文件夹，不进入任何子文件夹。
+    # 人民币水单只扫描当前目录；中信银行例外，按“中信银行/日期文件夹/PDF”读取。
     files = [path for path in sorted(receipt_dir.iterdir()) if is_receipt_file(path)]
-    log(f'第二步完成扫描（不扫描子文件夹）：发现 {len(files)} 份水单图片/PDF，开始 OCR 识别。')
-    for index, path in enumerate(files, 1):
+    citic_root = receipt_dir / '中信银行'
+    citic_files = []
+    if citic_root.is_dir():
+        citic_files = [path for date_dir in sorted(citic_root.iterdir()) if date_dir.is_dir()
+                       for path in sorted(date_dir.iterdir())
+                       if path.is_file() and path.suffix.lower() == '.pdf']
+    all_files = files + citic_files
+    log(f'第二步完成扫描：当前目录水单 {len(files)} 份；中信银行日期子文件夹 PDF {len(citic_files)} 份。')
+    for index, path in enumerate(all_files, 1):
         try:
-            log(f'[水单 {index}/{len(files)}] 正在识别：{path.name}')
+            label = '中信外币' if path in citic_files else '水单'
+            log(f'[{label} {index}/{len(all_files)}] 正在识别：{path.name}')
             text = read_text(path)
+            if path in citic_files:
+                values = citic_foreign_amounts(text)
+                for amount, kind in values:
+                    foreign.append(Record(path, amount, kind))
+                if values:
+                    log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
+                else:
+                    log('  未识别到中信银行购汇金额/现汇金额的 USD、CAD、GBP 或 EUR。')
+                continue
             cny_values = cny_receipt_amounts(text)
             for amount, kind in cny_values:
                 cny.append(Record(path, amount, kind))
@@ -386,7 +433,7 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
             is_cmb = '招商银行' in path.name or 'cmb' in file_name
             usd_values = usd_receipt_amounts(text, is_citic, is_cmb)
             for amount, kind in usd_values:
-                usd.append(Record(path, amount, kind))
+                foreign.append(Record(path, amount, kind))
             values = cny_values + usd_values
             if not values and path.suffix.lower() in IMAGE_SUFFIXES:
                 log('  原图未识别到水单金额，正在轻量增强后重试…')
@@ -396,7 +443,7 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
                 for amount, kind in cny_values:
                     cny.append(Record(path, amount, kind))
                 for amount, kind in usd_values:
-                    usd.append(Record(path, amount, kind))
+                    foreign.append(Record(path, amount, kind))
                 values = cny_values + usd_values
             if values:
                 log('  识别金额：' + '、'.join(f'{kind} {amount}' for amount, kind in values))
@@ -411,15 +458,15 @@ def receipt_records(receipt_dir: Path) -> tuple[list[Record], list[Record], list
         except Exception as exc:
             log(f'  识别失败：{exc}')
             report.append(row(path, '', '', f'水单读取失败：{exc}'))
-    log(f'水单识别完成：人民币候选 {len(cny)} 条，美元候选 {len(usd)} 条。')
-    return cny, usd, report, files
+    log(f'水单识别完成：人民币候选 {len(cny)} 条，外币候选 {len(foreign)} 条。')
+    return cny, foreign, report, all_files
 
 
 def row(source: Path | str, receipt: Path | str, amount: Decimal | str, result: str) -> dict[str, str]:
     return {'来源PDF': str(source), '水单': str(receipt), '金额': str(amount), '处理结果': result}
 
 
-def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dict[str, str]]) -> tuple[list[tuple[Record, Record]], set[Path]]:
+def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dict[str, str]]) -> tuple[list[tuple[Record, Record]], set[Record]]:
     by_amount_sources: dict[Decimal, list[Record]] = defaultdict(list)
     by_amount_receipts: dict[Decimal, list[Record]] = defaultdict(list)
     for item in sources:
@@ -427,7 +474,7 @@ def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dic
     for item in receipts:
         by_amount_receipts[item.amount].append(item)
     pairs = []
-    conflict_paths: set[Path] = set()
+    conflict_records: set[Record] = set()
     for amount in sorted(set(by_amount_sources) & set(by_amount_receipts)):
         left = list({item.path: item for item in by_amount_sources[amount]}.values())
         right = list({item.path: item for item in by_amount_receipts[amount]}.values())
@@ -438,9 +485,9 @@ def unique_pairs(sources: list[Record], receipts: list[Record], report: list[dic
             log(f'金额 {amount} 有 {len(left)} 份 PDF、{len(right)} 份水单候选，保留供人工核对。')
             report.append(row('; '.join(str(x.path) for x in left), '; '.join(str(x.path) for x in right), amount, '同金额存在多份候选，未自动移动'))
             # 只有两边都存在、却无法唯一对应的同金额冲突项才进入异常文件夹。
-            conflict_paths.update(item.path for item in left)
-            conflict_paths.update(item.path for item in right)
-    return pairs, conflict_paths
+            conflict_records.update(left)
+            conflict_records.update(right)
+    return pairs, conflict_records
 
 
 def safe_target(folder: Path, preferred_name: str) -> Path:
@@ -469,12 +516,20 @@ def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
         raise
 
 
-def archive_exception(path: Path, output_dir: Path) -> Path:
-    """将未能自动确认的单个文件移至异常目录，保留原名且不覆盖。"""
+def archive_exception(path: Path, output_dir: Path, preferred_name: str | None = None) -> Path:
+    """将同金额冲突文件移至异常目录，保留或指定安全文件名。"""
     output_dir.mkdir(exist_ok=True)
-    target = safe_target(output_dir, path.name)
+    target = safe_target(output_dir, preferred_name or path.name)
     shutil.move(str(path), str(target))
     return target
+
+
+def foreign_conflict_name(record: Record, index: int) -> str:
+    """中信外币冲突项统一命名：原名币种金额.序号.扩展名。"""
+    currency = next((code for code in FOREIGN_CURRENCIES if code in record.kind), '外币')
+    amount = format(record.amount.normalize(), 'f').rstrip('0').rstrip('.')
+    prefix = re.sub(r'\s+', '', record.path.stem) or '外币水单'
+    return f'{prefix}{currency}{amount}.{index}{record.path.suffix.lower()}'
 
 
 def write_report(folder: Path, entries: list[dict[str, str]]) -> Path:
@@ -512,11 +567,11 @@ def main() -> None:
                 log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
             log('=' * 60)
 
-            cny_sources, usd_sources, report, _source_files = source_records(pdf_dir)
-            cny_receipts, usd_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
+            cny_sources, foreign_sources, report, _source_files = source_records(pdf_dir)
+            cny_receipts, foreign_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
             cny_pairs, cny_conflicts = unique_pairs(cny_sources, cny_receipts, report)
-            usd_pairs, usd_conflicts = unique_pairs(usd_sources, usd_receipts, report)
+            foreign_pairs, foreign_conflicts = unique_pairs(foreign_sources, foreign_receipts, report)
 
             moved = 0
             for source, receipt in cny_pairs:
@@ -524,20 +579,35 @@ def main() -> None:
                 log(f'已归档到 水单正常匹配：{source.path.name}')
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
-            for source, receipt in usd_pairs:
-                archive_pair(source, receipt, pdf_dir / '美金正常')
-                log(f'已归档到 美金正常：{source.path.name}')
-                report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：美金正常（{receipt.kind}）'))
+            moved_source_paths = {source.path for source, _receipt in cny_pairs}
+            for source, receipt in foreign_pairs:
+                if source.path in moved_source_paths:
+                    # 同一来源 PDF 已按人民币正常归档，不允许重复移动。
+                    continue
+                archive_pair(source, receipt, pdf_dir / '水单正常匹配')
+                log(f'已归档到 水单正常匹配：{source.path.name}')
+                report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
 
             # 仅“同金额两边都有多份候选”的冲突项进入异常文件夹。
             # 只有 PDF 或只有水单、未识别金额等文件保持原目录不动。
-            exception_files = [path for path in cny_conflicts | usd_conflicts if path.exists()]
+            cny_exception_paths = {record.path for record in cny_conflicts}
+            foreign_exception_records = [record for record in foreign_conflicts if record.path.exists()]
+            exception_files = [path for path in cny_exception_paths if path.exists()]
             exception_count = 0
             for path in dict.fromkeys(exception_files):
                 archive_exception(path, pdf_dir / '异常文件夹')
                 log(f'已移至 异常文件夹：{path.name}')
                 report.append(row(path.name, '', '', '同金额多份候选，已移至异常文件夹待进一步验证'))
+                exception_count += 1
+            # 外币同金额冲突按“原名币种金额.序号”重命名，便于人工成组核对。
+            foreign_by_path = {record.path: record for record in foreign_exception_records}
+            for index, record in enumerate(foreign_by_path.values(), 1):
+                if record.path in moved_source_paths:
+                    continue
+                target = archive_exception(record.path, pdf_dir / '异常', foreign_conflict_name(record, index))
+                log(f'已移至 异常：{target.name}')
+                report.append(row(record.path.name, target.name, record.amount, '外币同金额多候选，已重命名并移至异常待进一步验证'))
                 exception_count += 1
 
             report_path = write_report(pdf_dir, report)
