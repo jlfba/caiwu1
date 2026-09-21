@@ -594,11 +594,9 @@ def archive_exception(path: Path, output_dir: Path, preferred_name: str | None =
 
 
 def foreign_conflict_name(record: Record, index: int) -> str:
-    """中信外币冲突项统一命名：原名币种金额.序号.扩展名。"""
-    currency = next((code for code in FOREIGN_CURRENCIES if code in record.kind), '外币')
-    amount = format(record.amount.normalize(), 'f').rstrip('0').rstrip('.')
-    prefix = re.sub(r'\s+', '', record.path.stem) or '外币水单'
-    return f'{prefix}{currency}{amount}.{index}{record.path.suffix.lower()}'
+    """外币同金额冲突项：保留原名主体，只在扩展名前追加序号。"""
+    prefix = record.path.stem or '外币水单'
+    return f'{prefix}.{index}{record.path.suffix.lower()}'
 
 
 def write_report(folder: Path, entries: list[dict[str, str]]) -> Path:
@@ -669,7 +667,8 @@ def main() -> None:
                 log(f'已移至 异常文件夹：{path.name}')
                 report.append(row(path.name, '', '', '同金额多份候选，已移至异常文件夹待进一步验证'))
                 exception_count += 1
-            # 外币同金额冲突按“原名币种金额.序号”重命名，便于人工成组核对。
+            # 外币同金额冲突保留原始名称，并按“原名.序号”区分，
+            # 例如：回单-富皇-USD-6666.1.pdf、回单-富皇-USD-6666.2.pdf。
             foreign_by_path = {record.path: record for record in foreign_exception_records}
             for index, record in enumerate(foreign_by_path.values(), 1):
                 if record.path in moved_source_paths:
