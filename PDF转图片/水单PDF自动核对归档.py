@@ -334,20 +334,32 @@ def read_text(path: Path, retry_enhanced: bool = False) -> str:
     return ocr_text(path, retry_enhanced=retry_enhanced)
 
 
-def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
+def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list[Record], list[dict[str, str]], list[Path]]:
     cny: list[Record] = []
     foreign: list[Record] = []
     report: list[dict[str, str]] = []
-    # 只扫描用户选择的当前文件夹，不进入任何子文件夹。
-    files = [path for path in sorted(pdf_dir.iterdir())
-             if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
-    log(f'第一步完成扫描（不扫描子文件夹）：发现 {len(files)} 份来源 PDF，开始识别金额。')
+    # 人民币及普通付款申请只扫描用户选择的当前文件夹，不进入任何子文件夹。
+    direct_files = [path for path in sorted(pdf_dir.iterdir())
+                    if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
+    # 中信外币是唯一例外：在“中信银行/日期文件夹”内，含“回单”的 PDF
+    # 是水单；同级其他 PDF（例如付款审核）是来源付款申请。
+    citic_root = receipt_dir / '中信银行'
+    citic_review_files = []
+    if citic_root.is_dir():
+        citic_review_files = [path for date_dir in sorted(citic_root.iterdir()) if date_dir.is_dir()
+                              for path in sorted(date_dir.iterdir())
+                              if path.is_file() and path.suffix.lower() == '.pdf'
+                              and '回单' not in path.stem]
+    files = direct_files + citic_review_files
+    citic_review_set = set(citic_review_files)
+    log('第一步完成扫描：当前目录来源 PDF ' + str(len(direct_files))
+        + ' 份（不扫描子文件夹）；中信银行日期子文件夹付款审核 PDF '
+        + str(len(citic_review_files)) + ' 份，开始识别金额。')
     for index, path in enumerate(files, 1):
         try:
             log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
-            relative_parts = path.relative_to(pdf_dir).parts
-            is_foreign_pdf = bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+            is_foreign_pdf = path in citic_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
             # 付款总额/汇款金额可取右侧值；四类表格总金额只按表头位置取值。
             table_amount_values = (pdf_table_amounts_by_position(path)
                                    + source_table_amounts(text)) if not is_foreign_pdf else []
@@ -362,7 +374,7 @@ def source_records(pdf_dir: Path) -> tuple[list[Record], list[Record], list[dict
                 # 扫描版付款申请中的细字表格先原图 OCR，失败后才走局部对比度增强。
                 log('  原图未识别到来源金额，正在增强后重试…')
                 text = read_text(path, retry_enhanced=True)
-                is_foreign_pdf = bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+                is_foreign_pdf = path in citic_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
                 table_amount_values = source_table_amounts(text) if not is_foreign_pdf else []
                 cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                               + table_amount_values) if not is_foreign_pdf else []
@@ -574,7 +586,7 @@ def main() -> None:
                 log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
             log('=' * 60)
 
-            cny_sources, foreign_sources, report, _source_files = source_records(pdf_dir)
+            cny_sources, foreign_sources, report, _source_files = source_records(pdf_dir, receipt_dir)
             cny_receipts, foreign_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
             cny_pairs, cny_conflicts = unique_pairs(cny_sources, cny_receipts, report)
