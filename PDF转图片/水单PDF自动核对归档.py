@@ -582,16 +582,22 @@ def safe_target(folder: Path, preferred_name: str) -> Path:
         index += 1
 
 
+def approval_number_from_filename(path: Path) -> str | None:
+    """取得付款申请文件名中以 2026 开头的审批编号。"""
+    match = re.search(r'2026\d+', path.stem)
+    return match.group(0) if match else None
+
+
 def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
     output_dir.mkdir(exist_ok=True)
     source_target = safe_target(output_dir, source.path.name)
-    # 人民币水单是图片，可沿用来源 PDF 名称。中信回单与付款审核均为
-    # PDF：若仍用相同名称，Windows/网络共享会覆盖先移动的付款审核。
-    # 因此回单追加“ - 水单”标识，确保一对文件完整保留。
-    if receipt.path.suffix.lower() == source.path.suffix.lower():
-        receipt_name = source.path.stem + ' - 水单' + receipt.path.suffix.lower()
-    else:
-        receipt_name = source.path.stem + receipt.path.suffix.lower()
+    # 正常匹配保留付款申请和水单/回单的原文件名。回单仅在末尾追加
+    # 付款申请文件名中的 2026 审批编号，既能关联又不会把回单改成付款申请名。
+    approval_number = approval_number_from_filename(source.path)
+    receipt_stem = receipt.path.stem
+    if approval_number and approval_number not in receipt_stem:
+        receipt_stem += '-' + approval_number
+    receipt_name = receipt_stem + receipt.path.suffix.lower()
     receipt_target = safe_target(output_dir, receipt_name)
     shutil.move(str(source.path), str(source_target))
     try:
