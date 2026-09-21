@@ -251,9 +251,11 @@ def citic_foreign_amounts(text: str) -> list[tuple[Decimal, str]]:
     for currency in FOREIGN_CURRENCIES:
         purchase = foreign_amounts_after(text, ('购汇金额',), currency)
         spot = foreign_amounts_after(text, ('现汇金额',), currency)
-        # 每个字段若 OCR 重复识别，只用第一笔；现汇存在时必须与购汇相加。
+        # 每个字段若 OCR 重复识别，只用第一笔。部分中信回单的同一笔
+        # “购汇金额”会同时被 OCR 误关联到“现汇金额”；两者完全相等时
+        # 必须只取一次，不能误算为双倍。只有两笔金额确实不同才相加。
         if purchase:
-            total = purchase[0] + (spot[0] if spot else Decimal('0.00'))
+            total = purchase[0] if not spot or purchase[0] == spot[0] else purchase[0] + spot[0]
             found.append((total.quantize(Decimal('0.01')), f'中信银行-{currency}'))
         elif spot:
             found.append((spot[0], f'中信银行-{currency}'))
@@ -535,6 +537,14 @@ def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
         raise
 
 
+def pair_output_dir(source: Record, receipt: Record, default_dir: Path) -> Path:
+    """中信日期目录内的同级付款审核和回单，归档在该日期目录中。"""
+    if (source.kind == '外币付款申请' and '中信银行-' in receipt.kind
+            and source.path.parent == receipt.path.parent):
+        return source.path.parent / '水单正常匹配'
+    return default_dir / '水单正常匹配'
+
+
 def archive_exception(path: Path, output_dir: Path, preferred_name: str | None = None) -> Path:
     """将同金额冲突文件移至异常目录，保留或指定安全文件名。"""
     output_dir.mkdir(exist_ok=True)
@@ -594,7 +604,7 @@ def main() -> None:
 
             moved = 0
             for source, receipt in cny_pairs:
-                archive_pair(source, receipt, pdf_dir / '水单正常匹配')
+                archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
                 log(f'已归档到 水单正常匹配：{source.path.name}')
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
@@ -603,7 +613,7 @@ def main() -> None:
                 if source.path in moved_source_paths:
                     # 同一来源 PDF 已按人民币正常归档，不允许重复移动。
                     continue
-                archive_pair(source, receipt, pdf_dir / '水单正常匹配')
+                archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
                 log(f'已归档到 水单正常匹配：{source.path.name}')
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
