@@ -138,7 +138,7 @@ def add_category(src, dst, idx, profile='no_receivable'):
                 product = text(v[idx['销售产品']])
                 v[col] = '整柜' if '整柜' in product else ('私卡' if '私卡' in product else '散货')
             else:
-                v[col] = REPORT_PROFILES[profile]['category_zero'] if price == 0 else ('金额异常' if price > 0 else '')
+                v[col] = REPORT_PROFILES[profile]['category_zero'] if price == 0 else '金额异常'
             out.writerow(v)
 def export_xlsx(csv_path, output, log_dir, totals_path, idx, progress=None, profile='no_receivable'):
     config = REPORT_PROFILES[profile]
