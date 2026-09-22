@@ -1637,7 +1637,11 @@ def extract_chuangshi_car_from_pdfs(pdf_paths):
 def extract_chuangshi_clearance_from_pdfs(pdf_paths):
     """批量识别创时清关费发票（Description 为单行明细）。
     输出行 [invoice, reference, desc, qty, unit, amt]。"""
-    return _extract_chuangshi_batch(pdf_paths, _desc_simple, drop_desc1=True)
+    # Customs-clearance templates place Invoice number at x≈323..377 and
+    # Reference at x≈413..488. Keep explicit ranges for the web-used script.
+    return _extract_chuangshi_batch(
+        pdf_paths, _desc_simple, drop_desc1=True,
+        invoice_x=(300, 405), reference_x=(405, 520))
 
 
 def _extract_chuangshi_surcharge_batch(pdf_paths):
