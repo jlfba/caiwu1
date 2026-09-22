@@ -545,6 +545,11 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
             log(f'[PDF {index}/{len(files)}] 正在识别：{path.name}')
             text = read_text(path)
             is_foreign_pdf = path in bank_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+            # 第 0 步先按币种分组：每份付款申请只能进入人民币或外币其中一组。
+            currency = next((code for code in FOREIGN_CURRENCIES
+                             if re.search(r'\b' + code + r'\b', text, re.I)), None)
+            group_name = currency or '人民币'
+            log(f'  币种归类：{group_name}')
             # 付款总额/汇款金额可取右侧值；四类表格总金额只按表头位置取值。
             table_amount_values = (pdf_table_amounts_by_position(path)
                                    + source_table_amounts(text)) if not is_foreign_pdf else []
@@ -552,21 +557,24 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
             cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                           + table_amount_values) if not is_foreign_pdf else []
             cny_values = list(dict.fromkeys(cny_values))
-            # 外币付款申请常只有“付款总额”数值，不一定印出 USD/CAD 等币种；
-            # 单独保存该字段，后续只与中信银行外币水单进行核对。
-            foreign_values = amounts_after(text, ('付款总额',))
+            # 外币付款申请只保存付款总额，后续只与外币银行回单核对。
+            foreign_values = amounts_after(text, ('付款总额',)) if is_foreign_pdf else []
             if not cny_values and not foreign_values:
                 # 扫描版付款申请中的细字表格先原图 OCR，失败后才走局部对比度增强。
                 log('  原图未识别到来源金额，正在增强后重试…')
                 text = read_text(path, retry_enhanced=True)
                 is_foreign_pdf = path in bank_review_set or bool(re.search(r'\b(?:USD|CAD|GBP|EUR)\b', text, re.I))
+                currency = next((code for code in FOREIGN_CURRENCIES
+                                 if re.search(r'\b' + code + r'\b', text, re.I)), None)
+                group_name = currency or '人民币'
+                log(f'  增强识别后币种归类：{group_name}')
                 table_amount_values = source_table_amounts(text) if not is_foreign_pdf else []
                 cny_values = (amounts_after(text, ('付款总额', '汇款金额'))
                               + table_amount_values) if not is_foreign_pdf else []
                 cny_values = list(dict.fromkeys(cny_values))
-                foreign_values = amounts_after(text, ('付款总额',))
+                foreign_values = amounts_after(text, ('付款总额',)) if is_foreign_pdf else []
             cny.extend(Record(path, value, '人民币') for value in cny_values)
-            foreign.extend(Record(path, value, '外币付款申请') for value in foreign_values)
+            foreign.extend(Record(path, value, f'外币付款申请-{group_name}') for value in foreign_values)
             if not cny_values and not foreign_values:
                 log('  未识别到待匹配金额。')
                 report.append(row(path, '', '', '未识别到付款总额、报销金额或汇款金额'))
@@ -798,6 +806,21 @@ def write_report(folder: Path, entries: list[dict[str, str]]) -> Path:
     return report_path
 
 
+def write_currency_report(folder: Path, cny_sources: list[Record], foreign_sources: list[Record]) -> Path:
+    """输出本批币种分组清单；只报告，不额外移动原始付款申请。"""
+    report_path = folder / '币种归类报告.csv'
+    rows = [{'PDF文件': str(record.path), '归类币种': '人民币', '金额': str(record.amount)}
+            for record in cny_sources]
+    rows.extend({'PDF文件': str(record.path),
+                 '归类币种': record.kind.removeprefix('外币付款申请-'),
+                 '金额': str(record.amount)} for record in foreign_sources)
+    with report_path.open('w', encoding='utf-8-sig', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=('PDF文件', '归类币种', '金额'))
+        writer.writeheader()
+        writer.writerows(rows)
+    return report_path
+
+
 def choose_spreadsheet(root: Tk) -> Path | None:
     selected = filedialog.askopenfilename(
         parent=root,
@@ -1023,6 +1046,10 @@ def main() -> None:
 
             organize_foreign_receipts(receipt_dir)
             cny_sources, foreign_sources, report, _source_files = source_records(pdf_dir, receipt_dir)
+            currency_report = write_currency_report(pdf_dir, cny_sources, foreign_sources)
+            log('第 0 步币种归类完成：人民币付款申请 ' + str(len(cny_sources))
+                + ' 条；外币付款申请 ' + str(len(foreign_sources)) + ' 条。')
+            log('币种归类报告：' + display_path(currency_report))
             cny_receipts, foreign_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
             cny_pairs, cny_conflicts = unique_pairs(cny_sources, cny_receipts, report)
