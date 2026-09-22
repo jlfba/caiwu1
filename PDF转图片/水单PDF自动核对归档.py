@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
 import os
 import re
 import shutil
@@ -117,7 +118,7 @@ def foreign_amounts_after(text: str, labels: tuple[str, ...], currency: str) -> 
     normalized = compact(text).upper()
     values: list[Decimal] = []
     for label in labels:
-        pattern = (re.escape(label) + r'.{0,60}?' + re.escape(currency)
+        pattern = (re.escape(compact(label)) + r'.{0,60}?' + re.escape(currency)
                    + r'\s*(' + MONEY_TOKEN + r')')
         for match in re.finditer(pattern, normalized, re.I):
             amount = parse_amount(match.group(1))
@@ -281,6 +282,153 @@ def spdb_foreign_amount_from_filename(path: Path) -> tuple[Decimal, str] | None:
     if amount is None:
         return None
     return amount, f'浦发银行-{match.group(1).upper()}'
+
+
+FOREIGN_BANKS = ('中信银行', '招商银行', '浦发银行')
+
+
+def foreign_amount_label(text: str, bank_name: str) -> list[tuple[Decimal, str]]:
+    """深层外币回单按银行格式读取 USD/CAD/GBP/EUR 金额。"""
+    found: list[tuple[Decimal, str]] = []
+    # 英文字段是三家银行 PDF 文字层中最稳定的部分；中文/OCR 结果作为兼容。
+    labels = ('购汇金额', '购 汇 金 额', 'Amount of Purchase', 'AmountofPurchase')
+    for currency in FOREIGN_CURRENCIES:
+        values = foreign_amounts_after(text, labels, currency)
+        if values:
+            found.append((values[0], f'{bank_name}-{currency}'))
+    return list(dict.fromkeys(found))
+
+
+def matches_bank_receipt(text: str, bank_name: str) -> bool:
+    normalized = compact(text).upper()
+    if bank_name == '中信银行':
+        return '中信银行' in text or 'CHINACITICBANK' in normalized
+    if bank_name == '招商银行':
+        return ('致：招商银行' in text or '致:招商银行' in text
+                or '招商银行' in text or 'CHINAMERCHANTSBANK' in normalized)
+    return ('上海浦东发展银行网上银行电子回单-借记回单' in text
+            or '上海浦东发展银行' in text
+            or 'SHANGHAIPUDONGDEVELOPMENTBANK' in normalized)
+
+
+def customer_name_from_receipt_path(bank_root: Path, receipt_path: Path) -> str:
+    """客户名取银行目录下一层，兼容“1-利盟”这类序号前缀。"""
+    try:
+        first_part = receipt_path.relative_to(bank_root).parts[0]
+    except (ValueError, IndexError):
+        first_part = '客户'
+    name = re.sub(r'^\d+\s*[-_－、. ]*', '', first_part).strip()
+    return name or '客户'
+
+
+def amount_name(amount: Decimal) -> str:
+    return format(amount.normalize(), 'f').rstrip('0').rstrip('.') or '0'
+
+
+def payment_foreign_amount(path: Path) -> Decimal | None:
+    """服务商付款申请只按正文付款总额读取。"""
+    values = amounts_after(read_text(path), ('付款总额',))
+    if not values:
+        values = amounts_after(read_text(path, retry_enhanced=True), ('付款总额',))
+    return values[0] if values else None
+
+
+def organize_foreign_receipts(foreign_root: Path) -> tuple[int, int]:
+    """整理三家银行深层回单及同级服务商付款申请，返回归档对数、冲突数。"""
+    service_root = foreign_root.parent / '服务商'
+    if foreign_root.name != '外币' or not service_root.is_dir():
+        return 0, 0
+    log('外币预整理开始：扫描三家银行的深层回单及同级 服务商 付款申请。')
+    payments: list[Record] = []
+    service_files = sorted(path for path in service_root.rglob('*.pdf') if path.is_file())
+    log(f'外币预整理：发现服务商付款申请 PDF {len(service_files)} 份，开始读取付款总额。')
+    for index, path in enumerate(service_files, 1):
+        try:
+            amount = payment_foreign_amount(path)
+            if amount is not None:
+                payments.append(Record(path, amount, '服务商付款申请'))
+            else:
+                log(f'[服务商 {index}/{len(service_files)}] 未识别付款总额：{path.name}')
+        except Exception as exc:
+            log(f'[服务商 {index}/{len(service_files)}] 读取失败：{path.name}，{exc}')
+
+    receipts: list[Record] = []
+    receipt_customers: dict[Path, str] = {}
+    for bank_name in FOREIGN_BANKS:
+        bank_root = foreign_root / bank_name
+        if not bank_root.is_dir():
+            continue
+        # 仅扫尚未整理到日期目录的深层 PDF；已经规范命名的回单不重复处理。
+        candidates = [path for path in sorted(bank_root.rglob('*.pdf'))
+                      if path.is_file() and '水单正常匹配' not in path.parts
+                      and not re.fullmatch(r'\d{6}', path.parent.name)]
+        log(f'外币预整理：{bank_name} 深层 PDF {len(candidates)} 份，正在识别回单。')
+        for index, path in enumerate(candidates, 1):
+            try:
+                text = read_text(path)
+                if not matches_bank_receipt(text, bank_name):
+                    continue
+                if bank_name == '浦发银行':
+                    value = spdb_foreign_amount_from_filename(path)
+                    values = [value] if value else []
+                else:
+                    values = foreign_amount_label(text, bank_name)
+                    if not values:
+                        text = read_text(path, retry_enhanced=True)
+                        values = foreign_amount_label(text, bank_name)
+                if not values:
+                    log(f'[{bank_name} {index}/{len(candidates)}] 已识别回单但未读取外币金额：{path.name}')
+                    continue
+                # 一份有效银行回单只允许一个币种金额参与自动整理。
+                if len(values) != 1:
+                    log(f'[{bank_name} {index}/{len(candidates)}] 回单出现多个外币金额，保留不移动：{path.name}')
+                    continue
+                amount, kind = values[0]
+                receipts.append(Record(path, amount, kind))
+                receipt_customers[path] = customer_name_from_receipt_path(bank_root, path)
+                log(f'[{bank_name} {index}/{len(candidates)}] 回单金额：{kind} {amount}')
+            except Exception as exc:
+                log(f'[{bank_name} {index}/{len(candidates)}] 读取失败：{path.name}，{exc}')
+
+    receipt_by_amount: dict[Decimal, list[Record]] = defaultdict(list)
+    payment_by_amount: dict[Decimal, list[Record]] = defaultdict(list)
+    for record in receipts:
+        receipt_by_amount[record.amount].append(record)
+    for record in payments:
+        payment_by_amount[record.amount].append(record)
+    today_folder = date.today().strftime('%y%m%d')
+    moved = 0
+    conflicts = 0
+    for amount in sorted(set(receipt_by_amount) & set(payment_by_amount)):
+        left = receipt_by_amount[amount]
+        right = payment_by_amount[amount]
+        if len(left) != 1 or len(right) != 1:
+            conflicts += len(left) + len(right)
+            log(f'外币预整理金额 {amount} 存在 {len(left)} 份回单、{len(right)} 份付款申请，未移动。')
+            continue
+        receipt, payment = left[0], right[0]
+        bank_name, currency = receipt.kind.split('-', 1)
+        customer = receipt_customers[receipt.path]
+        approval = approval_number_from_filename(payment.path) or '审批编号待核对'
+        destination = foreign_root / bank_name / today_folder
+        receipt_name = f'回单-{customer}-{currency}-{amount_name(amount)}.pdf'
+        payment_name = f'{customer}-{currency}-{amount_name(amount)}-{approval}.pdf'
+        receipt_target = safe_target(destination, receipt_name)
+        payment_target = safe_target(destination, payment_name)
+        destination.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(receipt.path), str(receipt_target))
+            try:
+                shutil.move(str(payment.path), str(payment_target))
+            except Exception:
+                shutil.move(str(receipt_target), str(receipt.path))
+                raise
+            moved += 1
+            log(f'外币预整理已归档：{receipt_target.name} <-> {payment_target.name}')
+        except Exception as exc:
+            log(f'外币预整理移动失败：{receipt.path.name}，{exc}')
+    log(f'外币预整理完成：已集中归档 {moved} 对；同金额多候选未移动 {conflicts} 个文件。')
+    return moved, conflicts
 
 
 def get_ocr():
@@ -813,6 +961,7 @@ def main() -> None:
                 log('提示：两个步骤选择的是同一文件夹，脚本会按扩展名区分 PDF 与图片。')
             log('=' * 60)
 
+            organize_foreign_receipts(receipt_dir)
             cny_sources, foreign_sources, report, _source_files = source_records(pdf_dir, receipt_dir)
             cny_receipts, foreign_receipts, receipt_report, _receipt_files = receipt_records(receipt_dir)
             report.extend(receipt_report)
