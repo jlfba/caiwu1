@@ -940,12 +940,63 @@ def choose_folder(root: Tk, title: str) -> Path | None:
     return Path(selected) if selected else None
 
 
+def foreign_batch_roots(parent: Path) -> list[Path]:
+    """在共同上级下找每个可独立处理的“外币 + 服务商”批次。"""
+    candidates = [parent] + [path for path in parent.rglob('外币') if path.is_dir()]
+    roots = [path for path in candidates
+             if path.name == '外币' and (path.parent / '服务商').is_dir()]
+    return sorted(set(roots))
+
+
+def run_foreign_batch_queue(root: Tk) -> None:
+    """一次选共同上级，按队列执行多批外币预整理。"""
+    while True:
+        parent = choose_folder(root, '批量外币整理：选择所有批次共同的上级文件夹')
+        if not parent:
+            return
+        queue = foreign_batch_roots(parent)
+        if not queue:
+            messagebox.showinfo('未发现外币批次',
+                                '未找到同时具备“外币”与同级“服务商”文件夹的批次。',
+                                parent=root)
+        else:
+            log(f'批量外币整理：发现 {len(queue)} 个批次，开始排队处理。')
+            total_moved = 0
+            total_conflicts = 0
+            for index, foreign_root in enumerate(queue, 1):
+                log(f'批量外币 [{index}/{len(queue)}]：{display_path(foreign_root)}')
+                moved, conflicts = organize_foreign_receipts(foreign_root)
+                total_moved += moved
+                total_conflicts += conflicts
+            log(f'批量外币整理完成：处理 {len(queue)} 个批次，归档 {total_moved} 对；多候选未移动 {total_conflicts} 个文件。')
+            messagebox.showinfo('批量外币整理完成',
+                                f'已处理 {len(queue)} 个批次。\n'
+                                f'已集中归档 {total_moved} 对文件。\n'
+                                f'同金额多候选未移动 {total_conflicts} 个文件。',
+                                parent=root)
+        if not messagebox.askyesno('继续批量整理', '是否继续选择另一组共同上级文件夹？', parent=root):
+            return
+
+
 def main() -> None:
     enable_console_color()
     root = Tk()
     root.withdraw()
     root.attributes('-topmost', True)
     try:
+        batch_mode = messagebox.askyesnocancel(
+            '选择处理模式',
+            '是否批量整理多个外币文件夹？\n\n'
+            '选择“是”：只需选择共同上级，自动排队处理每个“外币 + 服务商”批次。\n'
+            '选择“否”：进入原有的单批 PDF / 水单核对流程。\n'
+            '选择“取消”：退出。',
+            parent=root,
+        )
+        if batch_mode is None:
+            return
+        if batch_mode:
+            run_foreign_batch_queue(root)
+            return
         while True:
             pdf_dir = choose_folder(root, '第一步：选择存放报销/付款 PDF 的主文件夹')
             if not pdf_dir:
