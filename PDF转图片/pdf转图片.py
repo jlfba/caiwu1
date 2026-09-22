@@ -1372,6 +1372,45 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
     for line in lines:
         if label_key not in _compact_text(line['text']):
             continue
+        # Vertical template: Reference is printed below Invoice Number in
+        # the same column.  In that layout the legacy fixed x-range for
+        # Reference (starting around x=405) misses the value entirely, so
+        # first use the label's own horizontal span.
+        label_items = line['items']
+        matched = []
+        for start in range(len(label_items)):
+            compact = ''
+            candidate = []
+            for item in label_items[start:]:
+                compact += _compact_text(item['text'])
+                candidate.append(item)
+                if compact == label_key:
+                    matched = candidate
+                    break
+                if len(compact) >= len(label_key):
+                    break
+            if matched:
+                break
+        if matched:
+            label_left = min(item['cx'] - item['w'] / 2 for item in matched)
+            label_right = max(item['cx'] + item['w'] / 2 for item in matched)
+            next_labels = [candidate['cy'] for candidate in lines
+                           if candidate['cy'] > line['cy'] + 2
+                           and any(key in _compact_text(candidate['text'])
+                                   for key in ('INVOICENUMBER', 'REFERENCE'))]
+            value_lines = [candidate for candidate in lines
+                           if candidate['cy'] > line['cy'] + 2
+                           and candidate['cy'] < header_cy - 2
+                           and (not next_labels or candidate['cy'] <= min(next_labels))]
+            if value_lines:
+                value_line = min(value_lines, key=lambda candidate: candidate['cy'])
+                words = [word for word in value_line['items']
+                         if word['cx'] >= label_left - 8
+                         and word['cx'] <= label_right + max(50, label_right - label_left)]
+                words.sort(key=lambda word: word['cx'])
+                value = ' '.join(word['text'] for word in words).strip()
+                if value:
+                    return value
         value_lines = [candidate for candidate in lines
                        if candidate['cy'] > line['cy'] + 2
                        and candidate['cy'] < header_cy - 2]
