@@ -588,7 +588,7 @@ def approval_number_from_filename(path: Path) -> str | None:
     return match.group(0) if match else None
 
 
-def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
+def archive_pair(source: Record, receipt: Record, output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(exist_ok=True)
     source_target = safe_target(output_dir, source.path.name)
     # 正常匹配保留付款申请和水单/回单的原文件名。回单仅在末尾追加
@@ -606,6 +606,7 @@ def archive_pair(source: Record, receipt: Record, output_dir: Path) -> None:
         # 归档必须成对：水单移动失败时将 PDF 退回原位。
         shutil.move(str(source_target), str(source.path))
         raise
+    return source_target, receipt_target
 
 
 def pair_output_dir(source: Record, receipt: Record, default_dir: Path) -> Path:
@@ -638,6 +639,152 @@ def write_report(folder: Path, entries: list[dict[str, str]]) -> Path:
         writer.writeheader()
         writer.writerows(entries)
     return report_path
+
+
+def choose_spreadsheet(root: Tk) -> Path | None:
+    selected = filedialog.askopenfilename(
+        parent=root,
+        title='第二步：选择人民币金额核对表格',
+        filetypes=(('Excel 表格', '*.xlsx *.xlsm *.xls'),),
+    )
+    return Path(selected) if selected else None
+
+
+def is_rmb_payment_pdf(path: Path) -> bool:
+    """第二步仅核对人民币：外币目录中的付款审核 PDF 不参与表格金额匹配。"""
+    return '外币' not in path.parts
+
+
+def spreadsheet_approval_number(path: Path) -> str | None:
+    """表格核对使用付款申请文件名中以 20260 开头的编号。"""
+    match = re.search(r'20260\d+', path.stem)
+    return match.group(0) if match else None
+
+
+def payment_amount_candidates(path: Path) -> list[Decimal]:
+    """第二步只读取付款总额或报销金额，不采用其他金额字段。"""
+    text = read_text(path)
+    values = amounts_after(text, ('付款总额', '报销金额'))
+    # 文字层中“报销金额”可能位于表头、金额在其下方；仅直接读取不到
+    # 付款总额/报销金额时才按表格坐标兜底，避免重复打开 PDF。
+    if not values and '报销金额' in compact(text):
+        values.extend(pdf_table_amounts_by_position(path))
+        values.extend(source_table_amounts(text))
+    return list(dict.fromkeys(values))
+
+
+def payment_handling_date(path: Path) -> str:
+    """从付款申请底部“杨舒媛 + 已付/已办理”记录提取月日。"""
+    text = read_text(path)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    # 自底向上定位，以适配文字层把同一行拆成多行的情况。
+    for index in range(len(lines) - 1, -1, -1):
+        nearby = ' '.join(lines[max(0, index - 2):min(len(lines), index + 4)])
+        if '杨舒媛' not in nearby or not re.search(r'已付|已办理', nearby):
+            continue
+        match = re.search(r'(20\d{2})[年./-]\s*(\d{1,2})[月./-]\s*(\d{1,2})', nearby)
+        if match:
+            return f'{int(match.group(2))}月{int(match.group(3))}号'
+    return '日期待核对'
+
+
+def excel_cell_amount(value: object) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    return parse_amount(str(value))
+
+
+def excel_document_number(value: object) -> str:
+    return re.sub(r'\.0$', '', str(value or '').strip())
+
+
+def checked_spreadsheet_path(source: Path) -> Path:
+    return safe_target(source.parent, source.stem + '-已核对' + source.suffix.lower())
+
+
+def reconcile_rmb_spreadsheet(spreadsheet: Path, payment_pdfs: list[Path]) -> tuple[Path, int, int]:
+    """将本轮人民币付款申请同表格单据号/支出逐笔核对，并另存结果表。"""
+    import win32com.client
+
+    output = checked_spreadsheet_path(spreadsheet)
+    shutil.copy2(spreadsheet, output)
+    excel = win32com.client.DispatchEx('Excel.Application')
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    workbook = None
+    checked = 0
+    abnormal = 0
+    try:
+        workbook = excel.Workbooks.Open(str(output.resolve()))
+        sheets: list[tuple[object, int, int, int, int]] = []
+        for sheet in workbook.Worksheets:
+            used = sheet.UsedRange
+            first_row, first_col = int(used.Row), int(used.Column)
+            last_row = first_row + int(used.Rows.Count) - 1
+            last_col = first_col + int(used.Columns.Count) - 1
+            for row_number in range(first_row, min(last_row, first_row + 20) + 1):
+                headers = {compact(str(sheet.Cells(row_number, col).Value or '')): col
+                           for col in range(first_col, last_col + 1)}
+                if '单据号' not in headers or '支出' not in headers:
+                    continue
+                note_col = headers.get('核对记录备注')
+                if not note_col:
+                    note_col = last_col + 1
+                    sheet.Cells(row_number, note_col).Value = '核对记录备注'
+                sheets.append((sheet, row_number, headers['单据号'], headers['支出'], note_col))
+                break
+        if not sheets:
+            raise ValueError('表格中未找到同一表头行的“单据号”和“支出”列。')
+
+        for pdf_path in payment_pdfs:
+            approval = spreadsheet_approval_number(pdf_path)
+            if not approval:
+                log(f'[表格核对] 跳过：{pdf_path.name}，文件名未找到以 20260 开头的审批编号。')
+                continue
+            amounts = payment_amount_candidates(pdf_path)
+            if not amounts:
+                log(f'[表格核对] 跳过：{pdf_path.name}，未识别到付款总额或报销金额。')
+                continue
+            matched_rows: list[tuple[object, int, int, Decimal]] = []
+            for sheet, header_row, document_col, expense_col, note_col in sheets:
+                last_row = sheet.UsedRange.Row + sheet.UsedRange.Rows.Count - 1
+                for row_number in range(header_row + 1, last_row + 1):
+                    if excel_document_number(sheet.Cells(row_number, document_col).Value) != approval:
+                        continue
+                    matched_rows.append((sheet, row_number, note_col,
+                                         excel_cell_amount(sheet.Cells(row_number, expense_col).Value) or Decimal('0.00')))
+            if not matched_rows:
+                log(f'[表格核对] 单据号 {approval} 未在表格中找到，未写备注。')
+                continue
+            total = sum((item[3] for item in matched_rows), Decimal('0.00')).quantize(Decimal('0.01'))
+            matched_amount = next((amount for amount in amounts if amount == total), None)
+            if matched_amount is None:
+                for sheet, row_number, note_col, _amount in matched_rows:
+                    sheet.Cells(row_number, note_col).Value = '金额异常'
+                abnormal += len(matched_rows)
+                log(f'[表格核对] 单据号 {approval}：PDF 金额与支出合计 {total} 不一致，已写金额异常。')
+                continue
+            date_text = payment_handling_date(pdf_path)
+            if len(matched_rows) == 1:
+                note = f'已核对---{date_text}已打印付款申请及回单'
+            else:
+                note = f'已核对---{date_text}已打印付款申请及回单，总计{total:.2f}元'
+            for sheet, row_number, note_col, _amount in matched_rows:
+                sheet.Cells(row_number, note_col).Value = note
+            checked += len(matched_rows)
+            log(f'[表格核对] 单据号 {approval}：已核对 {len(matched_rows)} 行，金额 {matched_amount}。')
+        workbook.Save()
+        return output, checked, abnormal
+    except Exception:
+        if workbook is not None:
+            workbook.Close(SaveChanges=False)
+            workbook = None
+        output.unlink(missing_ok=True)
+        raise
+    finally:
+        if workbook is not None:
+            workbook.Close(SaveChanges=True)
+        excel.Quit()
 
 
 def choose_folder(root: Tk, title: str) -> Path | None:
@@ -673,8 +820,11 @@ def main() -> None:
             foreign_pairs, foreign_conflicts = unique_pairs(foreign_sources, foreign_receipts, report)
 
             moved = 0
+            archived_payment_pdfs: list[Path] = []
             for source, receipt in cny_pairs:
-                archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
+                archived_source, _archived_receipt = archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
+                if is_rmb_payment_pdf(archived_source):
+                    archived_payment_pdfs.append(archived_source)
                 log(f'已归档到 水单正常匹配：{source.path.name}')
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
@@ -683,7 +833,9 @@ def main() -> None:
                 if source.path in moved_source_paths:
                     # 同一来源 PDF 已按人民币正常归档，不允许重复移动。
                     continue
-                archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
+                archived_source, _archived_receipt = archive_pair(source, receipt, pair_output_dir(source, receipt, pdf_dir))
+                if is_rmb_payment_pdf(archived_source):
+                    archived_payment_pdfs.append(archived_source)
                 log(f'已归档到 水单正常匹配：{source.path.name}')
                 report.append(row(source.path.name, receipt.path.name, source.amount, f'已归档：水单正常匹配（{receipt.kind}）'))
                 moved += 1
@@ -714,6 +866,17 @@ def main() -> None:
             log(f'处理完成：已归档 {moved} 对文件。')
             log(f'待进一步验证：已移至异常文件夹 {exception_count} 个文件。')
             log('处理报告：' + display_path(report_path))
+            if archived_payment_pdfs:
+                spreadsheet = choose_spreadsheet(root)
+                if spreadsheet:
+                    log('开始第二步：人民币付款申请与表格金额核对。')
+                    output, checked, abnormal = reconcile_rmb_spreadsheet(spreadsheet, archived_payment_pdfs)
+                    log(f'第二步完成：已核对 {checked} 行，金额异常 {abnormal} 行。')
+                    log('表格核对结果：' + display_path(output))
+                else:
+                    log('第二步已跳过：未选择表格。')
+            else:
+                log('第二步跳过：本批没有已归档的人民币付款申请 PDF。')
             continue_processing = messagebox.askyesno(
                 '本批处理完成',
                 f'已归档 {moved} 对文件。\n已移至异常文件夹 {exception_count} 个文件。\n处理报告：\n{report_path}\n\n是否继续处理下一批？',
