@@ -4,6 +4,14 @@ import argparse, csv, os, re, sys, zipfile
 from collections import Counter
 from openpyxl import Workbook, load_workbook
 
+# These fields are written from CSV into the final workbook as native Excel
+# numbers, so Excel does not flag them as numbers stored as text.
+NUMERIC_COLUMNS = {
+    '收货实重', '收货材积重', '收货计费重', '出货计费重', '出货比重',
+    '出货立方数', '件数', '应收金额', '实收金额', '未收金额',
+    '业务员成本/实际成本', '毛利', '毛利率', '应收单价', '业务员成本单价',
+}
+
 EXCLUDED = ('风驰-数据同步', 'YX订舱', '风驰-卖柜', '李雪原', '龙行-清关', '李增韬')
 STEPS = (
     '删除操作状态签入', '筛选应收单价小于等于1', '删除客户简称关键词',
@@ -32,6 +40,21 @@ def is_signed_in(v):
 def number(v):
     try: return float(re.sub(r'[^0-9.\-]', '', text(v).replace(',', '')) or 0)
     except ValueError: return 0.0
+
+def excel_number_or_text(value, is_percentage=False):
+    """Convert only a complete numeric CSV value; preserve blanks and text."""
+    raw = text(value)
+    if not raw:
+        return ''
+    percent = raw.endswith('%')
+    cleaned = raw[:-1].strip() if percent else raw
+    cleaned = cleaned.replace(',', '')
+    if not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', cleaned):
+        return raw
+    converted = float(cleaned)
+    if is_percentage and percent:
+        converted /= 100
+    return int(converted) if converted.is_integer() else converted
 def clean_path(v):
     v = v.strip()
     if v.startswith('&'): v = v[1:].strip()
@@ -289,8 +312,15 @@ def export_xlsx_bundle(work_map, output, progress=None):
             reader = csv.reader(f)
             header = next(reader)
             detail.append(header)
+            numeric_indexes = {
+                column for column, name in enumerate(header) if name in NUMERIC_COLUMNS
+            }
             for row in reader:
-                detail.append(row)
+                detail.append([
+                    excel_number_or_text(value, header[column] == '毛利率')
+                    if column in numeric_indexes else value
+                    for column, value in enumerate(row)
+                ])
                 org = text(row[idx['客户所属机构']])
                 tracking = text(row[idx['运单号']])
                 if org and tracking:
