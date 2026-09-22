@@ -1371,12 +1371,52 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
     for line in lines:
         if label_key not in _compact_text(line['text']):
             continue
+        # Header labels can be split across adjacent visual lines (for
+        # example OCR may place ``Reference`` a few pixels lower than
+        # ``Invoice number``).  Start looking below the last header-label
+        # baseline so a label line is never mistaken for its value.
+        label_bottom = max((candidate['cy'] for candidate in lines
+                            if ('INVOICENUMBER' in _compact_text(candidate['text'])
+                                or 'REFERENCE' in _compact_text(candidate['text']))),
+                           default=line['cy'])
         value_lines = [candidate for candidate in lines
-                       if candidate['cy'] > line['cy'] + 2
+                       if candidate['cy'] > max(line['cy'], label_bottom) + 2
                        and candidate['cy'] < header_cy - 2]
         if not value_lines:
             continue
         value_line = min(value_lines, key=lambda candidate: candidate['cy'])
+        # Labels may be split into separate OCR lines because their baselines
+        # differ by a few pixels.  Collect all header label centers globally
+        # so the two values are still paired by horizontal proximity.
+        global_label_centers = {}
+        for candidate in lines:
+            candidate_items = candidate['items']
+            for key in ('INVOICENUMBER', 'REFERENCE'):
+                for start in range(len(candidate_items)):
+                    compact = ''
+                    for end in range(start, len(candidate_items)):
+                        compact += _compact_text(candidate_items[end]['text'])
+                        if compact == key:
+                            left = min(candidate_items[i]['cx'] - candidate_items[i]['w'] / 2
+                                       for i in range(start, end + 1))
+                            right = max(candidate_items[i]['cx'] + candidate_items[i]['w'] / 2
+                                        for i in range(start, end + 1))
+                            global_label_centers[key] = (left + right) / 2
+                            break
+                        if len(compact) >= len(key):
+                            break
+                    if key in global_label_centers:
+                        break
+        if label_key in global_label_centers and len(global_label_centers) > 1:
+            target_center = global_label_centers[label_key]
+            assigned = [word for word in value_line['items']
+                        if min(global_label_centers.values(),
+                               key=lambda center: abs(word['cx'] - center))
+                        == target_center]
+            assigned.sort(key=lambda word: word['cx'])
+            nearest_value = ' '.join(word['text'] for word in assigned).strip()
+            if nearest_value:
+                return nearest_value
 
         label_items = line['items']
         label_indexes = []
@@ -1397,6 +1437,38 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
             label_right = max(label_items[i]['cx'] + label_items[i]['w'] / 2
                               for i in label_indexes)
             label_center = (label_left + label_right) / 2
+            # When several header labels share one visual line, assign each
+            # value token to its nearest label center.  This avoids the
+            # invoice/reference columns swapping when OCR splits labels or
+            # when the PDF has slightly different spacing than the template.
+            known_keys = ('AMOUNTDUE', 'DUEDATE', 'ISSUEDATE',
+                          'INVOICENUMBER', 'REFERENCE')
+            label_centers = {}
+            for key in known_keys:
+                for start in range(len(label_items)):
+                    compact = ''
+                    for end in range(start, len(label_items)):
+                        compact += _compact_text(label_items[end]['text'])
+                        if compact == key:
+                            left = min(label_items[i]['cx'] - label_items[i]['w'] / 2
+                                       for i in range(start, end + 1))
+                            right = max(label_items[i]['cx'] + label_items[i]['w'] / 2
+                                        for i in range(start, end + 1))
+                            label_centers[key] = (left + right) / 2
+                            break
+                        if len(compact) >= len(key):
+                            break
+                    if key in label_centers:
+                        break
+            target_center = label_centers.get(label_key, label_center)
+            assigned = [word for word in value_line['items']
+                        if min(label_centers.values(),
+                               key=lambda center: abs(word['cx'] - center))
+                        == target_center]
+            assigned.sort(key=lambda word: word['cx'])
+            nearest_value = ' '.join(word['text'] for word in assigned).strip()
+            if nearest_value:
+                return nearest_value
             other_centers = [item['cx'] for i, item in enumerate(label_items)
                              if i not in label_indexes]
             left_neighbors = [cx for cx in other_centers if cx < label_center]
