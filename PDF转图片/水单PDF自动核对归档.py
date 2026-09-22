@@ -509,13 +509,13 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
     cny: list[Record] = []
     foreign: list[Record] = []
     report: list[dict[str, str]] = []
-    # 普通人民币付款申请只扫描当前文件夹。选择“服务商”主文件夹时，
+    # 普通人民币付款申请只扫描当前文件夹。选择“服务商”或“报销”主文件夹时，
     # 例外读取其下一层日期文件夹的 PDF，不再深入第三层及以下。
-    if pdf_dir.name == '服务商':
+    if pdf_dir.name in ('服务商', '报销'):
         direct_files = [path for date_dir in sorted(pdf_dir.iterdir()) if date_dir.is_dir()
                         for path in sorted(date_dir.iterdir())
                         if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
-        source_scan_message = ('服务商日期子文件夹来源 PDF ' + str(len(direct_files))
+        source_scan_message = (pdf_dir.name + '日期子文件夹来源 PDF ' + str(len(direct_files))
                                + ' 份（只扫描下一层日期文件夹）')
     else:
         direct_files = [path for path in sorted(pdf_dir.iterdir())

@@ -1404,9 +1404,17 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
                            and (not next_labels or candidate['cy'] <= min(next_labels))]
             if value_lines:
                 value_line = min(value_lines, key=lambda candidate: candidate['cy'])
-                words = [word for word in value_line['items']
-                         if word['cx'] >= label_left - 8
-                         and word['cx'] <= label_right + max(50, label_right - label_left)]
+                label_center = (label_left + label_right) / 2
+                value_items = sorted(value_line['items'],
+                                     key=lambda word: abs(word['cx'] - label_center))
+                if value_items:
+                    anchor = value_items[0]
+                    # Keep the value token(s) nearest this label; adjacent
+                    # right-column address text must not be pulled in.
+                    words = [word for word in value_line['items']
+                             if abs(word['cx'] - anchor['cx']) <= 65]
+                else:
+                    words = []
                 words.sort(key=lambda word: word['cx'])
                 value = ' '.join(word['text'] for word in words).strip()
                 if value:
