@@ -1361,7 +1361,13 @@ def _chuangshi_field_value(lines, header_cy, x_min, x_max, label_line=None):
 
 
 def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
-    """Extract a labeled header value from the next visual line in a column."""
+    """Extract a labeled header value from the next visual line in a column.
+
+    Prefer a column inferred from the label position.  Some customs-clearance
+    invoices place ``Invoice number`` and ``Reference`` side by side on the
+    left of the page, while older templates place them farther right.  The
+    fixed coordinates are retained as a compatibility fallback.
+    """
     for line in lines:
         if label_key not in _compact_text(line['text']):
             continue
@@ -1371,6 +1377,42 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
         if not value_lines:
             continue
         value_line = min(value_lines, key=lambda candidate: candidate['cy'])
+
+        label_items = line['items']
+        label_indexes = []
+        for start in range(len(label_items)):
+            compact = ''
+            for end in range(start, len(label_items)):
+                compact += _compact_text(label_items[end]['text'])
+                if compact == label_key:
+                    label_indexes = list(range(start, end + 1))
+                    break
+                if len(compact) >= len(label_key):
+                    break
+            if label_indexes:
+                break
+        if label_indexes:
+            label_left = min(label_items[i]['cx'] - label_items[i]['w'] / 2
+                             for i in label_indexes)
+            label_right = max(label_items[i]['cx'] + label_items[i]['w'] / 2
+                              for i in label_indexes)
+            label_center = (label_left + label_right) / 2
+            other_centers = [item['cx'] for i, item in enumerate(label_items)
+                             if i not in label_indexes]
+            left_neighbors = [cx for cx in other_centers if cx < label_center]
+            right_neighbors = [cx for cx in other_centers if cx > label_center]
+            dynamic_min = ((max(left_neighbors) + label_center) / 2
+                           if left_neighbors else label_left - 20)
+            dynamic_max = ((min(right_neighbors) + label_center) / 2
+                           if right_neighbors else
+                           label_right + max(80, label_right - label_left))
+            words = [word for word in value_line['items']
+                     if dynamic_min <= word['cx'] < dynamic_max]
+            words.sort(key=lambda word: word['cx'])
+            value = ' '.join(word['text'] for word in words).strip()
+            if value:
+                return value
+
         words = [word for word in value_line['items']
                  if x_min <= word['cx'] < x_max]
         words.sort(key=lambda word: word['cx'])
