@@ -509,9 +509,19 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
     cny: list[Record] = []
     foreign: list[Record] = []
     report: list[dict[str, str]] = []
-    # 人民币及普通付款申请只扫描用户选择的当前文件夹，不进入任何子文件夹。
-    direct_files = [path for path in sorted(pdf_dir.iterdir())
-                    if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
+    # 普通人民币付款申请只扫描当前文件夹。选择“服务商”主文件夹时，
+    # 例外读取其下一层日期文件夹的 PDF，不再深入第三层及以下。
+    if pdf_dir.name == '服务商':
+        direct_files = [path for date_dir in sorted(pdf_dir.iterdir()) if date_dir.is_dir()
+                        for path in sorted(date_dir.iterdir())
+                        if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
+        source_scan_message = ('服务商日期子文件夹来源 PDF ' + str(len(direct_files))
+                               + ' 份（只扫描下一层日期文件夹）')
+    else:
+        direct_files = [path for path in sorted(pdf_dir.iterdir())
+                        if path.is_file() and path.suffix.lower() in SOURCE_SUFFIXES]
+        source_scan_message = ('当前目录来源 PDF ' + str(len(direct_files))
+                               + ' 份（不扫描子文件夹）')
     # 中信、招商、浦发外币是固定例外：在“银行名称/日期文件夹”内，含“回单”的
     # PDF 是水单；同级其他 PDF（例如付款审核）是来源付款申请。
     bank_review_files: list[Path] = []
@@ -526,8 +536,7 @@ def source_records(pdf_dir: Path, receipt_dir: Path) -> tuple[list[Record], list
         bank_counts[bank_name] = len(review_files)
     files = direct_files + bank_review_files
     bank_review_set = set(bank_review_files)
-    log('第一步完成扫描：当前目录来源 PDF ' + str(len(direct_files))
-        + ' 份（不扫描子文件夹）；中信银行日期子文件夹付款审核 PDF '
+    log('第一步完成扫描：' + source_scan_message + '；中信银行日期子文件夹付款审核 PDF '
         + str(bank_counts['中信银行']) + ' 份；招商银行日期子文件夹付款审核 PDF '
         + str(bank_counts['招商银行']) + ' 份；浦发银行日期子文件夹付款审核 PDF '
         + str(bank_counts['浦发银行']) + ' 份，开始识别金额。')
