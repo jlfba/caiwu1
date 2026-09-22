@@ -1373,9 +1373,9 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
         if label_key not in _compact_text(line['text']):
             continue
         # Vertical template: Reference is printed below Invoice Number in
-        # the same column.  In that layout the legacy fixed x-range for
-        # Reference (starting around x=405) misses the value entirely, so
-        # first use the label's own horizontal span.
+        # the same column. Only use this branch when the two labels are
+        # actually on different baselines; horizontal templates must keep
+        # their independent side-by-side column handling below.
         label_items = line['items']
         matched = []
         for start in range(len(label_items)):
@@ -1391,7 +1391,16 @@ def _chuangshi_labeled_value(lines, header_cy, label_key, x_min, x_max):
                     break
             if matched:
                 break
-        if matched:
+        invoice_label_y = next((candidate['cy'] for candidate in lines
+                                if 'INVOICENUMBER' in _compact_text(candidate['text'])),
+                               None)
+        reference_label_y = next((candidate['cy'] for candidate in lines
+                                  if 'REFERENCE' in _compact_text(candidate['text'])),
+                                 None)
+        vertical_layout = (invoice_label_y is not None
+                           and reference_label_y is not None
+                           and reference_label_y > invoice_label_y + 4)
+        if matched and vertical_layout:
             label_left = min(item['cx'] - item['w'] / 2 for item in matched)
             label_right = max(item['cx'] + item['w'] / 2 for item in matched)
             next_labels = [candidate['cy'] for candidate in lines
