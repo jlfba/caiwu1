@@ -7,6 +7,10 @@ pymupdf==1.26.5
 # Excel 读写
 openpyxl==3.1.5
 
+# 报表拖放窗口及 Excel 透视表自动化（仅 Windows）
+tkinterdnd2>=0.4.2; platform_system == "Windows"
+pywin32>=306; platform_system == "Windows"
+
 # Web 服务与文件上传
 fastapi==0.116.1
 uvicorn[standard]==0.35.0

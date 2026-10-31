@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""将预估报表“汇总”按表头追加到利润报表“明细表”。
+"""模式1生成卡派费用透视表；模式2追加专线利润明细。
 
-双击运行可自行多选文件；--all 可按默认目录在命令行无界面运行。
-需要本机 Microsoft Excel、openpyxl、pywin32。
+双击运行将文件拖入窗口；--all 可按默认目录运行模式2。
+需要本机 Microsoft Excel、openpyxl、pywin32、tkinterdnd2。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import logging
 import os
 import shutil
 import sys
+import threading
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -554,51 +555,320 @@ def show_notice(title: str, message: str, *, error: bool = False) -> None:
     ctypes.windll.user32.MessageBoxW(0, message, title, flags)
 
 
+def select_quote_inputs(paths: list[Path]) -> tuple[Path, Path]:
+    quotes = [path for path in paths if "QIHANG" in path.stem.upper() and "报价单" in path.stem]
+    details = [path for path in paths if path not in quotes]
+    if len(quotes) != 1 or len(details) != 1:
+        raise ValueError("模式1需要拖入一份文件名含 QIHANG 和报价单的文件，以及一份明细文件。")
+    return quotes[0], details[0]
+
+
+def detail_sheet_name(path: Path) -> str:
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True, keep_links=False)
+    try:
+        required = {"提单号", "件数", "收货实重", "出货立方数", "派送方式", "亚马逊仓库编码"}
+        matches = []
+        for sheet in workbook.worksheets:
+            first = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            if required.issubset({normalize_header(value) for value in first}):
+                matches.append(sheet.title)
+        if len(matches) != 1:
+            raise ValueError(f"明细文件应包含一张具有所需表头的工作表，实际找到 {len(matches)} 张：{'、'.join(matches)}")
+        return matches[0]
+    finally:
+        workbook.close()
+
+
+def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[str], Path | None]:
+    quote, detail = select_quote_inputs(paths)
+    detail_name = detail_sheet_name(detail)
+    quote_book = openpyxl.load_workbook(quote, read_only=True, data_only=True, keep_links=False)
+    detail_book = openpyxl.load_workbook(detail, read_only=True, data_only=True, keep_links=False)
+    try:
+        if "组合价格" not in quote_book.sheetnames:
+            raise ValueError("报价单缺少“组合价格”工作表。")
+        quote_sheet = quote_book["组合价格"]
+        price_col = None
+        for row in quote_sheet.iter_rows(min_row=1, max_row=min(30, quote_sheet.max_row), values_only=True):
+            normalized = [normalize_header(value).replace("（", "(").replace("）", ")").upper() for value in row]
+            if len(normalized) > 2 and normalized[1] == "仓点" and "价格(40HQ)" in normalized:
+                price_col = normalized.index("价格(40HQ)")
+                break
+        if price_col is None:
+            raise ValueError("组合价格表未找到 B 列“仓点”及“价格（40HQ）”表头。")
+        quote_rows = []
+        price_by_warehouse: dict[str, float] = {}
+        for row in quote_sheet.iter_rows(min_row=1, values_only=True):
+            if len(row) <= price_col or not row[1] or not isinstance(row[price_col], (int, float)):
+                continue
+            key = str(row[1]).strip().casefold()
+            price = float(row[price_col])
+            if key in price_by_warehouse and price_by_warehouse[key] != price:
+                raise ValueError(f"报价单仓点 {row[1]} 有多个不同的 40HQ 价格，请先核对。")
+            price_by_warehouse[key] = price
+            quote_rows.append((str(row[1]).strip(), price))
+        if not quote_rows:
+            raise ValueError("组合价格表没有可识别的仓点和 40HQ 价格。")
+        ws = detail_book[detail_name]
+        first = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        headers = {normalize_header(value): index for index, value in enumerate(first) if value is not None}
+        required = {"提单号", "件数", "收货实重", "出货立方数", "派送方式", "亚马逊仓库编码"}
+        if not required.issubset(headers):
+            raise ValueError("明细表缺少必要列：" + "、".join(sorted(required - headers.keys())))
+        if headers["亚马逊仓库编码"] + 1 >= 55:
+            raise ValueError("亚马逊仓库编码列位于 BC 或之后，不能安全创建固定的 BC、BD 两列。")
+        existing_special = {name: headers[name] + 1 for name in ("组合", "卡派费") if name in headers}
+        for col in (55, 56):
+            cell = first[col - 1] if len(first) >= col else None
+            if cell not in (None, "") and normalize_header(cell) not in {"组合", "卡派费"}:
+                raise ValueError(f"明细表第 {col} 列已有“{cell}”，不能覆盖。")
+        for col in range(headers["亚马逊仓库编码"] + 2, 55):
+            value = first[col - 1] if len(first) >= col else None
+            if value not in (None, "") and normalize_header(value) not in {"组合", "卡派费"}:
+                raise ValueError(f"亚马逊仓库编码与 BC 之间第 {col} 列已有数据列“{value}”，不能覆盖。")
+        records = []
+        missing_bills = 0
+        unmatched = Counter()
+        for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
+            if not any(value is not None and value != "" for value in row):
+                continue
+            for col in range(headers["亚马逊仓库编码"] + 2, 57):
+                value = row[col - 1] if len(row) >= col else None
+                if value not in (None, "") and col not in existing_special.values():
+                    raise ValueError(f"明细表第 {row_number} 行第 {col} 列已有数据，不能覆盖。")
+            bill = row[headers["提单号"]]
+            if bill is None or str(bill).strip() == "":
+                missing_bills += 1
+                continue
+            warehouse = row[headers["亚马逊仓库编码"]]
+            dispatch = row[headers["派送方式"]]
+            combination = str(warehouse if warehouse is not None and str(warehouse).strip() else dispatch or "").strip()
+            if not combination or combination.casefold() not in price_by_warehouse:
+                unmatched[combination or "(空白)"] += 1
+            records.append((str(bill), combination, row))
+            if row_number != len(records) + 1:
+                raise ValueError(f"明细表第 {row_number} 行之前有空行，请先整理连续数据后重试。")
+        if missing_bills:
+            raise ValueError(f"明细中有 {missing_bills} 行没有提单号，请补齐后处理，避免费用误分配。")
+        if not records:
+            raise ValueError("明细表没有可处理的数据。")
+    finally:
+        quote_book.close()
+        detail_book.close()
+
+    output_dir = detail.parent / datetime.now().strftime("%Y-%m-%d")
+    log_path = setup_log(output_dir)
+    LOG.info("模式1：明细 %s / %s，共 %s 条；报价仓点 %s 个", detail.name, detail_name, len(records), len(price_by_warehouse))
+    for name, count in unmatched.items():
+        LOG.warning("报价单找不到组合 %s：%s 条，费用留空", name, count)
+    output_path = output_dir / f"{detail.stem}_卡派费用{detail.suffix}"
+    staged_path = unique_output(output_path.with_name(f"{output_path.stem}_处理中{output_path.suffix}"), output_dir)
+    shutil.copyfile(detail, staged_path)
+    try:
+        build_quote_workbook(staged_path, detail_name, headers, existing_special, quote_rows, len(records))
+        publish_output(staged_path, output_path)
+    except Exception:
+        staged_path.unlink(missing_ok=True)
+        raise
+    LOG.info("模式1完成：%s；明细 %s 条；未匹配报价 %s 条；日志 %s", output_path, len(records), sum(unmatched.values()), log_path)
+    return [(output_path, len(records))], ([f"{sum(unmatched.values())} 条明细的组合没有报价，卡派费留空"] if unmatched else []), log_path
+
+
+def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
+                         existing_special: dict[str, int], quote_rows: list[tuple[str, float]],
+                         count: int) -> None:
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise RuntimeError("缺少 pywin32，请安装后重试。") from exc
+    pythoncom.CoInitialize()
+    excel = None
+    wb = None
+    saved = False
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.AskToUpdateLinks = False
+        excel.ScreenUpdating = False
+        wb = excel.Workbooks.Open(str(path), UpdateLinks=0, ReadOnly=False)
+        if wb.ReadOnly:
+            raise PermissionError(f"输出文件被只读打开：{path}")
+        sheet = wb.Worksheets(detail_name)
+        for name, column in existing_special.items():
+            if column not in (55, 56):
+                sheet.Columns(column).ClearContents()
+        warehouse_col = headers["亚马逊仓库编码"] + 1
+        for col in range(warehouse_col + 1, 55):
+            if sheet.Cells(1, col).Value2 in (None, ""):
+                sheet.Cells(1, col).Value2 = f"空白填充列名{col - warehouse_col}"
+        sheet.Cells(1, 55).Value2 = "组合"
+        sheet.Cells(1, 56).Value2 = "卡派费"
+        last_row = count + 1
+        warehouse_letter = openpyxl.utils.get_column_letter(warehouse_col)
+        dispatch_letter = openpyxl.utils.get_column_letter(headers["派送方式"] + 1)
+        bill_letter = openpyxl.utils.get_column_letter(headers["提单号"] + 1)
+        sheet.Range(sheet.Cells(2, 55), sheet.Cells(last_row, 55)).Formula = (
+            f'=IF({warehouse_letter}2="",{dispatch_letter}2,{warehouse_letter}2)'
+        )
+        sheet.Range(sheet.Cells(2, 55), sheet.Cells(last_row, 55)).Calculate()
+        sheet_names = {item.Name for item in wb.Worksheets}
+
+        def new_sheet(base: str) -> Any:
+            name = base
+            suffix = 2
+            while name in sheet_names:
+                name = f"{base}{suffix}"
+                suffix += 1
+            sheet_names.add(name)
+            added = wb.Worksheets.Add(After=wb.Worksheets(wb.Worksheets.Count))
+            added.Name = name
+            return added
+
+        quote_copy = new_sheet("卡派报价")
+        quote_copy.Range("A1:B1").Value2 = (("仓点", "价格（40HQ）"),)
+        quote_copy.Range(quote_copy.Cells(2, 1), quote_copy.Cells(len(quote_rows) + 1, 2)).Value2 = tuple(quote_rows)
+        pivot_sheet = new_sheet("卡派透视表")
+        source_range = sheet.Range(sheet.Cells(1, 1), sheet.Cells(last_row, 56))
+        source_address = "'" + sheet.Name.replace("'", "''") + "'!" + source_range.Address
+        cache = wb.PivotCaches().Create(SourceType=1, SourceData=source_address)
+        pivot_name = "卡派费用透视" + datetime.now().strftime("%H%M%S")
+        pivot = cache.CreatePivotTable(TableDestination=pivot_sheet.Range("A1"), TableName=pivot_name)
+        pivot.ManualUpdate = True
+        pivot.PivotFields("提单号").Orientation = 1
+        pivot.PivotFields("提单号").Position = 1
+        pivot.PivotFields("组合").Orientation = 1
+        pivot.PivotFields("组合").Position = 2
+        for field, caption in (("件数", "件数合计"), ("收货实重", "收货实重合计"), ("出货立方数", "出货立方数合计")):
+            pivot.AddDataField(pivot.PivotFields(field), caption, -4157)
+        pivot.RowAxisLayout(1)
+        pivot.RowGrand = False
+        pivot.ColumnGrand = False
+        for field in ("提单号", "组合"):
+            pivot.PivotFields(field).Subtotals = (False,) * 12
+        pivot.RepeatAllLabels(2)
+        pivot.ManualUpdate = False
+        pivot.RefreshTable()
+        pivot_end = pivot.TableRange1.Row + pivot.TableRange1.Rows.Count - 1
+        if pivot.TableRange1.Columns.Count != 5 or pivot_end < 2 or pivot.TableRange1.Row != 1:
+            raise ValueError("透视表布局异常，未生成预期的提单号、组合及三列合计。")
+        pivot_sheet.Range("F1:N1").Value2 = (("仓库方数占比", "套餐价格", "单仓金额", "自提", "超件费", "超重费", "超仓费", "单仓合计", "单方费用"),)
+        quote_ref = "'" + quote_copy.Name.replace("'", "''") + "'"
+        limit = len(quote_rows) + 1
+        formulas = {
+            6: '=IFERROR(E2/SUMIF($A$2:$A$' + str(pivot_end) + ',A2,$E$2:$E$' + str(pivot_end) + '),"")',
+            7: '=IFERROR(VLOOKUP(B2,' + quote_ref + '!$A$2:$B$' + str(limit) + ',2,FALSE),"")',
+            8: '=IF(OR(F2="",G2=""),"",F2*G2)',
+            11: '=IF(F2="","",F2*250)',
+            12: '=IF(F2="","",240*F2)',
+            13: '=IF(H2="","",SUM(H2:L2))',
+            14: '=IFERROR(IF(M2="","",M2/E2),"")',
+        }
+        for col, formula in formulas.items():
+            area = pivot_sheet.Range(pivot_sheet.Cells(2, col), pivot_sheet.Cells(pivot_end, col))
+            area.Formula = formula
+        pivot_sheet.Range(pivot_sheet.Cells(2, 6), pivot_sheet.Cells(pivot_end, 6)).NumberFormat = "0.00%"
+        pivot_sheet.Range(pivot_sheet.Cells(2, 6), pivot_sheet.Cells(pivot_end, 14)).Calculate()
+        pivot_ref = "'" + pivot_sheet.Name.replace("'", "''") + "'"
+        card_area = sheet.Range(sheet.Cells(2, 56), sheet.Cells(last_row, 56))
+        card_area.Formula = (f'=IF(COUNTIFS({pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
+                             + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2,'
+                             + f'{pivot_ref}!$N$2:$N$' + str(pivot_end) + ',">=0")=0,"",'
+                             + f'SUMIFS({pivot_ref}!$N$2:$N$' + str(pivot_end) + ','
+                             + f'{pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
+                             + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2))')
+        card_area.Calculate()
+        pivot_sheet.Columns("A:N").AutoFit()
+        wb.Save()
+        saved = True
+    finally:
+        if wb is not None:
+            wb.Close(SaveChanges=False)
+        if excel is not None:
+            excel.Quit()
+        pythoncom.CoUninitialize()
+        if not saved:
+            LOG.error("模式1工作簿生成失败：%s", path)
+
+
 def run_gui() -> int:
     import tkinter as tk
-    from tkinter import filedialog
-
-    root = tk.Tk()
-    root.withdraw()
+    from tkinter import ttk
     try:
-        chosen = filedialog.askopenfilenames(
-            parent=root,
-            title="选择预估报表和利润报表（按 Ctrl 或 Shift 多选）",
-            initialdir=str(ROOT if ROOT.is_dir() else Path.home()),
-            filetypes=[("Excel 工作簿", "*.xlsx *.xlsm"), ("所有文件", "*.*")],
-        )
-        if not chosen:
-            return 0
-        # 文件选择结束后立刻关闭隐藏的 Tk 根窗口，后续不再给提示框设置隐藏窗口的 owner。
+        from tkinterdnd2 import DND_FILES, TkinterDnD
+    except ImportError:
+        show_notice("缺少拖放组件", "请先安装 tkinterdnd2 后重新运行。", error=True)
+        return 1
+
+    root = TkinterDnD.Tk()
+    root.title("报表处理")
+    root.geometry("760x480")
+    root.minsize(580, 380)
+    root.attributes("-topmost", True)
+    frame = ttk.Frame(root, padding=16)
+    frame.pack(fill="both", expand=True)
+    mode = tk.IntVar(value=1)
+    selector = ttk.Frame(frame)
+    selector.pack(fill="x")
+    ttk.Radiobutton(selector, text="模式 1：报价卡派费用", variable=mode, value=1).pack(side="left", padx=(0, 24))
+    ttk.Radiobutton(selector, text="模式 2：利润报表追加", variable=mode, value=2).pack(side="left")
+    ttk.Label(frame, text="把需要处理的 Excel 文件拖入下方，可多次拖入不同目录的文件").pack(anchor="w", pady=(18, 8))
+    listing = tk.Listbox(frame, selectmode=tk.EXTENDED, height=12)
+    listing.pack(fill="both", expand=True)
+    paths: list[Path] = []
+    status = tk.StringVar(value="等待拖入文件")
+    ttk.Label(frame, textvariable=status).pack(anchor="w", pady=(8, 10))
+    controls = ttk.Frame(frame)
+    controls.pack(fill="x")
+    busy = False
+
+    def close_window() -> None:
+        if busy:
+            status.set("正在处理，请等待完成后关闭窗口。")
+            return
         root.destroy()
-        root = None
-        files: list[ReportFile] = []
-        seen: set[str] = set()
-        ignored: list[str] = []
-        for raw_path in chosen:
-            path = Path(raw_path)
-            item = identify(path)
-            if item is None:
-                ignored.append(path.name)
-                continue
-            key = str(item.path).casefold()
-            if key not in seen:
-                files.append(item)
+
+    root.protocol("WM_DELETE_WINDOW", close_window)
+
+    def drop(event: Any) -> None:
+        if busy:
+            return
+        seen = {str(path).casefold() for path in paths}
+        for raw in root.tk.splitlist(event.data):
+            path = Path(raw).resolve()
+            key = str(path).casefold()
+            if path.is_file() and path.suffix.lower() in {".xlsx", ".xlsm"} and not path.name.startswith("~$") and key not in seen:
+                paths.append(path)
+                listing.insert(tk.END, str(path))
                 seen.add(key)
-        pairs, skipped = get_pairs(files)
-        if not pairs:
-            reason = "；".join(skipped) or "文件名需要包含线路和报表类型。"
-            show_notice("无法配对", "请选择同一线路的预估报表和利润报表。" + chr(10) + reason, error=True)
-            return 1
-        try:
-            outputs, skipped, log_path = process(files)
-        except Exception as exc:
-            show_notice("处理失败", str(exc), error=True)
-            return 1
-        lines = [f"已生成 {len(outputs)} 个文件，共追加 {sum(n for _, n in outputs)} 条数据。"]
-        lines += [f"{path.name}：{count} 条" for path, count in outputs]
-        if ignored:
-            lines.append("未识别，已跳过：" + "、".join(ignored))
+        status.set(f"已添加 {len(paths)} 个文件")
+
+    def remove() -> None:
+        if busy:
+            return
+        for index in reversed(listing.curselection()):
+            del paths[index]
+            listing.delete(index)
+        status.set(f"已添加 {len(paths)} 个文件")
+
+    listing.drop_target_register(DND_FILES)
+    listing.dnd_bind("<<Drop>>", drop)
+    root.drop_target_register(DND_FILES)
+    root.dnd_bind("<<Drop>>", drop)
+    ttk.Button(controls, text="移除选中", command=remove).pack(side="left")
+
+    def done(result: Any = None, error: str | None = None) -> None:
+        nonlocal busy
+        busy = False
+        start_button.config(state="normal")
+        status.set("处理失败" if error else "处理完成")
+        if error:
+            show_notice("处理失败", error, error=True)
+            return
+        outputs, skipped, log_path = result
+        lines = [f"已生成 {len(outputs)} 个文件，共处理 {sum(n for _, n in outputs)} 条数据。"]
+        lines.extend(f"{path.name}：{count} 条" for path, count in outputs)
         if skipped:
             lines.append("跳过/失败：" + "；".join(skipped))
         if log_path:
@@ -606,10 +876,41 @@ def run_gui() -> int:
         show_notice("处理完成", chr(10).join(lines))
         for folder in dict.fromkeys(path.parent for path, _ in outputs):
             os.startfile(str(folder))
-        return 0 if outputs and not any("失败" in item for item in skipped) else 1
-    finally:
-        if root is not None:
-            root.destroy()
+
+    def start() -> None:
+        nonlocal busy
+        if not paths:
+            show_notice("请拖入文件", "请先将所需 Excel 文件拖入窗口。", error=True)
+            return
+        selected = paths.copy()
+        selected_mode = mode.get()
+        if selected_mode == 2:
+            files = [item for path in selected if (item := identify(path)) is not None]
+            pairs, skipped = get_pairs(files)
+            ignored = [path.name for path in selected if identify(path) is None]
+            if not pairs:
+                show_notice("无法配对", "请拖入同一线路的预估报表和利润报表。" + "；".join(skipped), error=True)
+                return
+        busy = True
+        start_button.config(state="disabled")
+        status.set("正在处理，请等待……")
+
+        def worker() -> None:
+            try:
+                result = process_quote_mode(selected) if selected_mode == 1 else process(files)
+                if selected_mode == 2 and ignored:
+                    result[1].append("未识别文件：" + "、".join(ignored))
+                root.after(0, lambda: done(result))
+            except Exception as exc:
+                message = str(exc)
+                root.after(0, lambda: done(error=message))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    start_button = ttk.Button(controls, text="确定，开始处理", command=start)
+    start_button.pack(side="right")
+    root.mainloop()
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
