@@ -12,6 +12,7 @@ import argparse
 import ctypes
 import logging
 import os
+import re
 import shutil
 import sys
 import threading
@@ -586,6 +587,46 @@ def combination_value(warehouse: Any, dispatch: Any) -> str:
     return "UPS" if value in {"快递派", "私卡散货"} else value
 
 
+def quote_surcharges(sheet: Any) -> tuple[list[tuple[float, float, float]], list[tuple[int, int | None, float]], int, float]:
+    weight = []
+    cartons = []
+    warehouse_limit = None
+    warehouse_rate = None
+    category = ""
+    for raw in sheet.iter_rows(min_row=1, max_col=3, values_only=True):
+        label, standard, fee = raw
+        label = str(label or "").strip()
+        text = str(standard or "").strip()
+        if "超重费" in label:
+            category = "weight"
+        elif "超箱费" in label:
+            category = "cartons"
+        elif "仓点费" in label:
+            category = "warehouse"
+        elif label:
+            category = ""
+        if category == "weight" and isinstance(fee, (int, float)):
+            nums = re.findall(r"[0-9]+(?:,[0-9]{3})*(?:[.][0-9]+)?", text)
+            if len(nums) >= 2 and "LB" in text.upper():
+                lower, upper = (float(number.replace(",", "")) for number in nums[:2])
+                weight.append((lower, upper, float(fee)))
+        elif category == "cartons" and isinstance(fee, (int, float)):
+            nums = re.findall(r"[0-9]+", text.replace(",", ""))
+            if nums:
+                cartons.append((int(nums[0]), int(nums[1]) if len(nums) > 1 else None, float(fee)))
+        elif category == "warehouse":
+            limit_match = re.search(r"超过[ ]*([0-9]+)", text)
+            fee_match = re.search(r"[$][ ]*([0-9]+(?:[.][0-9]+)?)", str(fee or ""))
+            if limit_match and fee_match:
+                warehouse_limit = int(limit_match.group(1))
+                warehouse_rate = float(fee_match.group(1))
+    weight.sort()
+    cartons.sort(key=lambda item: item[0])
+    if len(weight) != 3 or len(cartons) != 4 or warehouse_limit is None or warehouse_rate is None:
+        raise ValueError("报价单特殊费用未找到完整的三档超重、四档超箱及仓点费，请检查组合价格表。")
+    return weight, cartons, warehouse_limit, warehouse_rate
+
+
 def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[str], Path | None]:
     quote, detail = select_quote_inputs(paths)
     detail_name = detail_sheet_name(detail)
@@ -595,6 +636,7 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
         if "组合价格" not in quote_book.sheetnames:
             raise ValueError("报价单缺少“组合价格”工作表。")
         quote_sheet = quote_book["组合价格"]
+        weight_tiers, carton_tiers, warehouse_limit, warehouse_rate = quote_surcharges(quote_sheet)
         price_col = None
         for row in quote_sheet.iter_rows(min_row=1, max_row=min(30, quote_sheet.max_row), values_only=True):
             normalized = [normalize_header(value).replace("（", "(").replace("）", ")").upper() for value in row]
@@ -636,6 +678,7 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
         records = []
         missing_bills = 0
         unmatched = Counter()
+        bill_totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
         for row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
             if not any(value is not None and value != "" for value in row):
                 continue
@@ -653,6 +696,13 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
             if not combination or combination.casefold() not in price_by_warehouse:
                 unmatched[combination or "(空白)"] += 1
             records.append((str(bill), combination, row))
+            for pos, field in enumerate(("收货实重", "件数")):
+                value = row[headers[field]]
+                if value not in (None, ""):
+                    try:
+                        bill_totals[str(bill)][pos] += float(value)
+                    except (ValueError, TypeError) as exc:
+                        raise ValueError(f"明细表第 {row_number} 行“{field}”不是数字：{value}") from exc
             if row_number != len(records) + 1:
                 raise ValueError(f"明细表第 {row_number} 行之前有空行，请先整理连续数据后重试。")
         if missing_bills:
@@ -666,24 +716,42 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
     output_dir = detail.parent / datetime.now().strftime("%Y-%m-%d")
     log_path = setup_log(output_dir)
     LOG.info("模式1：明细 %s / %s，共 %s 条；报价仓点 %s 个", detail.name, detail_name, len(records), len(price_by_warehouse))
+    overflow = []
+    for bill, (weight_kg, pieces) in bill_totals.items():
+        if weight_kg > weight_tiers[-1][1] * 0.454:
+            overflow.append(f"提单 {bill} 收货实重 {weight_kg:.2f} kg 超过报价最高上限 {weight_tiers[-1][1] * 0.454:.2f} kg")
+        if carton_tiers[-1][1] is not None and pieces > carton_tiers[-1][1]:
+            overflow.append(f"提单 {bill} 件数 {pieces:g} 超过报价最高上限 {carton_tiers[-1][1]}")
+    for warning in overflow:
+        LOG.warning("%s，对应费用标记 #N/A，须人工确认", warning)
     for name, count in unmatched.items():
         LOG.warning("报价单找不到组合 %s：%s 条，费用留空", name, count)
     output_path = output_dir / f"{detail.stem}_卡派费用{detail.suffix}"
     staged_path = unique_output(output_path.with_name(f"{output_path.stem}_处理中{output_path.suffix}"), output_dir)
     shutil.copyfile(detail, staged_path)
     try:
-        build_quote_workbook(staged_path, detail_name, headers, existing_special, quote_rows, len(records))
-        publish_output(staged_path, output_path)
+        build_quote_workbook(staged_path, detail_name, headers, existing_special, quote_rows, len(records),
+                             weight_tiers, carton_tiers, warehouse_limit, warehouse_rate)
+        try:
+            publish_output(staged_path, output_path)
+        except PermissionError:
+            alternate = unique_output(output_path, output_dir)
+            staged_path.replace(alternate)
+            LOG.warning("原结果被占用，本次保存为：%s", alternate)
+            output_path = alternate
     except Exception:
         staged_path.unlink(missing_ok=True)
         raise
     LOG.info("模式1完成：%s；明细 %s 条；未匹配报价 %s 条；日志 %s", output_path, len(records), sum(unmatched.values()), log_path)
-    return [(output_path, len(records))], ([f"{sum(unmatched.values())} 条明细的组合没有报价，卡派费留空"] if unmatched else []), log_path
+    warnings = ([f"{sum(unmatched.values())} 条明细的组合没有报价，卡派费留空"] if unmatched else []) + overflow
+    return [(output_path, len(records))], warnings, log_path
 
 
 def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
                          existing_special: dict[str, int], quote_rows: list[tuple[str, float]],
-                         count: int) -> None:
+                         count: int, weight_tiers: list[tuple[float, float, float]],
+                         carton_tiers: list[tuple[int, int | None, float]],
+                         warehouse_limit: int, warehouse_rate: float) -> None:
     try:
         import pythoncom
         import win32com.client
@@ -738,6 +806,11 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         quote_copy = new_sheet("卡派报价")
         quote_copy.Range("A1:B1").Value2 = (("仓点", "价格（40HQ）"),)
         quote_copy.Range(quote_copy.Cells(2, 1), quote_copy.Cells(len(quote_rows) + 1, 2)).Value2 = tuple(quote_rows)
+        quote_copy.Range("D1:F1").Value2 = (("超重起点（磅）", "超重上限（磅）", "超重费（美元）"),)
+        quote_copy.Range("D2:F4").Value2 = tuple(weight_tiers)
+        quote_copy.Range("H1:J1").Value2 = (("超箱起点", "超箱上限", "超箱费（美元）"),)
+        quote_copy.Range("H2:J5").Value2 = tuple(carton_tiers)
+        quote_copy.Range("L1:M2").Value2 = (("免费仓点数", "超仓每个费用"), (warehouse_limit, warehouse_rate))
         pivot_sheet = new_sheet("卡派透视表")
         source_range = sheet.Range(sheet.Cells(1, 1), sheet.Cells(last_row, 56))
         source_address = "'" + sheet.Name.replace("'", "''") + "'!" + source_range.Address
@@ -765,14 +838,39 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         pivot_sheet.Range("F1:N1").Value2 = (("仓库方数占比", "套餐价格", "单仓金额", "自提", "超件费", "超重费", "超仓费", "单仓合计", "单方费用"),)
         quote_ref = "'" + quote_copy.Name.replace("'", "''") + "'"
         limit = len(quote_rows) + 1
+        bill_ref = "$A$2:$A$" + str(pivot_end)
+        pieces_ref = "$C$2:$C$" + str(pivot_end)
+        weight_ref = "$D$2:$D$" + str(pivot_end)
+        combo_ref = "$B$2:$B$" + str(pivot_end)
+        total_pieces = f"SUMIF({bill_ref},A2,{pieces_ref})"
+        total_weight = f"SUMIF({bill_ref},A2,{weight_ref})"
+        # 最高档明确给出上限；超出上限时返回错误，避免静默套用最高价。
+        weight_formula = (
+            f'=IF(F2="","",IF({total_weight}>{quote_ref}!$E$4*0.454,NA(),'
+            f'IF({total_weight}>{quote_ref}!$D$4*0.454,{quote_ref}!$F$4,'
+            f'IF({total_weight}>{quote_ref}!$D$3*0.454,{quote_ref}!$F$3,'
+            f'IF({total_weight}>{quote_ref}!$D$2*0.454,{quote_ref}!$F$2,0))))*F2)'
+        )
+        carton_formula = (
+            f'=IF(F2="","",IF({total_pieces}>{quote_ref}!$I$5,NA(),'
+            f'IF({total_pieces}>{quote_ref}!$H$5,{quote_ref}!$J$5,'
+            f'IF({total_pieces}>{quote_ref}!$H$4,{quote_ref}!$J$4,'
+            f'IF({total_pieces}>{quote_ref}!$H$3,{quote_ref}!$J$3,'
+            f'IF({total_pieces}>{quote_ref}!$H$2,{quote_ref}!$J$2,0)))))*F2)'
+        )
+        warehouse_formula = (
+            f'=IF(F2="","",MAX(0,COUNTIFS({bill_ref},A2,{combo_ref},"<>UPS",'
+            f'{combo_ref},"<>")-{quote_ref}!$L$2)*{quote_ref}!$M$2*F2)'
+        )
         formulas = {
             6: '=IFERROR(E2/SUMIF($A$2:$A$' + str(pivot_end) + ',A2,$E$2:$E$' + str(pivot_end) + '),"")',
             7: '=IFERROR(VLOOKUP(B2,' + quote_ref + '!$A$2:$B$' + str(limit) + ',2,FALSE),"")',
             8: '=IF(OR(F2="",G2=""),"",F2*G2)',
-            11: '=IF(F2="","",F2*250)',
-            12: '=IF(F2="","",240*F2)',
+            10: carton_formula,
+            11: weight_formula,
+            12: warehouse_formula,
             13: '=IF(H2="","",SUM(H2:L2))',
-            14: '=IFERROR(IF(M2="","",M2/E2),"")',
+            14: '=IF(OR(M2="",E2=0),"",M2/E2)',
         }
         for col, formula in formulas.items():
             area = pivot_sheet.Range(pivot_sheet.Cells(2, col), pivot_sheet.Cells(pivot_end, col))
@@ -783,7 +881,7 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         card_area = sheet.Range(sheet.Cells(2, 56), sheet.Cells(last_row, 56))
         card_area.Formula = (f'=IF(COUNTIFS({pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
                              + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2,'
-                             + f'{pivot_ref}!$N$2:$N$' + str(pivot_end) + ',">=0")=0,"",'
+                             + f'{pivot_ref}!$G$2:$G$' + str(pivot_end) + ',">=0")=0,"",'
                              + f'SUMIFS({pivot_ref}!$N$2:$N$' + str(pivot_end) + ','
                              + f'{pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
                              + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2))')
