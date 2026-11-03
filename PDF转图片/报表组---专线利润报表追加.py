@@ -842,11 +842,12 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         combo_ref = "$B$2:$B$" + str(pivot_end)
         total_pieces = f"SUMIF({bill_ref},A2,{pieces_ref})"
         total_weight = f"SUMIF({bill_ref},A2,{weight_ref})"
-        # 超过 55000 磅仍按最后一档计费；超箱超过报价上限则提示人工确认。
+        # 最后一档以 55000 磅为起点，沿用报价单第三档金额。
         weight_formula = (
-            f'=IF(F2="","",IF({total_weight}>={quote_ref}!$D$4*0.454,{quote_ref}!$F$4,'
+            f'=IF(F2="","",IF({total_weight}>={quote_ref}!$E$4*0.454,{quote_ref}!$F$4,'
+            f'IF({total_weight}>={quote_ref}!$D$4*0.454,{quote_ref}!$F$4,'
             f'IF({total_weight}>={quote_ref}!$D$3*0.454,{quote_ref}!$F$3,'
-            f'IF({total_weight}>={quote_ref}!$D$2*0.454,{quote_ref}!$F$2,0)))*F2)'
+            f'IF({total_weight}>={quote_ref}!$D$2*0.454,{quote_ref}!$F$2,0))))*F2)'
         )
         carton_formula = (
             f'=IF(F2="","",IF({total_pieces}>{quote_ref}!$I$5,NA(),'
