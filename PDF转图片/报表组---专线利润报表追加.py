@@ -778,6 +778,7 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
                 sheet.Cells(1, col).Value2 = f"空白填充列名{col - warehouse_col}"
         sheet.Cells(1, 55).Value2 = "组合"
         sheet.Cells(1, 56).Value2 = "卡派费"
+        sheet.Cells(1, 57).Value2 = "相同柜子相同仓库的出货立方合计"
         last_row = count + 1
         warehouse_letter = openpyxl.utils.get_column_letter(warehouse_col)
         dispatch_letter = openpyxl.utils.get_column_letter(headers["派送方式"] + 1)
@@ -788,6 +789,7 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
             f'"UPS",TRIM({dispatch_letter}2&"")),TRIM({warehouse_letter}2&""))'
         )
         sheet.Range(sheet.Cells(2, 55), sheet.Cells(last_row, 55)).Calculate()
+        sheet.Calculate()
         sheet_names = {item.Name for item in wb.Worksheets}
 
         def new_sheet(base: str) -> Any:
@@ -876,15 +878,41 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
             area.Formula = formula
         pivot_sheet.Range(pivot_sheet.Cells(2, 6), pivot_sheet.Cells(pivot_end, 6)).NumberFormat = "0.00%"
         pivot_sheet.Range(pivot_sheet.Cells(2, 6), pivot_sheet.Cells(pivot_end, 14)).Calculate()
+        pivot_sheet.Calculate()
+        sheet.Calculate()
         pivot_ref = "'" + pivot_sheet.Name.replace("'", "''") + "'"
+        pivot_totals = []
+        for row_number in range(2, pivot_end + 1):
+            pivot_row = pivot_sheet.Range(pivot_sheet.Cells(row_number, 1), pivot_sheet.Cells(row_number, 14)).Value2
+            if len(pivot_row) == 1 and isinstance(pivot_row[0], (tuple, list)):
+                pivot_row = pivot_row[0]
+            if (not pivot_row or len(pivot_row) < 13 or pivot_row[0] in (None, "")
+                    or pivot_row[1] in (None, "") or not isinstance(pivot_row[12], (int, float))):
+                continue
+            pivot_totals.append((str(pivot_row[0]), str(pivot_row[1]),
+                                 float(pivot_row[4] or 0), float(pivot_row[12] or 0)))
+        pivot_cache_sheet = new_sheet("卡派匹配缓存")
+        pivot_cache_sheet.Range("A1:D1").Value2 = (("提单号", "组合", "出货立方数", "单仓合计"),)
+        if pivot_totals:
+            pivot_cache_sheet.Range(pivot_cache_sheet.Cells(2, 1),
+                                    pivot_cache_sheet.Cells(len(pivot_totals) + 1, 4)).Value2 = tuple(pivot_totals)
+        cache_end = max(2, len(pivot_totals) + 1)
+        cache_bill = chr(39) + pivot_cache_sheet.Name + chr(39) + "!$A$2:$A$" + str(cache_end)
+        cache_combo = chr(39) + pivot_cache_sheet.Name + chr(39) + "!$B$2:$B$" + str(cache_end)
+        cache_total = chr(39) + pivot_cache_sheet.Name + chr(39) + "!$D$2:$D$" + str(cache_end)
         card_area = sheet.Range(sheet.Cells(2, 56), sheet.Cells(last_row, 56))
-        card_area.Formula = (f'=IF(COUNTIFS({pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
-                             + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2,'
-                             + f'{pivot_ref}!$G$2:$G$' + str(pivot_end) + ',">=0")=0,"",'
-                             + f'SUMIFS({pivot_ref}!$N$2:$N$' + str(pivot_end) + ','
-                             + f'{pivot_ref}!$A$2:$A$' + str(pivot_end) + f',{bill_letter}2,'
-                             + f'{pivot_ref}!$B$2:$B$' + str(pivot_end) + ',BC2))')
+        volume_col = headers["出货立方数"] + 1
+        volume_letter = openpyxl.utils.get_column_letter(volume_col)
+        same_volume = sheet.Range(sheet.Cells(2, 57), sheet.Cells(last_row, 57))
+        same_volume.Formula = '=SUMIFS($' + volume_letter + ':$' + volume_letter + ',$' + bill_letter + ':$' + bill_letter + ',' + bill_letter + '2,$BC:$BC,BC2)'
+        same_volume.Calculate()
+        card_area.Formula = (
+            '=IFERROR(IF(OR(BC2="",BE2=0),"",'
+            + volume_letter + '2/BE2*SUMIFS(' + cache_total + ','
+            + cache_bill + ',' + bill_letter + '2,' + cache_combo + ',BC2)),"")'
+        )
         card_area.Calculate()
+        sheet.Calculate()
         pivot_sheet.Columns("A:N").AutoFit()
         wb.Save()
         saved = True
