@@ -718,8 +718,6 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
     LOG.info("模式1：明细 %s / %s，共 %s 条；报价仓点 %s 个", detail.name, detail_name, len(records), len(price_by_warehouse))
     overflow = []
     for bill, (weight_kg, pieces) in bill_totals.items():
-        if weight_kg > weight_tiers[-1][1] * 0.454:
-            overflow.append(f"提单 {bill} 收货实重 {weight_kg:.2f} kg 超过报价最高上限 {weight_tiers[-1][1] * 0.454:.2f} kg")
         if carton_tiers[-1][1] is not None and pieces > carton_tiers[-1][1]:
             overflow.append(f"提单 {bill} 件数 {pieces:g} 超过报价最高上限 {carton_tiers[-1][1]}")
     for warning in overflow:
@@ -844,12 +842,11 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         combo_ref = "$B$2:$B$" + str(pivot_end)
         total_pieces = f"SUMIF({bill_ref},A2,{pieces_ref})"
         total_weight = f"SUMIF({bill_ref},A2,{weight_ref})"
-        # 最高档明确给出上限；超出上限时返回错误，避免静默套用最高价。
+        # 超过 55000 磅仍按最后一档计费；超箱超过报价上限则提示人工确认。
         weight_formula = (
-            f'=IF(F2="","",IF({total_weight}>{quote_ref}!$E$4*0.454,NA(),'
-            f'IF({total_weight}>{quote_ref}!$D$4*0.454,{quote_ref}!$F$4,'
-            f'IF({total_weight}>{quote_ref}!$D$3*0.454,{quote_ref}!$F$3,'
-            f'IF({total_weight}>{quote_ref}!$D$2*0.454,{quote_ref}!$F$2,0))))*F2)'
+            f'=IF(F2="","",IF({total_weight}>={quote_ref}!$D$4*0.454,{quote_ref}!$F$4,'
+            f'IF({total_weight}>={quote_ref}!$D$3*0.454,{quote_ref}!$F$3,'
+            f'IF({total_weight}>={quote_ref}!$D$2*0.454,{quote_ref}!$F$2,0)))*F2)'
         )
         carton_formula = (
             f'=IF(F2="","",IF({total_pieces}>{quote_ref}!$I$5,NA(),'
