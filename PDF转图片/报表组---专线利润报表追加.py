@@ -579,6 +579,13 @@ def detail_sheet_name(path: Path) -> str:
         workbook.close()
 
 
+def combination_value(warehouse: Any, dispatch: Any) -> str:
+    if warehouse is not None and str(warehouse).strip():
+        return str(warehouse).strip()
+    value = str(dispatch or "").strip()
+    return "UPS" if value in {"快递派", "私卡散货"} else value
+
+
 def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[str], Path | None]:
     quote, detail = select_quote_inputs(paths)
     detail_name = detail_sheet_name(detail)
@@ -642,7 +649,7 @@ def process_quote_mode(paths: list[Path]) -> tuple[list[tuple[Path, int]], list[
                 continue
             warehouse = row[headers["亚马逊仓库编码"]]
             dispatch = row[headers["派送方式"]]
-            combination = str(warehouse if warehouse is not None and str(warehouse).strip() else dispatch or "").strip()
+            combination = combination_value(warehouse, dispatch)
             if not combination or combination.casefold() not in price_by_warehouse:
                 unmatched[combination or "(空白)"] += 1
             records.append((str(bill), combination, row))
@@ -710,7 +717,9 @@ def build_quote_workbook(path: Path, detail_name: str, headers: dict[str, int],
         dispatch_letter = openpyxl.utils.get_column_letter(headers["派送方式"] + 1)
         bill_letter = openpyxl.utils.get_column_letter(headers["提单号"] + 1)
         sheet.Range(sheet.Cells(2, 55), sheet.Cells(last_row, 55)).Formula = (
-            f'=IF({warehouse_letter}2="",{dispatch_letter}2,{warehouse_letter}2)'
+            f'=IF(TRIM({warehouse_letter}2&"")="",'
+            f'IF(OR(TRIM({dispatch_letter}2&"")="快递派",TRIM({dispatch_letter}2&"")="私卡散货"),'
+            f'"UPS",TRIM({dispatch_letter}2&"")),TRIM({warehouse_letter}2&""))'
         )
         sheet.Range(sheet.Cells(2, 55), sheet.Cells(last_row, 55)).Calculate()
         sheet_names = {item.Name for item in wb.Worksheets}
